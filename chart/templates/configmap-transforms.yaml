@@ -1,0 +1,13 @@
+{{- if .Values.transforms }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dfe-transform-vector.fullname" . }}-transforms
+  labels:
+    {{- include "dfe-transform-vector.labels" . | nindent 4 }}
+data:
+  {{- range $filename, $content := .Values.transforms }}
+  {{ $filename }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

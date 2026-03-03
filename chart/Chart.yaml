@@ -1,0 +1,16 @@
+apiVersion: v2
+name: dfe-transform-vector
+description: Vector.dev subprocess wrapper for Kafka-to-Kafka transform pipelines
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - hyperi
+  - dfe
+  - vector
+  - transform
+
+maintainers:
+  - name: HyperI
+    url: https://github.com/hyperi-io
