@@ -91,6 +91,11 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 **Decision:** Config-level version pin with strict/warn/disabled modes, checked at startup
 **Rationale:** Prevents silent version drift between config expectations and actual binary. Updates are a container image concern (change Dockerfile ARG), not a wrapper code concern.
 
+### Config File Watcher Uses Polling (not inotify)
+
+**Decision:** The wrapper's config file watcher (TODO 5.1) must use poll-based watching, not filesystem change notifications.
+**Rationale:** Transform YAML files may be delivered via S3-backed mounts (e.g. s3fs, goofys, Mountpoint for S3) which do not generate inotify events. Vector's native `--watch-config` flag only supports inotify/kqueue — it will not detect changes on S3-mounted volumes. The dfe platform already handles this in other components by polling at a configurable interval (default 30s). The wrapper must implement its own polling watcher rather than relying on Vector's built-in file watching for config reload triggers.
+
 ---
 
 ## External Dependencies
