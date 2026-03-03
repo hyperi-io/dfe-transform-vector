@@ -102,24 +102,24 @@
 
 ## 7. Helm Chart
 
-- [ ] 7.1 Chart scaffold in `chart/` directory
-- [ ] 7.2 **StatefulSet** template (always StatefulSet, no role switching needed)
-  - [ ] 7.2.1 Container: `dfe-transform-vector` image
-  - [ ] 7.2.2 Ports: health (9000), metrics (9090), Vector API (8686)
-  - [ ] 7.2.3 Liveness probe: `/health/live` on health port
-  - [ ] 7.2.4 Readiness probe: `/health/ready` on health port
-  - [ ] 7.2.5 `terminationGracePeriodSeconds: 65` (55s Vector drain + 5s wrapper cleanup + 5s buffer)
-  - [ ] 7.2.6 Volume mounts: data_dir (PVC), config (ConfigMap), transform YAMLs (ConfigMap or emptyDir from init container)
-  - [ ] 7.2.7 Env vars from Secrets (Kafka SASL, etc.) via `envFrom` / `env.valueFrom`
-  - [ ] 7.2.8 Resource requests/limits (configurable via values)
-  - [ ] 7.2.9 Topology spread constraints, node affinity, tolerations (configurable)
-- [ ] 7.3 **ConfigMap** for big-dial config YAML
-- [ ] 7.4 **Service** (ClusterIP — health + metrics ports)
-- [ ] 7.5 **ServiceAccount** with IRSA annotation (configurable)
-- [ ] 7.6 **PodMonitor** for Prometheus Operator
-- [ ] 7.7 **PodDisruptionBudget** (optional)
-- [ ] 7.8 **values.yaml** — big dials at top level, sensible defaults
-- [ ] 7.9 ConfigMap checksum annotation on pod template (auto-restart on config change)
+- [x] 7.1 Chart scaffold in `chart/` directory (Chart.yaml, _helpers.tpl)
+- [x] 7.2 **StatefulSet** template (always StatefulSet, no role switching needed)
+  - [x] 7.2.1 Container: `dfe-transform-vector` image
+  - [x] 7.2.2 Ports: health (9000), metrics (9090), Vector API (8686)
+  - [x] 7.2.3 Liveness probe: `/health/live` on health port
+  - [x] 7.2.4 Readiness probe: `/health/ready` on health port
+  - [x] 7.2.5 `terminationGracePeriodSeconds: 65`
+  - [x] 7.2.6 Volume mounts: data_dir (PVC), config (ConfigMap), transform YAMLs (ConfigMap)
+  - [x] 7.2.7 Env vars from Secrets (KAFKA_SASL_USERNAME/PASSWORD via secretKeyRef)
+  - [x] 7.2.8 Resource requests/limits (configurable via values)
+  - [x] 7.2.9 Node affinity, tolerations (configurable via values)
+- [x] 7.3 **ConfigMap** for big-dial config YAML + separate transforms ConfigMap
+- [x] 7.4 **Service** (ClusterIP — health + metrics ports)
+- [x] 7.5 **ServiceAccount** with configurable annotations (IRSA-ready)
+- [x] 7.6 **PodMonitor** for Prometheus Operator (optional, off by default)
+- [x] 7.7 **PodDisruptionBudget** (optional, off by default)
+- [x] 7.8 **values.yaml** — big dials at top level, sensible defaults, KEDA + HPA
+- [x] 7.9 ConfigMap checksum annotation on pod template (auto-restart on config change)
 
 ## 8. dfe-core Integration
 
