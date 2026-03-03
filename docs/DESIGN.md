@@ -1,0 +1,866 @@
+# DFE Transform Vector — Design Document
+
+## 1. Purpose
+
+dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka → transform → Kafka** pipelines that are first-class citizens in the DFE platform — indistinguishable from dfe-loader and dfe-receiver from dfe-engine's management, GitOps, and observability perspective.
+
+Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: same config registry, same health contract, same metrics shape, same scaling signals, same Helm compilation, same Argo CD lifecycle.
+
+---
+
+## 2. Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  dfe-engine (Python)                                             │
+│                                                                  │
+│  ServicePlugin("transform-vector")                               │
+│  ├─ ServiceDescriptor      (ports, health paths, kafka role)     │
+│  ├─ TransformVectorConfig  (Pydantic — big dials)                │
+│  ├─ DeploymentConfig       (Pydantic — K8s sizing)               │
+│  ├─ validate_config()      (cross-field validation)              │
+│  └─ HelmValuesCompiler     (generates values.yaml)               │
+│                                                                  │
+│  Config Registry: config_directory/transform-vector-*.yaml       │
+│  Deploy Registry: deployment_configs/transform-vector-*.yaml     │
+└──────────────────────┬───────────────────────────────────────────┘
+                       │ compiled Helm values + Argo CD Application
+                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  K8s Pod (StatefulSet)                                           │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  dfe-transform-vector (Rust, PID 1)                        │  │
+│  │                                                            │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐  │  │
+│  │  │ Config      │  │ Process      │  │ Observability    │  │  │
+│  │  │ Engine      │  │ Manager      │  │ Server           │  │  │
+│  │  │             │  │              │  │                  │  │  │
+│  │  │ • Load big  │  │ • Spawn      │  │ • /health/live   │  │  │
+│  │  │   dials     │  │   vector     │  │ • /health/ready  │  │  │
+│  │  │ • Generate  │  │ • Signal     │  │ • /metrics       │  │  │
+│  │  │   source/   │  │   forwarding │  │ • scaling_       │  │  │
+│  │  │   sink YAML │  │ • Crash      │  │   pressure       │  │  │
+│  │  │ • Load user │  │   recovery   │  │                  │  │  │
+│  │  │   transforms│  │ • Health     │  │                  │  │  │
+│  │  │ • Wire DAG  │  │   polling    │  │                  │  │  │
+│  │  │ • Validate  │  │              │  │                  │  │  │
+│  │  │ • Assemble  │  │              │  │                  │  │  │
+│  │  └──────┬──────┘  └──────┬───────┘  └──────────────────┘  │  │
+│  │         │                │                                 │  │
+│  │         │  config dir    │  child process                  │  │
+│  │         ▼                ▼                                 │  │
+│  │  ┌────────────────────────────────────────────────────┐    │  │
+│  │  │  vector (subprocess)                                │    │  │
+│  │  │  --config-dir /var/run/vector/config/               │    │  │
+│  │  │  --watch-config poll                                │    │  │
+│  │  │                                                     │    │  │
+│  │  │  Kafka source ──► transforms ──► Kafka sink         │    │  │
+│  │  │            ──► internal_metrics ──► prometheus_exp   │    │  │
+│  │  └────────────────────────────────────────────────────┘    │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  Volumes:                                                        │
+│  • /var/lib/vector          (PVC — disk buffers, WAL)            │
+│  • /etc/dfe/config.yaml     (ConfigMap — big-dial config)        │
+│  • /etc/dfe/transforms/     (ConfigMap — user transform YAMLs)   │
+│  • /var/run/vector/config/  (emptyDir — assembled Vector config) │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. dfe-engine Integration
+
+### 3.1 ServiceDescriptor
+
+```python
+descriptor = ServiceDescriptor(
+    name="transform-vector",
+    display_name="DFE Transform - Vector",
+    image="harbor.hyperi.io/dfe/dfe-transform-vector",
+    default_port=9000,
+    metrics_port=9090,
+    kafka_role=KafkaRole.BOTH,
+    consumer_group="dfe-transform-vector",
+    liveness_paths=("/health/live",),
+    readiness_paths=("/health/ready",),
+    extra_ports={"vector-api": 8686},
+    description="Kafka-to-Kafka transform pipelines powered by Vector.dev",
+)
+```
+
+This is identical in shape to dfe-loader and dfe-receiver descriptors. dfe-engine discovers it via entry point and treats it as any other service.
+
+### 3.2 Config Model (Pydantic — dfe-engine side)
+
+```python
+class TransformVectorConfig(BaseServiceConfig):
+    """Runtime configuration — the 'big dials'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Universal (inherited pattern)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
+    # Pipeline identity
+    pipeline: PipelineConfig          # name, version
+
+    # Kafka source (input)
+    source: SourceKafkaConfig         # brokers, topics, group_id, sasl, tls
+
+    # Kafka sink (output)
+    sink: SinkKafkaConfig             # brokers, topic, key_field, encoding
+
+    # Transform files
+    transforms: TransformFilesConfig  # file list or directory path
+
+    # Vector subprocess
+    vector: VectorProcessConfig       # binary path, data_dir, api_port, log_level
+
+    # Scaling
+    scaling: ScalingConfig            # pressure_threshold
+
+    # DLQ
+    dlq: DlqConfig                   # enabled, topic
+```
+
+Shared models (`MetricsConfig`, `LoggingConfig`, `SaslConfig`, `KafkaTlsConfig`, `DlqConfig`) are reused from `dfe_engine.services.models.common` — same as dfe-loader and dfe-receiver.
+
+### 3.3 ServicePlugin
+
+```python
+plugin = ServicePlugin(
+    descriptor=descriptor,
+    config_class=TransformVectorConfig,
+    deployment_class=TransformVectorDeploymentConfig,
+    validate_config=validate_transform_vector,
+    sizing_overrides={
+        "xs":     {"vector": {"memory_limit": "512Mi"}},
+        "small":  {"vector": {"memory_limit": "1Gi"}},
+        "medium": {"vector": {"memory_limit": "2Gi"}},
+        "large":  {"vector": {"memory_limit": "4Gi"}},
+        "xlarge": {"vector": {"memory_limit": "8Gi"}},
+    },
+    keda_defaults={
+        "min_replicas": 2,
+        "max_replicas": 8,
+        "kafka_trigger": {
+            "consumer_group": "dfe-transform-vector",
+            "lag_threshold": 1000,
+        },
+    },
+    config_template_overrides={
+        "production": {
+            "source": {"sasl": {"enabled": True, "mechanism": "scram_sha_512"},
+                        "tls": {"enabled": True}},
+            "sink":   {"sasl": {"enabled": True, "mechanism": "scram_sha_512"},
+                        "tls": {"enabled": True}},
+        },
+        "k8s": {
+            "source": {"brokers": ["kafka-bootstrap.kafka.svc.cluster.local:9092"]},
+            "sink":   {"brokers": ["kafka-bootstrap.kafka.svc.cluster.local:9092"]},
+        },
+    },
+)
+```
+
+### 3.4 Entry Point
+
+```toml
+# In dfe-engine's pyproject.toml or a separate plugin package
+[project.entry-points."dfe_engine.services"]
+transform-vector = "dfe_transform_vector_plugin:plugin"
+```
+
+### 3.5 What This Gives Us
+
+Once registered, dfe-engine automatically provides:
+
+| Capability | How |
+|---|---|
+| Config CRUD | `registry.get_config("transform-vector", "production")` |
+| Config validation | `registry.validate("transform-vector", {...})` |
+| Git-aware history | `registry.get_config_history(...)` |
+| Helm values compilation | `compiler.compile_all()` includes transform-vector |
+| Argo CD Application CRDs | Generated alongside loader and receiver |
+| KEDA ScaledObject | Generated from keda_defaults + deployment config |
+| T-shirt sizing | xs/small/medium/large/xlarge resource presets |
+| Environment profiles | dev/staging/production overrides |
+| Multi-instance | transform-vector-syslog, transform-vector-netflow, etc. |
+
+---
+
+## 4. Health & Observability Contract
+
+### 4.1 Endpoints
+
+All DFE services expose the same three endpoints. dfe-transform-vector is no exception.
+
+| Endpoint | Port | Purpose | Response |
+|---|---|---|---|
+| `GET /health/live` | 9000 | K8s liveness probe | `200 OK` if wrapper process is running |
+| `GET /health/ready` | 9000 | K8s readiness probe | `200 OK` only when Vector child is healthy |
+| `GET /metrics` | 9090 | Prometheus scrape | Wrapper metrics + proxied Vector metrics |
+
+### 4.2 Liveness vs Readiness
+
+```
+/health/live  → always 200 if the Rust process is running (fast, no deps)
+/health/ready → 200 only when:
+                 1. Config is loaded and valid
+                 2. Vector child process is running
+                 3. Vector /health API returns {"ok": true}
+                 4. Not in crash-recovery backoff
+```
+
+During config reload, readiness stays healthy (old config still running). During crash recovery, readiness returns 503 until Vector restarts successfully.
+
+### 4.3 Metrics
+
+**Wrapper metrics** (emitted by the Rust binary):
+
+```
+# Process lifecycle
+dfe_transform_vector_info{version="1.0.0", vector_version="0.48.0"} 1
+dfe_transform_vector_up 1
+dfe_transform_vector_lifecycle_state{state="running"} 1
+dfe_transform_vector_uptime_seconds 3600
+
+# Subprocess health
+dfe_transform_vector_crashes_total 0
+dfe_transform_vector_restarts_total 1
+dfe_transform_vector_crash_backoff_seconds 0
+
+# Config management
+dfe_transform_vector_config_reloads_total{result="success"} 5
+dfe_transform_vector_config_reloads_total{result="failure"} 0
+dfe_transform_vector_config_validation_errors_total 0
+dfe_transform_vector_config_last_reload_timestamp_seconds 1709500000
+
+# Scaling signal (KEDA-compatible)
+dfe_transform_vector_scaling_pressure 0.45
+
+# Vector binary version tracking
+dfe_transform_vector_vector_version_info{
+    pinned="0.48.0",
+    running="0.48.0",
+    latest_known="0.49.1"
+} 1
+```
+
+**Proxied Vector metrics** (from Vector's `prometheus_exporter` sink on :9598, merged into our :9090 endpoint):
+
+```
+# These come from Vector's internal_metrics source — passed through as-is
+vector_events_in_total{component_id="dfe_source"} 150000
+vector_events_out_total{component_id="dfe_sink"} 149950
+vector_component_errors_total{component_id="parse"} 50
+vector_buffer_byte_size{component_id="dfe_sink"} 1048576
+vector_kafka_consumer_offset_lag{...} 200
+# ... all other Vector internal metrics
+```
+
+The combined `/metrics` endpoint gives Prometheus a single scrape target that shows both wrapper state and Vector pipeline state.
+
+### 4.4 Scaling Pressure
+
+Like dfe-loader, we expose a `scaling_pressure` gauge (0.0–1.0) that KEDA can use:
+
+```
+scaling_pressure = max(
+    kafka_consumer_lag_pressure,     # from Vector's kafka lag metrics
+    memory_pressure,                 # buffer byte size / configured limit
+    error_rate_pressure,             # component_errors / events_in over window
+)
+```
+
+This is derived by polling Vector's `/metrics` endpoint and computing the composite signal — same pattern as dfe-loader.
+
+---
+
+## 5. Config Engine
+
+### 5.1 Big-Dial Config (Rust side)
+
+The Rust binary loads its own config via the standard hyperi-rustlib 7-layer cascade:
+
+```
+1. CLI args                              (highest priority)
+2. Env vars (DFE_TRANSFORM_VECTOR_*)
+3. .env file
+4. settings.{env}.yaml
+5. settings.yaml
+6. defaults.yaml
+7. Hard-coded defaults                   (lowest priority)
+```
+
+```yaml
+# /etc/dfe/config.yaml — the big dials
+pipeline:
+  name: syslog-enrichment
+
+source:
+  brokers: "${KAFKA_BROKERS}"
+  topics:
+    - raw_syslog_land
+  group_id: "dfe-transform-vector-${PIPELINE_NAME}"
+  sasl:
+    mechanism: scram_sha_512
+    username: "${KAFKA_SASL_USERNAME}"
+    password: "${KAFKA_SASL_PASSWORD}"
+  tls:
+    enabled: true
+
+sink:
+  brokers: "${KAFKA_BROKERS}"
+  topic: enriched_syslog_land
+  key_field: ".org_id"
+  encoding: json
+  compression: zstd
+
+transforms:
+  dir: /etc/dfe/transforms/
+
+vector:
+  binary: /usr/local/bin/vector
+  data_dir: /var/lib/vector
+  api_address: "0.0.0.0:8686"
+  log_level: info
+
+health:
+  address: "0.0.0.0:9000"
+
+metrics:
+  address: "0.0.0.0:9090"
+
+scaling:
+  pressure_threshold: 0.8
+```
+
+### 5.2 Config Assembly
+
+The config engine takes the big dials and produces a Vector config directory:
+
+```
+/var/run/vector/config/
+  00_source.yaml          # Generated from source big dials
+  50_transforms/          # Copied from /etc/dfe/transforms/ (user-supplied)
+    parse.yaml
+    enrich.yaml
+    filter.yaml
+  90_sink.yaml            # Generated from sink big dials
+  99_observability.yaml   # Generated: internal_metrics + prometheus_exporter
+```
+
+**Generated source (`00_source.yaml`):**
+```yaml
+sources:
+  dfe_source:
+    type: kafka
+    bootstrap_servers: "kafka-1:9092,kafka-2:9092"
+    topics:
+      - raw_syslog_land
+    group_id: dfe-transform-vector-syslog-enrichment
+    decoding:
+      codec: json
+    acknowledgements:
+      enabled: true
+    sasl:
+      enabled: true
+      mechanism: SCRAM-SHA-512
+      username: "${KAFKA_SASL_USERNAME}"
+      password: "${KAFKA_SASL_PASSWORD}"
+    tls:
+      enabled: true
+    librdkafka_options:
+      partition.assignment.strategy: cooperative-sticky
+```
+
+**Generated sink (`90_sink.yaml`):**
+```yaml
+sinks:
+  dfe_sink:
+    type: kafka
+    inputs: ["<last_transform_label>"]  # Auto-wired
+    bootstrap_servers: "kafka-1:9092,kafka-2:9092"
+    topic: enriched_syslog_land
+    key_field: ".org_id"
+    encoding:
+      codec: json
+    compression: zstd
+    sasl:
+      enabled: true
+      mechanism: SCRAM-SHA-512
+      username: "${KAFKA_SASL_USERNAME}"
+      password: "${KAFKA_SASL_PASSWORD}"
+    tls:
+      enabled: true
+```
+
+**Generated observability (`99_observability.yaml`):**
+```yaml
+sources:
+  internal_metrics:
+    type: internal_metrics
+
+sinks:
+  prometheus_exporter:
+    type: prometheus_exporter
+    inputs:
+      - internal_metrics
+    address: "0.0.0.0:9598"
+```
+
+### 5.3 DAG Auto-Wiring
+
+The wrapper understands the pipeline topology and wires components automatically:
+
+1. **Source label is always `dfe_source`** — canonical, predictable
+2. **Sink label is always `dfe_sink`** — canonical, predictable
+3. **First transform**: if `inputs` contains `"source"` or `"dfe_source"`, keep it; otherwise inject `inputs: ["dfe_source"]`
+4. **Intermediate transforms**: left as authored (user controls the chain)
+5. **Last transform**: its label is discovered and injected as `dfe_sink.inputs`
+6. **Extra sources/sinks** (the 2% case): detected and passed through unchanged, references validated
+
+**Validation rules:**
+- All `inputs` references must resolve to a defined component
+- No orphaned components (every component must be reachable from a source)
+- No cycles in the DAG
+- At least one path from `dfe_source` to `dfe_sink`
+- `vector validate --config-dir` as final gate (catches VRL syntax, type mismatches)
+
+### 5.4 Hot-Reload
+
+```
+Config change detected (file watcher or SIGHUP)
+  │
+  ├─ Transform file change (safe)
+  │   ├─ Re-read transform YAMLs
+  │   ├─ Re-run DAG wiring + validation
+  │   ├─ Run `vector validate` on new config
+  │   ├─ If valid: write new config dir → SIGHUP to Vector child
+  │   ├─ If invalid: log error, increment metric, keep old config
+  │   └─ Emit config_reloads_total{result=success|failure}
+  │
+  └─ Source/sink change (unsafe — requires restart)
+      ├─ Re-read full config
+      ├─ Re-generate source + sink YAML
+      ├─ Re-run full validation
+      ├─ If valid: graceful Vector restart (SIGTERM → wait → respawn)
+      └─ If invalid: log error, keep old config
+```
+
+---
+
+## 6. Subprocess Manager
+
+### 6.1 Lifecycle States
+
+```
+Initializing ──► Validating ──► Starting ──► Running ──► ShuttingDown
+                     │                          │
+                     │                          ├──► Reloading ──► Running
+                     │                          │
+                     ▼                          ▼
+                ConfigError               Crashed ──► Restarting ──► Running
+                (terminal)                   │
+                                             ▼
+                                        MaxCrashes
+                                        (terminal — pod restarts via K8s)
+```
+
+### 6.2 Signal Handling
+
+```
+Wrapper (PID 1)                     Vector (child)
+     │                                    │
+     │◄──── SIGTERM (from kubelet) ──────│
+     │                                    │
+     │──── SIGTERM ──────────────────────►│
+     │                                    │
+     │     (Vector drains: stops sources, │
+     │      flushes buffers, exits)       │
+     │                                    │
+     │◄──── exit(0) ─────────────────────│
+     │                                    │
+     │  cleanup (metrics flush, etc.)     │
+     │  exit(0)                           │
+```
+
+**Timeouts:**
+- `terminationGracePeriodSeconds` in K8s: **65s**
+- Wrapper sends SIGTERM to Vector, waits: **55s**
+- If Vector doesn't exit in 55s: SIGKILL child, then exit(1)
+- Remaining 10s: wrapper cleanup + K8s buffer
+
+### 6.3 Crash Recovery
+
+```rust
+// Pseudocode
+loop {
+    let child = spawn_vector(&config_dir)?;
+    let start_time = Instant::now();
+
+    match child.wait().await {
+        Ok(status) if status.success() => break,  // clean exit (SIGTERM)
+
+        Ok(status) => {
+            metrics.crashes_total.inc();
+            warn!("Vector exited with {status}, restarting in {backoff}");
+
+            if start_time.elapsed() > HEALTHY_THRESHOLD {
+                backoff.reset();  // was stable, reset backoff
+            }
+
+            sleep(backoff.next()).await;
+            metrics.restarts_total.inc();
+        }
+
+        Err(e) => {
+            error!("Vector process error: {e}");
+            sleep(backoff.next()).await;
+        }
+    }
+}
+```
+
+**Backoff schedule:** 1s → 2s → 4s → 8s → 16s → 32s → 60s (cap)
+**Reset after:** 5 minutes of healthy running
+**Max crashes:** unlimited by default (K8s pod restart handles the outer loop)
+
+---
+
+## 7. Vector Binary Version Management
+
+A key robustness concern: the Vector binary in the container must be tracked, pinned, and updatable without rebuilding the wrapper.
+
+### 7.1 Version Pinning
+
+The wrapper's config declares a **pinned Vector version**:
+
+```yaml
+vector:
+  version: "0.48.0"              # Expected version
+  version_check: strict          # strict | warn | disabled
+  binary: /usr/local/bin/vector
+```
+
+**At startup**, the wrapper runs `vector --version`, parses the output, and compares:
+
+| `version_check` | Mismatch behavior |
+|---|---|
+| `strict` | Refuse to start. Exit with error. Config or image is wrong. |
+| `warn` | Log warning, emit metric, continue. For dev/staging. |
+| `disabled` | Skip check entirely. |
+
+**Metric:**
+```
+dfe_transform_vector_vector_version_info{
+    pinned="0.48.0",
+    running="0.48.0",
+    latest_known="0.49.1"
+} 1
+
+dfe_transform_vector_vector_version_mismatch 0  # 1 if pinned != running
+```
+
+### 7.2 Version Update Strategy
+
+Vector upgrades are a **container image concern**, not a wrapper code concern. This is the key advantage of the subprocess model.
+
+```
+                    Wrapper Image (Rust)           Vector Binary
+                    ─────────────────────          ─────────────
+Release cadence:    When wrapper changes           When Vector releases
+Build trigger:      Code change in this repo       Upstream release / security fix
+Update path:        New wrapper image tag           New base image layer
+Coupling:           None — wrapper is version-      Binary in /usr/local/bin/
+                    agnostic (validates via          pinned via Dockerfile ARG
+                    config pin)
+```
+
+**Dockerfile pattern:**
+
+```dockerfile
+# Stage 1: Rust build (changes rarely)
+FROM rust:bookworm AS builder
+COPY . /build
+RUN cargo build --release
+
+# Stage 2: Vector binary (changes on Vector releases)
+FROM debian:bookworm-slim AS vector
+ARG VECTOR_VERSION=0.48.0
+ARG TARGETARCH
+RUN curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${TARGETARCH}-unknown-linux-gnu.tar.gz" \
+    | tar xz -C /usr/local/bin --strip-components=2 "./vector-${TARGETARCH}-unknown-linux-gnu/bin/vector"
+
+# Stage 3: Runtime
+FROM debian:bookworm-slim
+COPY --from=builder /build/target/release/dfe-transform-vector /usr/local/bin/
+COPY --from=vector /usr/local/bin/vector /usr/local/bin/
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/dfe-transform-vector"]
+```
+
+**To update Vector without touching wrapper code:**
+1. Change `VECTOR_VERSION` ARG in Dockerfile
+2. Update `vector.version` in default config YAML
+3. Rebuild image — only the vector stage and runtime stage rebuild (Docker layer cache)
+4. CI runs integration tests against the new Vector version
+5. Deploy
+
+### 7.3 Compatibility Testing
+
+Each CI build validates the wrapper against the pinned Vector version:
+
+```yaml
+# CI step
+- name: Vector compatibility test
+  run: |
+    vector --version  # Verify binary exists
+    # Generate a test config from fixture big dials
+    dfe-transform-vector assemble --config test/fixtures/basic.yaml --output /tmp/test-config/
+    # Validate with the actual Vector binary
+    vector validate --config-dir /tmp/test-config/
+    # Start Vector, wait for health, stop
+    dfe-transform-vector --config test/fixtures/basic.yaml &
+    sleep 5
+    curl -f http://localhost:9000/health/ready
+    kill %1
+```
+
+### 7.4 Version Drift Detection
+
+For deployed instances, the wrapper periodically (daily) checks for known Vector releases and exposes the information as a metric:
+
+```
+dfe_transform_vector_vector_version_info{
+    pinned="0.48.0",
+    running="0.48.0",
+    latest_known="0.49.1"
+} 1
+```
+
+This is **informational only** — no auto-update at runtime. The metric enables Grafana alerts ("Vector is N versions behind") that feed into the upgrade decision. Actual upgrades happen through the image build pipeline.
+
+---
+
+## 8. Robustness
+
+### 8.1 Failure Modes & Mitigations
+
+| Failure Mode | Detection | Mitigation |
+|---|---|---|
+| **Bad config YAML** | `vector validate` returns exit 78 | Refuse to start. Clear error in logs + metric. Old config kept on reload. |
+| **Broken DAG wiring** | Wrapper DAG analysis before validate | Detailed error: "transform 'enrich' references unknown input 'parser' (did you mean 'parse'?)" |
+| **Vector crash** | Child process exits non-zero | Restart with exponential backoff. Readiness goes unhealthy. Metrics track crash count. |
+| **Vector hang** | Health poll timeout (Vector API unresponsive) | After N consecutive failures (configurable, default 5): SIGTERM → wait → SIGKILL → restart |
+| **OOM** | Child killed by cgroup (exit 137) | Restart. Metric emitted. Scaling pressure increases. Triggers KEDA scale-up. |
+| **Kafka unreachable** | Vector consumer lag stops advancing | Scaling pressure stays low (no lag movement). Vector's own retry handles reconnection. |
+| **Config reload: new config invalid** | `vector validate` on new config | Keep old config running. Log error. Emit `config_reloads_total{result="failure"}`. |
+| **Config reload: Vector rejects SIGHUP** | Vector logs error, keeps old config | Wrapper detects via health + metrics. Falls back to full restart with new config. |
+| **Version mismatch** | Startup version check | `strict` mode: refuse to start. `warn` mode: log + metric. |
+| **Disk buffer corruption** | Vector exits on startup | Wrapper restarts Vector. If persistent, Vector's WAL recovery handles it. |
+
+### 8.2 Graceful Degradation
+
+The wrapper prioritizes **availability over correctness of configuration updates**:
+
+1. **Config reload fails** → old config keeps running (no disruption)
+2. **Vector crashes** → readiness unhealthy, K8s stops routing traffic, wrapper restarts Vector
+3. **Wrapper crashes** → K8s restartPolicy restarts the pod (outer safety net)
+4. **Both crash** → K8s handles it — same as any other pod failure
+
+The two-layer restart model (wrapper restarts Vector, K8s restarts wrapper) provides defense in depth that bare Vector-in-a-pod does not have.
+
+### 8.3 Startup Sequence
+
+```
+1. Load config (cascade)
+2. Validate config (Pydantic-equivalent in Rust)
+3. Check Vector binary exists at configured path
+4. Check Vector version matches pin (if strict)
+5. Generate source/sink YAML from big dials
+6. Load user transform YAMLs
+7. Run DAG wiring + validation
+8. Assemble config directory
+9. Run `vector validate --config-dir`
+10. Start health/metrics HTTP server (readiness: NOT READY)
+11. Spawn Vector child process
+12. Poll Vector /health until healthy (timeout: 60s)
+13. Set readiness: READY
+14. Enter steady state (monitor child, watch config files)
+```
+
+If any step 1–9 fails, the wrapper exits immediately with a clear error. Steps 1–9 are **pre-flight checks** — nothing runs until they all pass. This means a bad config never reaches Vector.
+
+### 8.4 Data Safety
+
+Vector's Kafka source with `acknowledgements: true` only commits offsets after downstream sinks confirm delivery. This means:
+
+- **At-least-once delivery** is maintained through crashes and restarts
+- Disk buffers (WAL in `data_dir`) survive pod restarts via PVC
+- No data loss on graceful shutdown — Vector drains buffers before exiting
+- On crash: some messages may be reprocessed (Kafka re-delivers from last committed offset)
+
+The wrapper does not touch the data path — it only manages config and process lifecycle.
+
+---
+
+## 9. Helm Chart
+
+### 9.1 Chart Structure
+
+```
+chart/
+  Chart.yaml
+  values.yaml
+  templates/
+    _helpers.tpl
+    statefulset.yaml
+    service.yaml
+    configmap-config.yaml        # Big-dial config
+    configmap-transforms.yaml    # User transform YAMLs
+    serviceaccount.yaml
+    podmonitor.yaml
+    pdb.yaml
+    scaled-object.yaml           # KEDA ScaledObject
+```
+
+No dependency on the official Vector Helm chart. This is a purpose-built chart for dfe-transform-vector that follows the same patterns as dfe-loader and dfe-receiver charts.
+
+### 9.2 Values Shape
+
+Matches what dfe-engine's HelmValuesCompiler generates:
+
+```yaml
+image: harbor.hyperi.io/dfe/dfe-transform-vector
+imageTag: "1.0.0"
+replicas: 2
+
+config:
+  pipeline:
+    name: syslog-enrichment
+  source:
+    brokers: ["kafka-bootstrap.kafka.svc.cluster.local:9092"]
+    topics: ["raw_syslog_land"]
+    group_id: dfe-transform-vector-syslog-enrichment
+  sink:
+    brokers: ["kafka-bootstrap.kafka.svc.cluster.local:9092"]
+    topic: enriched_syslog_land
+    key_field: ".org_id"
+    encoding: json
+  transforms:
+    dir: /etc/dfe/transforms/
+  vector:
+    version: "0.48.0"
+    version_check: strict
+  scaling:
+    pressure_threshold: 0.8
+
+transforms: {}
+  # parse.yaml: |
+  #   transforms:
+  #     parse:
+  #       type: remap
+  #       inputs: ["dfe_source"]
+  #       source: |
+  #         . = parse_json!(.message)
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClassName: vector-data
+
+keda:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  kafkaLagThreshold: 1000
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+podMonitor:
+  enabled: true
+
+topologySpreadConstraints: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+```
+
+### 9.3 Parity With dfe-loader/dfe-receiver Charts
+
+| Feature | dfe-loader | dfe-receiver | dfe-transform-vector |
+|---|---|---|---|
+| Workload type | StatefulSet | StatefulSet | StatefulSet |
+| Health probes | /health/live, /health/ready | /health/live, /health/ready | /health/live, /health/ready |
+| Metrics port | 9090 | 9090 | 9090 |
+| ConfigMap | config.yaml | config.yaml | config.yaml + transforms/ |
+| PVC | data dir | data dir | Vector data_dir |
+| KEDA ScaledObject | Kafka lag | Kafka lag | Kafka lag |
+| PodMonitor | Yes | Yes | Yes |
+| ServiceAccount + IRSA | Yes | Yes | Yes |
+| Reloader annotation | Yes | Yes | Yes |
+
+---
+
+## 10. Multi-Instance Deployment
+
+Like dfe-loader, multiple instances of dfe-transform-vector can run simultaneously for different pipelines:
+
+```
+transform-vector-syslog      # Kafka(raw_syslog) → parse+enrich → Kafka(enriched_syslog)
+transform-vector-netflow      # Kafka(raw_netflow) → decode+geoip → Kafka(enriched_netflow)
+transform-vector-dns          # Kafka(raw_dns) → parse+filter  → Kafka(enriched_dns)
+```
+
+Each instance has its own:
+- Config file in dfe-engine registry: `transform-vector-syslog.yaml`
+- Deployment config: `deployment_configs/transform-vector-syslog.yaml`
+- Kafka consumer group: `dfe-transform-vector-syslog`
+- Helm release: separate StatefulSet
+- KEDA ScaledObject: independent scaling
+
+This is the standard dfe-engine multi-instance pattern — no special handling needed.
+
+---
+
+## 11. Component Boundary Summary
+
+| Concern | Owner | Notes |
+|---|---|---|
+| Config schema + validation | dfe-engine (Pydantic) + wrapper (Rust) | Both validate, dfe-engine at compile/save time, wrapper at runtime |
+| Helm values compilation | dfe-engine | HelmValuesCompiler |
+| Argo CD Applications | dfe-engine | Generated from deployment registry |
+| K8s manifests | This repo's Helm chart | StatefulSet, Service, ConfigMap, etc. |
+| Config assembly (big dials → Vector YAML) | Wrapper (Rust) | The core novel work |
+| DAG wiring + validation | Wrapper (Rust) | Auto-wire source/sink, validate refs |
+| Vector process lifecycle | Wrapper (Rust) | Spawn, monitor, restart, shutdown |
+| Data processing | Vector (subprocess) | Kafka consume → transform → Kafka produce |
+| Health/metrics aggregation | Wrapper (Rust) | Composite health, proxied + own metrics |
+| Scaling signals | Wrapper (Rust) | Compute scaling_pressure from Vector metrics |
+| Vector binary version | Dockerfile ARG + config pin | Decoupled from wrapper releases |
+
+---
+
+## 12. What's NOT In Scope
+
+- **VRL authoring tools** — users write their own transform VRL, we just validate it
+- **Transform library/marketplace** — future consideration, not MVP
+- **Multi-Vector-process** — one Vector child per wrapper instance (scale via K8s replicas)
+- **Kafka topic creation** — handled by dfe-engine's source registry
+- **ClickHouse DDL** — not applicable (this is Kafka→Kafka, not Kafka→ClickHouse)
+- **Kubernetes operator / CRDs** — we use Helm + Argo CD, not a custom operator
