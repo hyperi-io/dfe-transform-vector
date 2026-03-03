@@ -1,17 +1,30 @@
 // Project:   dfe-transform-vector
 // File:      src/main.rs
-// Purpose:   CLI entry point
+// Purpose:   CLI entry point and orchestrator
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! CLI entry point for dfe-transform-vector.
+//!
+//! Orchestrates: config load → assemble → validate → spawn Vector
+//! → health/metrics servers → shutdown handling.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use tracing::{error, info};
 
 use dfe_transform_vector::config::Config;
+use dfe_transform_vector::config::assembler;
+use dfe_transform_vector::config::validate::{check_vector_version, vector_validate};
+use dfe_transform_vector::health::serve_health;
+use dfe_transform_vector::metrics::{WrapperMetrics, serve_metrics};
+use dfe_transform_vector::vector::lifecycle::State;
+use dfe_transform_vector::vector::{BackoffConfig, Lifecycle, run_lifecycle};
 
 #[derive(Parser, Debug)]
 #[command(name = "dfe-transform-vector")]
@@ -37,6 +50,14 @@ struct Args {
     /// Print effective config and exit
     #[arg(long)]
     print_config: bool,
+
+    /// Assemble Vector config and exit (writes to --config-dir)
+    #[arg(long)]
+    assemble_only: bool,
+
+    /// Output directory for assembled Vector config
+    #[arg(long, default_value = assembler::DEFAULT_CONFIG_DIR)]
+    config_dir: String,
 }
 
 #[tokio::main]
@@ -97,8 +118,113 @@ async fn main() -> anyhow::Result<()> {
         "starting dfe-transform-vector"
     );
 
-    // Subprocess lifecycle, health/metrics servers, signal handling
-    // deferred to TODO 3.x and 4.x
+    // Lifecycle state machine
+    let lifecycle = Lifecycle::new();
+    lifecycle.set(State::Initialising);
+
+    // Check Vector binary version
+    match check_vector_version(&config.vector).await {
+        Ok(version) => {
+            if !version.is_empty() {
+                info!(vector_version = %version, "Vector binary version detected");
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "Vector version check failed");
+            std::process::exit(1);
+        }
+    }
+
+    // Assemble Vector config directory
+    lifecycle.set(State::Validating);
+    let config_dir = PathBuf::from(&args.config_dir);
+    if let Err(e) = assembler::assemble(&config, &config_dir) {
+        error!(error = %e, "failed to assemble Vector config");
+        std::process::exit(1);
+    }
+
+    // Run vector validate on assembled config
+    if let Err(e) = vector_validate(&config.vector, &config_dir).await {
+        error!(error = %e, "Vector config validation failed");
+        std::process::exit(1);
+    }
+    info!("Vector config validation passed");
+
+    // Assemble-only mode
+    if args.assemble_only {
+        info!(dir = %config_dir.display(), "assembled config written");
+        return Ok(());
+    }
+
+    // Wrapper metrics
+    let metrics = Arc::new(WrapperMetrics::new());
+    let started_at = Instant::now();
+
+    // Shutdown signal channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Spawn health server
+    let health_lifecycle = lifecycle.clone();
+    let health_address = config.health.address.clone();
+    tokio::spawn(async move {
+        if let Err(e) = serve_health(&health_address, health_lifecycle).await {
+            error!(error = %e, "health server failed");
+        }
+    });
+
+    // Spawn metrics server
+    let metrics_lifecycle = lifecycle.clone();
+    let metrics_address = config.metrics.address.clone();
+    let metrics_clone = metrics.clone();
+    tokio::spawn(async move {
+        if let Err(e) = serve_metrics(
+            &metrics_address,
+            metrics_clone,
+            metrics_lifecycle,
+            started_at,
+        )
+        .await
+        {
+            error!(error = %e, "metrics server failed");
+        }
+    });
+
+    // Signal handler: SIGTERM and SIGINT trigger shutdown
+    let shutdown_tx_signal = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+        let mut sigint =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                info!("received SIGTERM");
+            }
+            _ = sigint.recv() => {
+                info!("received SIGINT");
+            }
+        }
+        let _ = shutdown_tx_signal.send(true);
+    });
+
+    // Run Vector subprocess lifecycle loop
+    let backoff = BackoffConfig::default();
+    let result = run_lifecycle(
+        &config.vector,
+        &config_dir,
+        &lifecycle,
+        &backoff,
+        shutdown_rx,
+    )
+    .await;
+
+    if let Err(e) = &result {
+        error!(error = %e, "Vector lifecycle exited with error");
+    }
+
+    // Update final metrics
+    metrics.set_lifecycle_state(lifecycle.state());
 
     info!("shutdown complete");
     Ok(())
