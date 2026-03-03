@@ -1,0 +1,19 @@
+# Project:   dfe-transform-vector
+# File:      rust-toolchain.toml
+# Purpose:   Pin Rust toolchain for reproducible builds
+# Language:  TOML
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+[toolchain]
+channel = "1.85"
+components = [
+    "rustfmt",
+    "clippy",
+    "llvm-tools-preview",
+]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]

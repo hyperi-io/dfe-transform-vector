@@ -1,0 +1,14 @@
+// Project:   dfe-transform-vector
+// File:      src/vector/mod.rs
+// Purpose:   Vector subprocess management
+// Language:  Rust
+//
+// License:   FSL-1.1-ALv2
+// Copyright: (c) 2026 HYPERI PTY LIMITED
+
+//! Vector subprocess management.
+//!
+//! Handles spawning, monitoring, signal forwarding, and crash recovery
+//! for the Vector child process.
+//!
+//! Implementation deferred to TODO 3.1–3.4.

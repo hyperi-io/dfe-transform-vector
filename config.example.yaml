@@ -1,0 +1,103 @@
+# =============================================================================
+# dfe-transform-vector — example configuration
+# =============================================================================
+#
+# Copy to config.yaml and modify as needed.
+#
+# Configuration cascade (highest to lowest priority):
+#   1. CLI args (--config, --log-level, etc.)
+#   2. Environment variables (DFE_TRANSFORM_*)
+#   3. .env file
+#   4. Config file (this file)
+#   5. Hard-coded defaults
+
+# -----------------------------------------------------------------------------
+# Pipeline identity
+# -----------------------------------------------------------------------------
+pipeline:
+  name: "my-pipeline"
+
+# -----------------------------------------------------------------------------
+# Kafka source (input)
+# -----------------------------------------------------------------------------
+# source:
+#   brokers:
+#     - "localhost:9092"
+#   topics:
+#     - "raw_events_land"
+#   group_id: "dfe-transform-vector-my-pipeline"
+#   decoding:
+#     codec: "json"                    # json, raw_bytes, protobuf
+#   sasl:
+#     enabled: true
+#     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
+#     username: "${KAFKA_SASL_USERNAME}"
+#     password: "${KAFKA_SASL_PASSWORD}"
+#   tls:
+#     enabled: true
+
+# -----------------------------------------------------------------------------
+# Kafka sink (output)
+# -----------------------------------------------------------------------------
+# sink:
+#   brokers:
+#     - "localhost:9092"
+#   topic: "enriched_events_land"
+#   key_field: ".org_id"               # Event field to use as Kafka partition key
+#   encoding: "json"                   # json, raw_bytes
+#   compression: "zstd"               # none, gzip, lz4, snappy, zstd
+#   sasl:
+#     enabled: true
+#     mechanism: "scram_sha_512"
+#     username: "${KAFKA_SASL_USERNAME}"
+#     password: "${KAFKA_SASL_PASSWORD}"
+#   tls:
+#     enabled: true
+
+# -----------------------------------------------------------------------------
+# Transform files (user-supplied Vector transform YAML)
+# -----------------------------------------------------------------------------
+# transforms:
+#   dir: "/etc/dfe/transforms/"
+#   # Or specify individual files (loaded in order):
+#   # files:
+#   #   - "/etc/dfe/transforms/parse.yaml"
+#   #   - "/etc/dfe/transforms/enrich.yaml"
+#   #   - "/etc/dfe/transforms/filter.yaml"
+
+# -----------------------------------------------------------------------------
+# Vector subprocess settings
+# -----------------------------------------------------------------------------
+# vector:
+#   binary: "/usr/local/bin/vector"
+#   data_dir: "/var/lib/vector"
+#   api_address: "0.0.0.0:8686"
+#   log_level: "info"
+#   # Version pinning — prevents silent version drift
+#   version: "0.48.0"
+#   version_check: "strict"           # strict, warn, disabled
+
+# -----------------------------------------------------------------------------
+# Health endpoint
+# -----------------------------------------------------------------------------
+# health:
+#   address: "0.0.0.0:9000"
+
+# -----------------------------------------------------------------------------
+# Metrics endpoint
+# -----------------------------------------------------------------------------
+# metrics:
+#   address: "0.0.0.0:9090"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "info"                        # trace, debug, info, warn, error
+  format: "json"                       # json, text
+
+# -----------------------------------------------------------------------------
+# Scaling pressure (KEDA-compatible)
+# -----------------------------------------------------------------------------
+# scaling:
+#   pressure_threshold: 0.8
