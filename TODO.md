@@ -153,11 +153,11 @@
 
 ## 10. CI/CD
 
-- [ ] 10.1 CI pipeline matching dfe-loader pattern (format, lint, test, build, publish)
-- [ ] 10.2 Cross-compile amd64 + arm64
-- [ ] 10.3 Docker image publish to Harbor
-- [ ] 10.4 Helm chart publish to Harbor ChartMuseum (or OCI)
-- [ ] 10.5 semantic-release versioning from conventional commits
+- [x] 10.1 CI pipeline matching dfe-loader pattern (ci.yml, publish.yml, semantic-release.yml via ci submodule)
+- [x] 10.2 Cross-compile amd64 + arm64 (targets in .hyperi-ci.yaml)
+- [x] 10.3 Docker image publish to JFrog (linux/amd64 + linux/arm64)
+- [x] 10.4 Helm chart publish to JFrog
+- [x] 10.5 semantic-release versioning from conventional commits (.releaserc.json, package.json)
 
 ---
 
