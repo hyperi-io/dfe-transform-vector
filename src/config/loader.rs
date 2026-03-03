@@ -297,19 +297,181 @@ impl Default for ScalingConfig {
 }
 
 // =============================================================================
-// Config loading and validation
+// Config loading, cascade, and validation
 // =============================================================================
 
+/// Environment variable prefix for all config overrides.
+const ENV_PREFIX: &str = "DFE_TRANSFORM";
+
+/// Read a single env var with our prefix.
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(format!("{ENV_PREFIX}_{name}")).ok()
+}
+
+/// Read a comma-separated env var as a list.
+fn env_var_list(name: &str) -> Option<Vec<String>> {
+    env_var(name).map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+}
+
+/// Read an env var parsed to a specific type.
+fn env_var_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
+    env_var(name).and_then(|v| v.parse().ok())
+}
+
+/// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
+fn apply_figment_env(config: &mut Config) -> Result<()> {
+    use figment::Figment;
+    use figment::providers::{Env, Serialized};
+
+    let figment = Figment::from(Serialized::defaults(&*config))
+        .merge(Env::prefixed(&format!("{ENV_PREFIX}_")).split("__"));
+
+    *config = figment
+        .extract()
+        .map_err(|e| crate::Error::Config(e.to_string()))?;
+    Ok(())
+}
+
+/// Apply explicit flat env var overrides (highest priority after CLI args).
+///
+/// These K8s-friendly overrides use single underscores and are explicit
+/// per-field rather than relying on figment's automatic nesting.
+fn apply_env_overrides(config: &mut Config) {
+    // Pipeline
+    if let Some(v) = env_var("PIPELINE_NAME") {
+        config.pipeline.name = v;
+        debug!("override: pipeline.name from env");
+    }
+
+    // Source
+    if let Some(v) = env_var_list("SOURCE_BROKERS") {
+        config.source.brokers = v;
+        debug!("override: source.brokers from env");
+    }
+    if let Some(v) = env_var_list("SOURCE_TOPICS") {
+        config.source.topics = v;
+        debug!("override: source.topics from env");
+    }
+    if let Some(v) = env_var("SOURCE_GROUP_ID") {
+        config.source.group_id = v;
+        debug!("override: source.group_id from env");
+    }
+    if let Some(v) = env_var("SOURCE_SASL_USERNAME") {
+        config.source.sasl.enabled = true;
+        config.source.sasl.username = v;
+        debug!("override: source.sasl.username from env");
+    }
+    if let Some(v) = env_var("SOURCE_SASL_PASSWORD") {
+        config.source.sasl.enabled = true;
+        config.source.sasl.password = v;
+        debug!("override: source.sasl.password from env");
+    }
+    if let Some(v) = env_var("SOURCE_SASL_MECHANISM") {
+        config.source.sasl.mechanism = v;
+        debug!("override: source.sasl.mechanism from env");
+    }
+
+    // Sink
+    if let Some(v) = env_var_list("SINK_BROKERS") {
+        config.sink.brokers = v;
+        debug!("override: sink.brokers from env");
+    }
+    if let Some(v) = env_var("SINK_TOPIC") {
+        config.sink.topic = v;
+        debug!("override: sink.topic from env");
+    }
+    if let Some(v) = env_var("SINK_KEY_FIELD") {
+        config.sink.key_field = v;
+        debug!("override: sink.key_field from env");
+    }
+    if let Some(v) = env_var("SINK_ENCODING") {
+        config.sink.encoding = v;
+        debug!("override: sink.encoding from env");
+    }
+    if let Some(v) = env_var("SINK_COMPRESSION") {
+        config.sink.compression = v;
+        debug!("override: sink.compression from env");
+    }
+    if let Some(v) = env_var("SINK_SASL_USERNAME") {
+        config.sink.sasl.enabled = true;
+        config.sink.sasl.username = v;
+        debug!("override: sink.sasl.username from env");
+    }
+    if let Some(v) = env_var("SINK_SASL_PASSWORD") {
+        config.sink.sasl.enabled = true;
+        config.sink.sasl.password = v;
+        debug!("override: sink.sasl.password from env");
+    }
+    if let Some(v) = env_var("SINK_SASL_MECHANISM") {
+        config.sink.sasl.mechanism = v;
+        debug!("override: sink.sasl.mechanism from env");
+    }
+
+    // Transforms
+    if let Some(v) = env_var("TRANSFORMS_DIR") {
+        config.transforms.dir = Some(v);
+        debug!("override: transforms.dir from env");
+    }
+
+    // Vector
+    if let Some(v) = env_var("VECTOR_BINARY") {
+        config.vector.binary = v;
+        debug!("override: vector.binary from env");
+    }
+    if let Some(v) = env_var("VECTOR_DATA_DIR") {
+        config.vector.data_dir = v;
+        debug!("override: vector.data_dir from env");
+    }
+    if let Some(v) = env_var("VECTOR_LOG_LEVEL") {
+        config.vector.log_level = v;
+        debug!("override: vector.log_level from env");
+    }
+    if let Some(v) = env_var("VECTOR_VERSION") {
+        config.vector.version = v;
+        debug!("override: vector.version from env");
+    }
+    if let Some(v) = env_var("VECTOR_VERSION_CHECK") {
+        config.vector.version_check = v;
+        debug!("override: vector.version_check from env");
+    }
+
+    // Health
+    if let Some(v) = env_var("HEALTH_ADDRESS") {
+        config.health.address = v;
+        debug!("override: health.address from env");
+    }
+
+    // Metrics
+    if let Some(v) = env_var("METRICS_ADDRESS") {
+        config.metrics.address = v;
+        debug!("override: metrics.address from env");
+    }
+
+    // Scaling
+    if let Some(v) = env_var_parsed::<f64>("SCALING_PRESSURE_THRESHOLD") {
+        config.scaling.pressure_threshold = v;
+        debug!("override: scaling.pressure_threshold from env");
+    }
+}
+
 impl Config {
-    /// Load configuration from optional file path, with env var overrides.
+    /// Load configuration with full cascade.
+    ///
+    /// Priority (highest to lowest):
+    ///   1. CLI args (handled by caller)
+    ///   2. Flat env overrides (`DFE_TRANSFORM_SOURCE_BROKERS`, etc.)
+    ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_SOURCE__BROKERS`)
+    ///   4. `.env` file (via dotenvy)
+    ///   5. Config YAML file
+    ///   6. Hard-coded defaults
     pub fn load(config_path: Option<&str>) -> Result<Self> {
-        // Load .env file if present
+        // Load .env file if present (before any env var reading)
         let _ = dotenvy::dotenv();
 
         // Start with defaults
         let mut config = Config::default();
 
-        // Load YAML config file if provided
+        // Load YAML config file (overrides defaults)
         if let Some(path) = config_path {
             if Path::new(path).exists() {
                 let content = std::fs::read_to_string(path)
@@ -318,7 +480,6 @@ impl Config {
                 debug!(path, "loaded configuration file");
             }
         } else {
-            // Try default config paths
             for path in &["config.yaml", "config.yml"] {
                 if Path::new(path).exists() {
                     let content = std::fs::read_to_string(path)
@@ -329,6 +490,12 @@ impl Config {
                 }
             }
         }
+
+        // Apply figment env vars (DFE_TRANSFORM_SECTION__FIELD)
+        apply_figment_env(&mut config)?;
+
+        // Apply explicit flat env overrides (highest priority)
+        apply_env_overrides(&mut config);
 
         Ok(config)
     }
