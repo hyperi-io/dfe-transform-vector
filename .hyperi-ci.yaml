@@ -47,12 +47,24 @@ build:
     - native               # Release build
   rust:
     features: all          # "all" (--all-features), "default", or comma-separated
-    targets: []            # Cross-compile targets (empty = native only)
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
 
 # Publishing (on release)
 publish:
   enabled: true
-  # registry: hyperi       # JFrog Cargo registry name
+  binaries: both           # artifactory + github
+  container:
+    enabled: true
+    registry: jfrog
+    dockerfile: Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+  helm:
+    enabled: true
+    registry: jfrog
 
 # Workspace configuration (optional — auto-detected from Cargo.toml [workspace])
 # workspace:
