@@ -14,7 +14,7 @@ authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Rust wrapper for Vector.dev subprocess — Kafka-to-Kafka transform pipelines"
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vector"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "dfe_transform_vector"
@@ -33,15 +33,12 @@ path = "src/main.rs"
 tokio = { version = ">=1.48", features = ["full"] }
 tokio-util = { version = ">=0.7", features = ["rt"] }
 
-# Shared library (config cascade, deployment, metrics patterns)
-# Requires hyperi registry auth — run: cargo login --registry hyperi
-# hyperi-rustlib = { version = ">=1.11.0", registry = "hyperi", features = [
-#     "config",
-#     "config-reload",
-#     "deployment",
-#     "version-check",
-#     "scaling",
-# ] }
+# Shared library (CLI framework, deployment artefact generation, logging)
+hyperi-rustlib = { version = ">=1.13.0", registry = "hyperi", features = [
+    "cli",
+    "deployment",
+    "logger",
+] }
 
 # Configuration
 figment = { version = ">=0.10", features = ["env"] }

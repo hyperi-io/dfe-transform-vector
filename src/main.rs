@@ -8,111 +8,204 @@
 
 //! CLI entry point for dfe-transform-vector.
 //!
-//! Orchestrates: config load → assemble → validate → spawn Vector
-//! → health/metrics servers → shutdown handling.
+//! Uses hyperi-rustlib CLI module for standard arguments and subcommands.
+//! Implements the [`DfeApp`] trait for the standard DFE service lifecycle.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
+use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment};
 use tracing::{error, info};
 
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
 use dfe_transform_vector::config::validate::{check_vector_version, vector_validate};
+use dfe_transform_vector::deployment;
 use dfe_transform_vector::health::serve_health;
 use dfe_transform_vector::metrics::{WrapperMetrics, serve_metrics};
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle, run_lifecycle};
 
+/// dfe-transform-vector: Kafka-to-Kafka transform pipelines powered by Vector.dev.
 #[derive(Parser, Debug)]
 #[command(name = "dfe-transform-vector")]
-#[command(about = "Kafka-to-Kafka transform pipelines powered by Vector.dev")]
-#[command(version)]
-struct Args {
-    /// Path to configuration file
-    #[arg(short, long, env = "DFE_TRANSFORM_CONFIG")]
-    config: Option<String>,
+#[command(version, about, long_about = None)]
+struct App {
+    /// Standard CLI arguments (config, log-level, log-format, metrics-addr, verbose, quiet).
+    #[command(flatten)]
+    common: CommonArgs,
 
-    /// Log level (trace, debug, info, warn, error)
-    #[arg(long, env = "DFE_TRANSFORM_LOG_LEVEL", default_value = "info")]
-    log_level: String,
+    /// Subcommand (defaults to `run` if omitted).
+    #[command(subcommand)]
+    command: Option<AppCommand>,
+}
 
-    /// Log format (json, text)
-    #[arg(long, env = "DFE_TRANSFORM_LOG_FORMAT", default_value = "json")]
-    log_format: String,
+/// Application subcommands.
+///
+/// Standard commands (`run`, `version`, `config-check`) delegate to the
+/// rustlib CLI lifecycle. Deployment commands generate artefacts from the
+/// [`DeploymentContract`](dfe_transform_vector::deployment::contract).
+#[derive(Subcommand, Clone, Debug)]
+enum AppCommand {
+    /// Start the service (default if no subcommand given).
+    Run,
 
-    /// Validate config and exit
-    #[arg(long)]
-    validate: bool,
+    /// Print version information and exit.
+    Version,
 
-    /// Print effective config and exit
-    #[arg(long)]
-    print_config: bool,
+    /// Validate configuration and exit.
+    #[command(name = "config-check")]
+    ConfigCheck,
 
-    /// Assemble Vector config and exit (writes to --config-dir)
-    #[arg(long)]
-    assemble_only: bool,
+    /// Assemble Vector config directory and exit.
+    #[command(name = "assemble")]
+    Assemble {
+        /// Output directory for assembled Vector config.
+        #[arg(default_value = assembler::DEFAULT_CONFIG_DIR)]
+        dir: Option<String>,
+    },
 
-    /// Output directory for assembled Vector config
-    #[arg(long, default_value = assembler::DEFAULT_CONFIG_DIR)]
-    config_dir: String,
+    /// Generate Dockerfile to stdout.
+    #[command(name = "emit-dockerfile")]
+    EmitDockerfile,
+
+    /// Generate Helm chart to the given directory.
+    #[command(name = "emit-chart")]
+    EmitChart {
+        /// Output directory for the chart.
+        dir: String,
+    },
+
+    /// Generate Docker Compose fragment to stdout.
+    #[command(name = "emit-compose")]
+    EmitCompose,
+
+    /// Print deployment contract as JSON to stdout.
+    #[command(name = "emit-contract")]
+    EmitContract,
+}
+
+impl DfeApp for App {
+    type Config = Config;
+
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn name(&self) -> &str {
+        "dfe-transform-vector"
+    }
+
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn env_prefix(&self) -> &str {
+        "DFE_TRANSFORM"
+    }
+
+    fn version_info(&self) -> VersionInfo {
+        VersionInfo::new("dfe-transform-vector", env!("CARGO_PKG_VERSION"))
+    }
+
+    fn common_args(&self) -> &CommonArgs {
+        &self.common
+    }
+
+    fn command(&self) -> Option<&StandardCommand> {
+        match &self.command {
+            Some(AppCommand::Version) => {
+                static VERSION: StandardCommand = StandardCommand::Version;
+                Some(&VERSION)
+            }
+            Some(AppCommand::ConfigCheck) => {
+                static CONFIG_CHECK: StandardCommand = StandardCommand::ConfigCheck;
+                Some(&CONFIG_CHECK)
+            }
+            // Run (explicit or default), Assemble, and deployment commands
+            _ => None,
+        }
+    }
+
+    fn load_config(&self, path: Option<&str>) -> Result<Config, CliError> {
+        let config =
+            Config::load(path).map_err(|e| CliError::Config(format!("failed to load: {e}")))?;
+        config
+            .validate()
+            .map_err(|e| CliError::Config(format!("validation failed: {e}")))?;
+        Ok(config)
+    }
+
+    async fn run_service(&self, config: Config) -> Result<(), CliError> {
+        run_transform_service(&self.common, config)
+            .await
+            .map_err(|e| CliError::Service(e.to_string()))
+    }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+async fn main() {
+    let app = App::parse();
 
-    // Initialise tracing based on format
-    if args.log_format == "json" {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(&args.log_level)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(&args.log_level)
-            .init();
+    // Handle deployment artefact and assemble commands before entering the
+    // DfeApp lifecycle (these don't need the full logging/config/run pipeline)
+    if let Some(ref cmd) = app.command {
+        match cmd {
+            AppCommand::EmitDockerfile => {
+                println!("{}", deployment::emit_dockerfile());
+                return;
+            }
+            AppCommand::EmitChart { dir } => {
+                let contract = deployment::contract();
+                if let Err(e) = generate_chart(&contract, dir) {
+                    eprintln!("error: failed to generate Helm chart: {e}");
+                    std::process::exit(1);
+                }
+                eprintln!("Helm chart generated in {dir}/");
+                return;
+            }
+            AppCommand::EmitCompose => {
+                let contract = deployment::contract();
+                println!("{}", generate_compose_fragment(&contract));
+                return;
+            }
+            AppCommand::EmitContract => {
+                let contract = deployment::contract();
+                println!("{}", contract.to_json());
+                return;
+            }
+            AppCommand::Assemble { dir } => {
+                let config = match Config::load(app.common.config.as_deref()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("error: failed to load configuration: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = config.validate() {
+                    eprintln!("error: configuration validation failed: {e}");
+                    std::process::exit(1);
+                }
+                let config_dir =
+                    PathBuf::from(dir.as_deref().unwrap_or(assembler::DEFAULT_CONFIG_DIR));
+                if let Err(e) = assembler::assemble(&config, &config_dir) {
+                    eprintln!("error: failed to assemble Vector config: {e}");
+                    std::process::exit(1);
+                }
+                eprintln!("Vector config assembled in {}", config_dir.display());
+                return;
+            }
+            _ => {}
+        }
     }
 
-    // Load configuration
-    let config = match Config::load(args.config.as_deref()) {
-        Ok(c) => c,
-        Err(e) => {
-            error!(error = %e, "failed to load configuration");
-            std::process::exit(1);
-        }
-    };
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        error!(error = %e, "configuration validation failed");
+    // Delegate to standard DfeApp lifecycle (logging → config → run_service)
+    if let Err(e) = hyperi_rustlib::cli::run_app(app).await {
+        eprintln!("fatal: {e}");
         std::process::exit(1);
     }
+}
 
-    // Print config and exit if requested
-    if args.print_config {
-        println!("{:#?}", config);
-        return Ok(());
-    }
-
-    // Validate only mode
-    if args.validate {
-        info!("configuration is valid");
-        return Ok(());
-    }
-
-    // Startup version check (fire-and-forget, never blocks)
-    // Requires hyperi-rustlib — uncomment when registry auth is configured
-    // hyperi_rustlib::VersionCheck::new(hyperi_rustlib::VersionCheckConfig {
-    //     product: "dfe-transform-vector".into(),
-    //     current_version: env!("CARGO_PKG_VERSION").into(),
-    //     ..Default::default()
-    // })
-    // .check_on_startup();
-
+/// Main service loop — called by the DfeApp lifecycle after logging and config.
+async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
         version = env!("CARGO_PKG_VERSION"),
@@ -138,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Assemble Vector config directory
     lifecycle.set(State::Validating);
-    let config_dir = PathBuf::from(&args.config_dir);
+    let config_dir = PathBuf::from(assembler::DEFAULT_CONFIG_DIR);
     if let Err(e) = assembler::assemble(&config, &config_dir) {
         error!(error = %e, "failed to assemble Vector config");
         std::process::exit(1);
@@ -150,12 +243,6 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     info!("Vector config validation passed");
-
-    // Assemble-only mode
-    if args.assemble_only {
-        info!(dir = %config_dir.display(), "assembled config written");
-        return Ok(());
-    }
 
     // Wrapper metrics
     let metrics = Arc::new(WrapperMetrics::new());
@@ -232,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn config reload loop (if enabled)
     if config.reload.enabled {
         let reload_config = config.clone();
-        let reload_config_path = args.config.clone();
+        let reload_config_path = common.config.clone();
         let reload_config_dir = config_dir.clone();
         let reload_lifecycle = lifecycle.clone();
         let reload_metrics = metrics.clone();

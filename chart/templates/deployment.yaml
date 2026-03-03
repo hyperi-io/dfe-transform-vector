@@ -1,11 +1,10 @@
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: {{ include "dfe-transform-vector.fullname" . }}
   labels:
     {{- include "dfe-transform-vector.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "dfe-transform-vector.fullname" . }}
   {{- if not (or .Values.keda.enabled .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -16,9 +15,6 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if .Values.transforms }}
-        checksum/transforms: {{ include (print $.Template.BasePath "/configmap-transforms.yaml") . | sha256sum }}
-        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -33,7 +29,6 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "dfe-transform-vector.serviceAccountName" . }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -42,17 +37,17 @@ spec:
             - "--config"
             - "/etc/dfe/config.yaml"
           ports:
+            - name: metrics
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
             - name: health
               containerPort: 9000
-              protocol: TCP
-            - name: metrics
-              containerPort: 9090
               protocol: TCP
             - name: vector-api
               containerPort: 8686
               protocol: TCP
           env:
-            # Kafka SASL credentials via Secret (figment env cascade overrides file config)
+            # kafka credentials via Secret (figment env cascade overrides file config)
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -66,34 +61,27 @@ spec:
           livenessProbe:
             httpGet:
               path: /health/live
-              port: health
+              port: metrics
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: health
+              port: metrics
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 2
           startupProbe:
             httpGet:
               path: /health/live
-              port: health
+              port: metrics
             failureThreshold: 30
             periodSeconds: 5
           volumeMounts:
             - name: config
               mountPath: /etc/dfe
               readOnly: true
-            - name: data
-              mountPath: /var/lib/vector
-            {{- if .Values.transforms }}
-            - name: transforms
-              mountPath: /etc/dfe/transforms
-              readOnly: true
-            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -102,15 +90,6 @@ spec:
         - name: config
           configMap:
             name: {{ include "dfe-transform-vector.fullname" . }}-config
-        {{- if .Values.transforms }}
-        - name: transforms
-          configMap:
-            name: {{ include "dfe-transform-vector.fullname" . }}-transforms
-        {{- end }}
-        {{- if not .Values.persistence.enabled }}
-        - name: data
-          emptyDir: {}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -123,17 +102,3 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-  {{- if .Values.persistence.enabled }}
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes:
-          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
-        {{- if .Values.persistence.storageClass }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.persistence.size }}
-  {{- end }}

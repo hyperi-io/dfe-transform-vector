@@ -8,7 +8,6 @@ metadata:
 spec:
   scaleTargetRef:
     name: {{ include "dfe-transform-vector.fullname" . }}
-    kind: StatefulSet
   minReplicaCount: {{ .Values.keda.minReplicaCount }}
   maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
   pollingInterval: {{ .Values.keda.pollingInterval }}
@@ -19,9 +18,9 @@ spec:
       authenticationRef:
         name: {{ include "dfe-transform-vector.fullname" . }}-kafka-auth
       metadata:
-        bootstrapServers: {{ join "," .Values.config.source.brokers | quote }}
-        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.source.group_id | quote }}
-        topic: {{ .Values.keda.kafka.topic | default (index .Values.config.source.topics 0) | quote }}
+        bootstrapServers: {{ .Values.config.kafka.brokers | quote }}
+        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.kafka.group_id | quote }}
+        topic: {{ .Values.keda.kafka.topic | default (index .Values.config.kafka.topics 0) | quote }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         activationLagThreshold: {{ .Values.keda.kafka.activationLagThreshold | quote }}
         saslType: scram_sha512
