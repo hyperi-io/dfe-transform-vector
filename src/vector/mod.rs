@@ -10,5 +10,9 @@
 //!
 //! Handles spawning, monitoring, signal forwarding, and crash recovery
 //! for the Vector child process.
-//!
-//! Implementation deferred to TODO 3.1–3.4.
+
+pub mod lifecycle;
+pub mod process;
+
+pub use lifecycle::{Lifecycle, State};
+pub use process::{BackoffConfig, run_lifecycle, spawn_vector};
