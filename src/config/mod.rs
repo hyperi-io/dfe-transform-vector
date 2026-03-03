@@ -17,4 +17,7 @@
 
 pub mod loader;
 
-pub use loader::Config;
+pub use loader::{
+    Config, DecodingConfig, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig, SaslConfig,
+    ScalingConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig, VectorConfig,
+};
