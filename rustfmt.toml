@@ -1,0 +1,38 @@
+# Project:   dfe-transform-vector
+# File:      rustfmt.toml
+# Purpose:   Rust formatter configuration
+# Language:  TOML
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+# Rust edition for parsing
+edition = "2024"
+
+# Line width (100 is common for modern displays)
+max_width = 100
+
+# Indentation
+tab_spaces = 4
+hard_tabs = false
+
+# Use default heuristics for formatting choices
+use_small_heuristics = "Default"
+
+# Reorder imports alphabetically
+reorder_imports = true
+
+# Use field init shorthand where possible: Foo { x } instead of Foo { x: x }
+use_field_init_shorthand = true
+
+# Use try! shorthand: ? instead of try!()
+use_try_shorthand = true
+
+# --- Nightly-only options (uncomment when using nightly rustfmt) ---
+# imports_granularity = "Module"
+# group_imports = "StdExternalCrate"
+# blank_lines_upper_bound = 1
+# format_strings = false
+# format_macro_matchers = true
+# format_macro_bodies = true
+# normalize_doc_attributes = true
