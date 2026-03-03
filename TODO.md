@@ -72,7 +72,7 @@
 - [x] 4.2 **Metrics** (`src/metrics.rs`)
   - [x] 4.2.1 Prometheus endpoint on configurable port (default 9090)
   - [x] 4.2.2 Wrapper metrics: `up`, `crashes_total`, `restarts_total`, `config_reloads_total`, `config_validation_errors_total`, `lifecycle_state`, `uptime_seconds`
-  - [ ] 4.2.3 Proxy Vector's `/metrics` from prometheus_exporter sink on :9598
+  - [x] 4.2.3 Proxy Vector's `/metrics` from prometheus_exporter sink on :9598 (best-effort, 2s/5s timeout)
 - [x] 4.3 **Structured logging** — JSON/text via tracing-subscriber, configurable level and format
 
 ## 5. Hot-Reload
