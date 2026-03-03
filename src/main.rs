@@ -175,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn metrics server
     let metrics_lifecycle = lifecycle.clone();
     let metrics_address = config.metrics.address.clone();
+    let vector_metrics_address = config.metrics.vector_metrics_address.clone();
     let metrics_clone = metrics.clone();
     tokio::spawn(async move {
         if let Err(e) = serve_metrics(
@@ -182,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
             metrics_clone,
             metrics_lifecycle,
             started_at,
+            vector_metrics_address,
         )
         .await
         {
