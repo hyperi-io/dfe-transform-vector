@@ -18,11 +18,13 @@
 pub mod assembler;
 pub mod generate;
 pub mod loader;
+pub mod reload;
 pub mod transforms;
 pub mod validate;
 pub mod wiring;
 
 pub use loader::{
-    Config, DecodingConfig, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig, SaslConfig,
-    ScalingConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig, VectorConfig,
+    Config, DecodingConfig, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig,
+    ReloadConfig, SaslConfig, ScalingConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig,
+    VectorConfig,
 };

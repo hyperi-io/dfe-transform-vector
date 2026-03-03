@@ -14,6 +14,7 @@
 
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::{self, Signal};
@@ -117,11 +118,16 @@ pub fn reload_vector(child: &Child) -> Result<()> {
 ///
 /// Spawns Vector, monitors for crashes, and restarts with exponential
 /// backoff. Exits when shutdown is requested via the cancellation token.
+///
+/// The `vector_pid` holder is updated with the current Vector PID whenever
+/// a new child is spawned, and cleared when the child exits. The reload
+/// loop uses this to send SIGHUP for config hot-reload.
 pub async fn run_lifecycle(
     vector_config: &VectorConfig,
     config_dir: &Path,
     lifecycle: &Lifecycle,
     backoff: &BackoffConfig,
+    vector_pid: Arc<Mutex<Option<u32>>>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let mut current_backoff = backoff.initial;
@@ -148,12 +154,16 @@ pub async fn run_lifecycle(
             }
         };
 
+        // Publish PID for the reload loop
+        *vector_pid.lock().unwrap() = child.id();
+
         lifecycle.set(State::Running);
         let started_at = Instant::now();
 
         // Wait for either: child exit or shutdown signal
         let exit_status = tokio::select! {
             status = child.wait() => {
+                *vector_pid.lock().unwrap() = None;
                 match status {
                     Ok(s) => s,
                     Err(e) => {
@@ -168,6 +178,7 @@ pub async fn run_lifecycle(
             }
             _ = shutdown.changed() => {
                 // Shutdown requested — forward SIGTERM to Vector
+                *vector_pid.lock().unwrap() = None;
                 lifecycle.set(State::ShuttingDown);
                 info!("shutdown requested, sending SIGTERM to Vector");
                 let _ = send_signal(&child, Signal::SIGTERM);

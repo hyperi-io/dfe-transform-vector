@@ -67,6 +67,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
         metrics: MetricsConfig::default(),
         logging: LoggingConfig::default(),
         scaling: ScalingConfig::default(),
+        reload: ReloadConfig::default(),
     }
 }
 

@@ -12,7 +12,7 @@
 //! → health/metrics servers → shutdown handling.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use clap::Parser;
@@ -20,6 +20,7 @@ use tracing::{error, info};
 
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
+use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
 use dfe_transform_vector::config::validate::{check_vector_version, vector_validate};
 use dfe_transform_vector::health::serve_health;
 use dfe_transform_vector::metrics::{WrapperMetrics, serve_metrics};
@@ -191,24 +192,66 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Signal handler: SIGTERM and SIGINT trigger shutdown
+    // Shared Vector PID for reload loop → SIGHUP
+    let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+
+    // Reload channel: SIGHUP handler and file watcher send triggers
+    let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(4);
+
+    // Signal handler: SIGTERM/SIGINT → shutdown, SIGHUP → manual reload
     let shutdown_tx_signal = shutdown_tx.clone();
+    let reload_tx_signal = reload_tx.clone();
     tokio::spawn(async move {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
         let mut sigint =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+        let mut sighup =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).unwrap();
 
-        tokio::select! {
-            _ = sigterm.recv() => {
-                info!("received SIGTERM");
-            }
-            _ = sigint.recv() => {
-                info!("received SIGINT");
+        loop {
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    info!("received SIGTERM");
+                    let _ = shutdown_tx_signal.send(true);
+                    return;
+                }
+                _ = sigint.recv() => {
+                    info!("received SIGINT");
+                    let _ = shutdown_tx_signal.send(true);
+                    return;
+                }
+                _ = sighup.recv() => {
+                    info!("received SIGHUP, triggering manual config reload");
+                    let _ = reload_tx_signal.send(ReloadTrigger::Manual).await;
+                }
             }
         }
-        let _ = shutdown_tx_signal.send(true);
     });
+
+    // Spawn config reload loop (if enabled)
+    if config.reload.enabled {
+        let reload_config = config.clone();
+        let reload_config_path = args.config.clone();
+        let reload_config_dir = config_dir.clone();
+        let reload_lifecycle = lifecycle.clone();
+        let reload_metrics = metrics.clone();
+        let reload_pid = vector_pid.clone();
+        let reload_shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            run_reload_loop(
+                reload_config,
+                reload_config_path,
+                reload_config_dir,
+                reload_lifecycle,
+                reload_metrics,
+                reload_pid,
+                reload_rx,
+                reload_shutdown,
+            )
+            .await;
+        });
+    }
 
     // Run Vector subprocess lifecycle loop
     let backoff = BackoffConfig::default();
@@ -217,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
         &config_dir,
         &lifecycle,
         &backoff,
+        vector_pid.clone(),
         shutdown_rx,
     )
     .await;
