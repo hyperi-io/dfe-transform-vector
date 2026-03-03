@@ -77,24 +77,23 @@
 
 ## 5. Hot-Reload
 
-- [ ] 5.1 **Config file watcher** — poll-based (configurable interval, default 30s) on transform YAML directory and big-dial config
-- [ ] 5.2 **SIGHUP handler** — manual reload trigger
-- [ ] 5.3 **Reload workflow**:
-  - [ ] 5.3.1 Detect change (file watcher or SIGHUP)
-  - [ ] 5.3.2 Re-read big-dial config (safe components only — source/sink changes require restart)
-  - [ ] 5.3.3 Re-load transform YAMLs
-  - [ ] 5.3.4 Re-run DAG validation + `vector validate`
-  - [ ] 5.3.5 If valid: write new config dir, send SIGHUP to Vector child (native hot-reload)
-  - [ ] 5.3.6 If invalid: log error, increment metric, keep running with old config
-- [ ] 5.4 **Classify config changes**: safe (transforms only) vs unsafe (source/sink/brokers change → requires full restart)
+- [x] 5.1 **Config file watcher** — poll-based (configurable interval, default 30s) on transform YAML directory and big-dial config
+- [x] 5.2 **SIGHUP handler** — manual reload trigger
+- [x] 5.3 **Reload workflow**:
+  - [x] 5.3.1 Detect change (file watcher or SIGHUP)
+  - [x] 5.3.2 Re-read big-dial config (safe components only — source/sink changes require restart)
+  - [x] 5.3.3 Re-load transform YAMLs
+  - [x] 5.3.4 Re-run DAG validation + `vector validate`
+  - [x] 5.3.5 If valid: write new config dir, send SIGHUP to Vector child (native hot-reload)
+  - [x] 5.3.6 If invalid: log error, increment metric, keep running with old config
+- [x] 5.4 **Classify config changes**: safe (transforms only) vs unsafe (source/sink/brokers change → requires full restart)
 
 ## 6. Docker Image
 
-- [x] 6.1 Multi-stage Dockerfile:
-  - Stage 1: Rust build (cargo build --release)
-  - Stage 2: Fetch Vector binary (from official release tarball)
-  - Stage 3: Runtime — `debian:bookworm-slim`, copy both binaries, non-root user
-- [x] 6.2 Vector binary sourced from official release tarball (pinned version in Dockerfile ARG, v0.48.0)
+- [x] 6.1 Dockerfile generated from `DeploymentContract` via `emit-dockerfile` subcommand
+  - Runtime: `ubuntu:24.04`, single-stage (CI builds binary externally)
+  - Vector binary COPY + data directories inserted via post-processing
+- [x] 6.2 Vector binary sourced from official release tarball (pinned version, v0.48.0)
 - [x] 6.3 Entrypoint: `/usr/local/bin/dfe-transform-vector`
 - [x] 6.4 Vector at: `/usr/local/bin/vector`
 - [x] 6.5 Health check: `HEALTHCHECK CMD curl -f http://localhost:9000/health/live || exit 1`
@@ -102,24 +101,19 @@
 
 ## 7. Helm Chart
 
-- [x] 7.1 Chart scaffold in `chart/` directory (Chart.yaml, _helpers.tpl)
-- [x] 7.2 **StatefulSet** template (always StatefulSet, no role switching needed)
+- [x] 7.1 Chart generated from `DeploymentContract` via `emit-chart` subcommand
+- [x] 7.2 **Deployment** template (switched from StatefulSet — Vector data dir loss just re-reads from Kafka)
   - [x] 7.2.1 Container: `dfe-transform-vector` image
   - [x] 7.2.2 Ports: health (9000), metrics (9090), Vector API (8686)
-  - [x] 7.2.3 Liveness probe: `/health/live` on health port
-  - [x] 7.2.4 Readiness probe: `/health/ready` on health port
-  - [x] 7.2.5 `terminationGracePeriodSeconds: 65`
-  - [x] 7.2.6 Volume mounts: data_dir (PVC), config (ConfigMap), transform YAMLs (ConfigMap)
-  - [x] 7.2.7 Env vars from Secrets (KAFKA_SASL_USERNAME/PASSWORD via secretKeyRef)
-  - [x] 7.2.8 Resource requests/limits (configurable via values)
-  - [x] 7.2.9 Node affinity, tolerations (configurable via values)
-- [x] 7.3 **ConfigMap** for big-dial config YAML + separate transforms ConfigMap
+  - [x] 7.2.3 Liveness/readiness probes: `/health/live`, `/health/ready`
+  - [x] 7.2.4 Env vars from Secrets (KAFKA_SASL_USERNAME/PASSWORD via secretKeyRef)
+- [x] 7.3 **ConfigMap** for big-dial config YAML
 - [x] 7.4 **Service** (ClusterIP — health + metrics ports)
-- [x] 7.5 **ServiceAccount** with configurable annotations (IRSA-ready)
-- [x] 7.6 **PodMonitor** for Prometheus Operator (optional, off by default)
-- [x] 7.7 **PodDisruptionBudget** (optional, off by default)
-- [x] 7.8 **values.yaml** — big dials at top level, sensible defaults, KEDA + HPA
-- [x] 7.9 ConfigMap checksum annotation on pod template (auto-restart on config change)
+- [x] 7.5 **ServiceAccount**
+- [x] 7.6 **KEDA ScaledObject** + TriggerAuthentication (Kafka lag + CPU)
+- [x] 7.7 **HPA** (fallback when KEDA not available)
+- [x] 7.8 **values.yaml** — sensible defaults from DeploymentContract
+- [x] 7.9 **docker-compose.yaml** generated via `emit-compose` subcommand
 
 ## 8. dfe-core Integration
 
