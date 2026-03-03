@@ -1,24 +1,16 @@
 dfe-transform-vector has been deployed.
 
-Pipeline: {{ .Values.config.pipeline.name }}
-Source topics: {{ join ", " .Values.config.source.topics }}
-Sink topic: {{ .Values.config.sink.topic }}
-
-1. Check health:
-   kubectl port-forward svc/{{ include "dfe-transform-vector.fullname" . }} {{ .Values.service.healthPort }}:{{ .Values.service.healthPort }}
-   curl http://localhost:{{ .Values.service.healthPort }}/health/live
-   curl http://localhost:{{ .Values.service.healthPort }}/health/ready
-
-2. View metrics:
-   kubectl port-forward svc/{{ include "dfe-transform-vector.fullname" . }} {{ .Values.service.metricsPort }}:{{ .Values.service.metricsPort }}
-   curl http://localhost:{{ .Values.service.metricsPort }}/metrics
+1. Get the metrics/health endpoint:
+   kubectl port-forward svc/{{ include "dfe-transform-vector.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+   curl http://localhost:{{ .Values.service.port }}/health/live
+   curl http://localhost:{{ .Values.service.port }}/metrics
 
 {{- if .Values.keda.enabled }}
 
-3. Check KEDA autoscaling:
+2. Check KEDA autoscaling status:
    kubectl get scaledobject {{ include "dfe-transform-vector.fullname" . }}
    kubectl get hpa
 {{- end }}
 
-4. View logs:
+3. View logs:
    kubectl logs -l app.kubernetes.io/name={{ include "dfe-transform-vector.name" . }} -f

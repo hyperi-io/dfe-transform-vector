@@ -12,6 +12,7 @@
 //! making Vector a first-class DFE platform citizen.
 
 pub mod config;
+pub mod deployment;
 pub mod error;
 pub mod health;
 pub mod metrics;

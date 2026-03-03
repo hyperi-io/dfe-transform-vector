@@ -76,17 +76,16 @@ impl FileSnapshot {
         // Snapshot transform files
         if let Some(dir) = &config.transforms.dir {
             let dir_path = Path::new(dir);
-            if dir_path.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(dir_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-                            if let Ok(meta) = path.metadata() {
-                                if let Ok(mtime) = meta.modified() {
-                                    mtimes.insert(path, mtime);
-                                }
-                            }
-                        }
+            if dir_path.is_dir()
+                && let Ok(entries) = std::fs::read_dir(dir_path)
+            {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|e| e == "yaml" || e == "yml")
+                        && let Ok(meta) = path.metadata()
+                        && let Ok(mtime) = meta.modified()
+                    {
+                        mtimes.insert(path, mtime);
                     }
                 }
             }
@@ -95,10 +94,10 @@ impl FileSnapshot {
         if let Some(files) = &config.transforms.files {
             for file in files {
                 let path = PathBuf::from(file);
-                if let Ok(meta) = path.metadata() {
-                    if let Ok(mtime) = meta.modified() {
-                        mtimes.insert(path, mtime);
-                    }
+                if let Ok(meta) = path.metadata()
+                    && let Ok(mtime) = meta.modified()
+                {
+                    mtimes.insert(path, mtime);
                 }
             }
         }

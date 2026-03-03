@@ -7,7 +7,7 @@
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 
 [toolchain]
-channel = "1.85"
+channel = "stable"
 components = [
     "rustfmt",
     "clippy",

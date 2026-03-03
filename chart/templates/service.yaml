@@ -7,13 +7,17 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.healthPort }}
-      targetPort: health
-      protocol: TCP
-      name: health
-    - port: {{ .Values.service.metricsPort }}
+    - port: {{ .Values.service.port }}
       targetPort: metrics
       protocol: TCP
       name: metrics
+    - port: 9000
+      targetPort: 9000
+      protocol: TCP
+      name: health
+    - port: 8686
+      targetPort: 8686
+      protocol: TCP
+      name: vector-api
   selector:
     {{- include "dfe-transform-vector.selectorLabels" . | nindent 4 }}

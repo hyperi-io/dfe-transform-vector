@@ -226,11 +226,11 @@ async fn handle_metrics(
     encoder.encode(&metric_families, &mut buffer).unwrap();
 
     // Proxy Vector's prometheus_exporter metrics (best-effort)
-    if state.is_ready() {
-        if let Some(vector_metrics) = fetch_vector_metrics(vector_metrics_address).await {
-            buffer.push(b'\n');
-            buffer.extend_from_slice(vector_metrics.as_bytes());
-        }
+    if state.is_ready()
+        && let Some(vector_metrics) = fetch_vector_metrics(vector_metrics_address).await
+    {
+        buffer.push(b'\n');
+        buffer.extend_from_slice(vector_metrics.as_bytes());
     }
 
     Ok(Response::builder()
