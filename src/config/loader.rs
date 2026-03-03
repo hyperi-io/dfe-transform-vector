@@ -23,7 +23,7 @@ use crate::Result;
 // =============================================================================
 
 /// SASL authentication for Kafka.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SaslConfig {
     /// Enable SASL authentication.
@@ -48,7 +48,7 @@ impl Default for SaslConfig {
 }
 
 /// TLS configuration for Kafka.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TlsConfig {
     /// Enable TLS.
@@ -64,7 +64,7 @@ pub struct TlsConfig {
 }
 
 /// Message decoding configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DecodingConfig {
     /// Codec: json, raw_bytes, protobuf.
@@ -84,7 +84,7 @@ impl Default for DecodingConfig {
 // =============================================================================
 
 /// Main configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Pipeline identity.
@@ -105,10 +105,12 @@ pub struct Config {
     pub logging: LoggingConfig,
     /// KEDA scaling pressure.
     pub scaling: ScalingConfig,
+    /// Hot-reload configuration.
+    pub reload: ReloadConfig,
 }
 
 /// Pipeline identity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PipelineConfig {
     /// Pipeline name (used in metrics labels, Kafka group_id, logging).
@@ -124,7 +126,7 @@ impl Default for PipelineConfig {
 }
 
 /// Kafka source configuration (input big dials).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceConfig {
     /// Kafka bootstrap servers.
@@ -155,7 +157,7 @@ impl Default for SourceConfig {
 }
 
 /// Kafka sink configuration (output big dials).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SinkConfig {
     /// Kafka bootstrap servers.
@@ -189,7 +191,7 @@ impl Default for SinkConfig {
 }
 
 /// Transform file loading configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransformConfig {
     /// Directory to load all YAML transform files from.
@@ -199,7 +201,7 @@ pub struct TransformConfig {
 }
 
 /// Vector subprocess configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VectorConfig {
     /// Path to Vector binary.
@@ -230,7 +232,7 @@ impl Default for VectorConfig {
 }
 
 /// Health endpoint configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HealthConfig {
     /// Health server bind address (host:port).
@@ -246,7 +248,7 @@ impl Default for HealthConfig {
 }
 
 /// Metrics endpoint configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     /// Metrics server bind address (host:port).
@@ -265,7 +267,7 @@ impl Default for MetricsConfig {
 }
 
 /// Logging configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
@@ -283,8 +285,27 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Hot-reload configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReloadConfig {
+    /// Enable hot-reload (poll-based file watcher + SIGHUP).
+    pub enabled: bool,
+    /// Poll interval in seconds for detecting config/transform file changes.
+    pub poll_interval_secs: u64,
+}
+
+impl Default for ReloadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            poll_interval_secs: 30,
+        }
+    }
+}
+
 /// KEDA scaling pressure configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScalingConfig {
     /// Scaling pressure threshold (0.0–1.0).
