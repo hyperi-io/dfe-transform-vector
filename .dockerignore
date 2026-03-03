@@ -1,0 +1,42 @@
+# Project:   dfe-transform-vector
+# File:      .dockerignore
+# Purpose:   Exclude files from Docker build context
+# Language:  Docker
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+target/
+.cargo/
+!.cargo/config.toml
+**/*.rs.bk
+*.pdb
+
+.git/
+.gitignore
+.gitmodules
+.github/
+
+.vscode/
+.idea/
+
+ai/
+ci/
+
+docs/
+*.md
+!README.md
+
+.env
+.env.*
+*.log
+.tmp/
+.claude/
+
+coverage/
+coverage-html/
+*.profraw
+*.profdata
+
+.DS_Store
+Thumbs.db
