@@ -149,12 +149,14 @@ impl Default for WrapperMetrics {
 
 /// Start the metrics HTTP server.
 ///
-/// Serves `/metrics` with wrapper metrics in Prometheus text format.
+/// Serves `/metrics` with wrapper metrics in Prometheus text format,
+/// plus proxied Vector internal metrics from its prometheus_exporter sink.
 pub async fn serve_metrics(
     address: &str,
     metrics: Arc<WrapperMetrics>,
     lifecycle: Lifecycle,
     started_at: Instant,
+    vector_metrics_address: String,
 ) -> Result<()> {
     let addr: SocketAddr = address
         .parse()
@@ -178,12 +180,14 @@ pub async fn serve_metrics(
         let m = metrics.clone();
         let lc = lifecycle.clone();
         let start = started_at;
+        let vec_addr = vector_metrics_address.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let svc = service_fn(move |req| {
                 let m = m.clone();
                 let lc = lc.clone();
-                async move { handle_metrics(req, &m, &lc, start) }
+                let vec_addr = vec_addr.clone();
+                async move { handle_metrics(req, &m, &lc, start, &vec_addr).await }
             });
             if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                 debug!(error = %e, "metrics connection error");
@@ -193,11 +197,12 @@ pub async fn serve_metrics(
 }
 
 /// Handle a metrics request.
-fn handle_metrics(
+async fn handle_metrics(
     req: Request<hyper::body::Incoming>,
     metrics: &WrapperMetrics,
     lifecycle: &Lifecycle,
     started_at: Instant,
+    vector_metrics_address: &str,
 ) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
     if req.uri().path() != "/metrics" {
         return Ok(Response::builder()
@@ -220,9 +225,63 @@ fn handle_metrics(
     let mut buffer = Vec::new();
     encoder.encode(&metric_families, &mut buffer).unwrap();
 
+    // Proxy Vector's prometheus_exporter metrics (best-effort)
+    if state.is_ready() {
+        if let Some(vector_metrics) = fetch_vector_metrics(vector_metrics_address).await {
+            buffer.push(b'\n');
+            buffer.extend_from_slice(vector_metrics.as_bytes());
+        }
+    }
+
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", encoder.format_type())
         .body(Full::new(Bytes::from(buffer)))
         .unwrap())
+}
+
+/// Fetch metrics from Vector's prometheus_exporter sink (best-effort).
+///
+/// Returns `None` if Vector isn't running or the fetch fails.
+/// Uses a short timeout to avoid blocking the metrics response.
+async fn fetch_vector_metrics(address: &str) -> Option<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        TcpStream::connect(address),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let request = format!("GET /metrics HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+
+    let mut stream = stream;
+    stream.write_all(request.as_bytes()).await.ok()?;
+
+    let mut response = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_string(&mut response),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    // Extract body from HTTP response
+    let body = response.split("\r\n\r\n").nth(1)?;
+
+    // Verify we got a 200 response
+    let status_line = response.lines().next()?;
+    if !status_line.contains("200") {
+        debug!(
+            status = status_line,
+            "Vector metrics proxy got non-200 response"
+        );
+        return None;
+    }
+
+    Some(body.to_string())
 }

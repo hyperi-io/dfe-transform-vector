@@ -168,7 +168,15 @@ async fn metrics_server_responds() {
     let addr_str = addr.clone();
     tokio::spawn(async move {
         use dfe_transform_vector::metrics::serve_metrics;
-        let _ = serve_metrics(&addr_str, metrics_clone, metrics_lc, started_at).await;
+        // Use a non-routable address for Vector metrics proxy (no Vector running in tests)
+        let _ = serve_metrics(
+            &addr_str,
+            metrics_clone,
+            metrics_lc,
+            started_at,
+            "127.0.0.1:0".to_string(),
+        )
+        .await;
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

@@ -251,12 +251,15 @@ impl Default for HealthConfig {
 pub struct MetricsConfig {
     /// Metrics server bind address (host:port).
     pub address: String,
+    /// Vector's prometheus_exporter address to proxy (host:port).
+    pub vector_metrics_address: String,
 }
 
 impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
             address: "0.0.0.0:9090".to_string(),
+            vector_metrics_address: "127.0.0.1:9598".to_string(),
         }
     }
 }
