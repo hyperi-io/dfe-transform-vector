@@ -15,6 +15,7 @@ description = "Rust wrapper for Vector.dev subprocess — Kafka-to-Kafka transfo
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vector"
 rust-version = "1.88"
+exclude = [".github/", "chart/", "docs/"]
 
 [lib]
 name = "dfe_transform_vector"
