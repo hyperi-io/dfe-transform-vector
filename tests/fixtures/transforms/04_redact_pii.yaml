@@ -1,0 +1,25 @@
+# Fixture: 04_redact_pii
+#
+# Redact common PII fields before the event reaches the sink topic.
+# Fields are replaced with the string "[REDACTED]" rather than deleted
+# so downstream schemas remain intact.
+#
+# Inputs: auto-wired
+
+transforms:
+  redact_pii:
+    type: remap
+    source: |
+      pii_fields = ["password", "token", "secret", "api_key",
+                    "credit_card", "ssn", "date_of_birth", "phone"]
+
+      for_each(array(pii_fields)) -> |_i, field| {
+        if exists(.(field)) {
+          .(field) = "[REDACTED]"
+        }
+      }
+
+      # Mask email addresses anywhere in the message string
+      if is_string(.message) {
+        .message = replace(.message, r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', "[EMAIL]")
+      }

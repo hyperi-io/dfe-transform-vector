@@ -1,0 +1,14 @@
+# Fixture: 02_enrich_metadata
+#
+# Enrich events with pipeline metadata: pipeline name, processing timestamp,
+# and the Kafka topic the event arrived on.
+#
+# Inputs: auto-wired (follows previous transform in chain)
+
+transforms:
+  enrich_metadata:
+    type: remap
+    source: |
+      .pipeline   = "${DFE_PIPELINE_NAME:-unknown}"
+      .processed_at = now()
+      .source_topic = .metadata.kafka.topic ?? "unknown"

@@ -1,0 +1,29 @@
+# Test fixture: config that loads transforms from the fixture directory.
+# Used by tests that exercise the full assemble + DAG-wiring path.
+
+pipeline:
+  name: "transform-pipeline"
+
+source:
+  brokers:
+    - "localhost:9092"
+  topics:
+    - "raw.input"
+  group_id: "transform-group"
+  decoding:
+    codec: "json"
+
+sink:
+  brokers:
+    - "localhost:9092"
+  topic: "enriched.output"
+  encoding: "json"
+  compression: "zstd"
+
+transforms:
+  dir: "tests/fixtures/transforms"
+
+vector:
+  binary: "/usr/local/bin/vector"
+  data_dir: "/tmp/vector-test-data"
+  version_check: "disabled"

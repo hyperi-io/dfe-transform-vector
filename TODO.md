@@ -143,7 +143,10 @@
   - [x] 9.2.5 Health server — responds 200 when running, 503 when initialising
   - [x] 9.2.6 Metrics server — responds with Prometheus text format
 - [ ] 9.3 **Testcontainers** (Kafka) — full pipeline test: produce → transform → consume
-- [ ] 9.4 **Config fixture library** — example transform YAMLs for common patterns (remap, filter, route, reduce)
+- [ ] 9.4 **Config fixture library** `[IN PROGRESS]`
+  - Current state: fixtures created (`tests/fixtures/transforms/01-05`, `tests/fixtures/configs/minimal|with_sasl|with_transforms`), `tests/integration_fixtures.rs` written with 9 tests
+  - Blocker: `extract_components()` returns empty on fixture files with block-scalar VRL containing `{`/`}` — the assembler test passes (it copies files regardless) but the DAG-wiring tests fail; also `with_sasl.yaml` uses `SCRAM-SHA-512` but validator expects `scram_sha_512`
+  - Next: (1) simplify fixture VRL to avoid YAML-special chars in block scalars, (2) add explicit `inputs:` to chain fixtures 02–05, (3) fix `with_sasl.yaml` mechanism format, (4) rewrite individual transform tests to use `assembler::assemble` instead of `extract_components` directly
 
 ## 10. CI/CD
 
