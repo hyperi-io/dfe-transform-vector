@@ -1,0 +1,26 @@
+# Test fixture: minimal valid config (no transforms, no SASL/TLS)
+# Used by integration tests that exercise config loading and assembly.
+
+pipeline:
+  name: "test-pipeline"
+
+source:
+  brokers:
+    - "localhost:9092"
+  topics:
+    - "raw.input"
+  group_id: "test-group"
+  decoding:
+    codec: "json"
+
+sink:
+  brokers:
+    - "localhost:9092"
+  topic: "enriched.output"
+  encoding: "json"
+  compression: "none"
+
+vector:
+  binary: "/usr/local/bin/vector"
+  data_dir: "/tmp/vector-test-data"
+  version_check: "disabled"

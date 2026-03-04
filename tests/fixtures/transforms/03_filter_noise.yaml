@@ -1,0 +1,17 @@
+# Fixture: 03_filter_noise
+#
+# Drop health-check pings and empty events before forwarding.
+# Events that match are silently discarded; all others pass through.
+#
+# Inputs: auto-wired
+
+transforms:
+  filter_noise:
+    type: filter
+    condition:
+      type: vrl
+      source: |
+        # Keep the event unless it looks like a health/ping probe
+        !match(string(.path ?? ""), r'^/health') &&
+        !match(string(.event_type ?? ""), r'^(ping|heartbeat)$') &&
+        .message != null && .message != ""

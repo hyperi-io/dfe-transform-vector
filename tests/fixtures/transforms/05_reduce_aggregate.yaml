@@ -1,0 +1,23 @@
+# Fixture: 05_reduce_aggregate
+#
+# Aggregate events over a 10-second window, grouped by (host, service).
+# Emits one summary event per group at flush with event_count and merged fields.
+#
+# Suitable for high-volume metric-like events where individual events are
+# less important than per-host/service summaries.
+#
+# Inputs: auto-wired
+
+transforms:
+  reduce_aggregate:
+    type: reduce
+    expire_after_ms: 10000
+    group_by:
+      - host
+      - service
+    merge_strategies:
+      message: concat_newline
+      level: retain
+    ends_when:
+      type: vrl
+      source: .flush == true

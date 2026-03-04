@@ -1,0 +1,17 @@
+# Fixture: 01_parse_message
+#
+# Parse a JSON payload from the `message` field into structured fields.
+# Errors are surfaced as `.parse_error` rather than dropping the event.
+#
+# Position: first in chain — inputs auto-wired to dfe_source
+
+transforms:
+  parse_message:
+    type: remap
+    source: |
+      parsed, err = parse_json(.message)
+      if err == null {
+        .parsed = parsed
+      } else {
+        .parse_error = to_string(err)
+      }
