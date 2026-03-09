@@ -27,7 +27,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
                        │ compiled Helm values + Argo CD Application
                        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  K8s Pod (StatefulSet)                                           │
+│  K8s Pod (Deployment)                                            │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │  dfe-transform-vector (Rust, PID 1)                        │  │
@@ -61,9 +61,8 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  Volumes:                                                        │
-│  • /var/lib/vector          (PVC — disk buffers, WAL)            │
 │  • /etc/dfe/config.yaml     (ConfigMap — big-dial config)        │
-│  • /etc/dfe/transforms/     (ConfigMap — user transform YAMLs)   │
+│  • /etc/dfe/transforms/     (init container — from Artifactory)  │
 │  • /var/run/vector/config/  (emptyDir — assembled Vector config) │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -345,11 +344,11 @@ The config engine takes the big dials and produces a Vector config directory:
 
 ```
 /var/run/vector/config/
+  00_global.yaml          # data_dir + api settings
   00_source.yaml          # Generated from source big dials
-  50_transforms/          # Copied from /etc/dfe/transforms/ (user-supplied)
-    parse.yaml
-    enrich.yaml
-    filter.yaml
+  50_000_parse.yaml       # User transforms, flat (Vector --config-dir doesn't recurse)
+  50_001_enrich.yaml      # Prefixed with 50_NNN_ for stable sort order
+  50_002_filter.yaml
   90_sink.yaml            # Generated from sink big dials
   99_observability.yaml   # Generated: internal_metrics + prometheus_exporter
 ```
@@ -719,14 +718,15 @@ chart/
   values.yaml
   templates/
     _helpers.tpl
-    statefulset.yaml
+    deployment.yaml
     service.yaml
-    configmap-config.yaml        # Big-dial config
-    configmap-transforms.yaml    # User transform YAMLs
+    configmap.yaml               # Big-dial config
+    secret.yaml                  # Kafka credentials (when existingSecret empty)
     serviceaccount.yaml
-    podmonitor.yaml
-    pdb.yaml
-    scaled-object.yaml           # KEDA ScaledObject
+    hpa.yaml                     # HPA fallback (when KEDA not available)
+    keda-scaledobject.yaml       # KEDA ScaledObject (Kafka lag + CPU)
+    keda-triggerauth.yaml        # KEDA TriggerAuthentication
+    NOTES.txt
 ```
 
 No dependency on the official Vector Helm chart. This is a purpose-built chart for dfe-transform-vector that follows the same patterns as dfe-loader and dfe-receiver charts.
@@ -777,11 +777,6 @@ resources:
     cpu: "2000m"
     memory: "2Gi"
 
-persistence:
-  enabled: true
-  size: 20Gi
-  storageClassName: vector-data
-
 keda:
   enabled: true
   minReplicas: 2
@@ -805,11 +800,11 @@ affinity: {}
 
 | Feature | dfe-loader | dfe-receiver | dfe-transform-vector |
 |---|---|---|---|
-| Workload type | StatefulSet | StatefulSet | StatefulSet |
+| Workload type | StatefulSet | StatefulSet | Deployment |
 | Health probes | /health/live, /health/ready | /health/live, /health/ready | /health/live, /health/ready |
 | Metrics port | 9090 | 9090 | 9090 |
 | ConfigMap | config.yaml | config.yaml | config.yaml + transforms/ |
-| PVC | data dir | data dir | Vector data_dir |
+| PVC | data dir | data dir | None (Deployment) |
 | KEDA ScaledObject | Kafka lag | Kafka lag | Kafka lag |
 | PodMonitor | Yes | Yes | Yes |
 | ServiceAccount + IRSA | Yes | Yes | Yes |
@@ -831,7 +826,7 @@ Each instance has its own:
 - Config file in dfe-engine registry: `transform-vector-syslog.yaml`
 - Deployment config: `deployment_configs/transform-vector-syslog.yaml`
 - Kafka consumer group: `dfe-transform-vector-syslog`
-- Helm release: separate StatefulSet
+- Helm release: separate Deployment
 - KEDA ScaledObject: independent scaling
 
 This is the standard dfe-engine multi-instance pattern — no special handling needed.
@@ -845,7 +840,7 @@ This is the standard dfe-engine multi-instance pattern — no special handling n
 | Config schema + validation | dfe-engine (Pydantic) + wrapper (Rust) | Both validate, dfe-engine at compile/save time, wrapper at runtime |
 | Helm values compilation | dfe-engine | HelmValuesCompiler |
 | Argo CD Applications | dfe-engine | Generated from deployment registry |
-| K8s manifests | This repo's Helm chart | StatefulSet, Service, ConfigMap, etc. |
+| K8s manifests | This repo's Helm chart | Deployment, Service, ConfigMap, etc. |
 | Config assembly (big dials → Vector YAML) | Wrapper (Rust) | The core novel work |
 | DAG wiring + validation | Wrapper (Rust) | Auto-wire source/sink, validate refs |
 | Vector process lifecycle | Wrapper (Rust) | Spawn, monitor, restart, shutdown |
