@@ -25,10 +25,12 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, info};
 
-use super::generate::{generate_observability_yaml, generate_sink_yaml, generate_source_yaml};
+use super::generate::{
+    generate_global_yaml, generate_observability_yaml, generate_sink_yaml, generate_source_yaml,
+};
 use super::loader::Config;
 use super::transforms::{LoadedTransform, load_transforms};
-use super::wiring::{auto_wire, extract_components, validate_dag};
+use super::wiring::{WiringResult, auto_wire, extract_components, validate_dag};
 use crate::Result;
 
 /// Default output directory for assembled Vector config.
@@ -49,6 +51,10 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(output_dir)?;
 
+    // Generate global config (data_dir, API)
+    let global_yaml = generate_global_yaml(&config.vector);
+    write_yaml(output_dir, "00_global.yaml", &global_yaml)?;
+
     // Generate source YAML
     let source_yaml = generate_source_yaml(&config.source);
     write_yaml(output_dir, "00_source.yaml", &source_yaml)?;
@@ -64,8 +70,8 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     validate_dag(&wiring)?;
     debug!("DAG validation passed");
 
-    // Write transform files to subdirectory
-    write_transforms(output_dir, &transforms)?;
+    // Write transform files to subdirectory (with auto-wired inputs injected)
+    write_transforms(output_dir, &transforms, &wiring)?;
 
     // Generate sink YAML with wired inputs
     let sink_yaml = generate_sink_yaml(&config.sink, &wiring.sink_inputs);
@@ -88,34 +94,80 @@ fn write_yaml(dir: &Path, filename: &str, value: &serde_yaml_ng::Value) -> Resul
     Ok(())
 }
 
-/// Write transform files into a `50_transforms/` subdirectory.
+/// Write transform files into the config directory.
 ///
-/// Preserves original filenames (prefixed with index for ordering
-/// if the original names don't sort correctly).
-fn write_transforms(dir: &Path, transforms: &[LoadedTransform]) -> Result<()> {
+/// Files are written flat (not in a subdirectory) because Vector's
+/// `--config-dir` does not recurse into subdirectories. Each file is
+/// prefixed with `50_` to sort after source (00_) and before sink (90_).
+///
+/// Injects auto-wired `inputs` into transform components that don't have
+/// explicit inputs. Vector requires every transform to declare its inputs.
+fn write_transforms(
+    dir: &Path,
+    transforms: &[LoadedTransform],
+    wiring: &WiringResult,
+) -> Result<()> {
     if transforms.is_empty() {
         return Ok(());
     }
 
-    let transforms_dir = dir.join("50_transforms");
-    std::fs::create_dir_all(&transforms_dir)?;
+    // Build a lookup from component label → wired inputs
+    let mut wired_inputs: std::collections::HashMap<&str, &[String]> =
+        std::collections::HashMap::new();
+    for c in &wiring.components {
+        if !c.inputs.is_empty() {
+            wired_inputs.insert(&c.label, &c.inputs);
+        }
+    }
 
     for (i, lt) in transforms.iter().enumerate() {
+        let mut yaml = lt.yaml.clone();
+        inject_wired_inputs(&mut yaml, &wired_inputs);
+
         let original_name = lt
             .path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("transform.yaml");
 
-        // Prefix with zero-padded index to guarantee ordering
-        let filename = format!("{:03}_{original_name}", i);
-        let content = serde_yaml_ng::to_string(&lt.yaml)?;
-        let path = transforms_dir.join(&filename);
+        let filename = format!("50_{:03}_{original_name}", i);
+        let content = serde_yaml_ng::to_string(&yaml)?;
+        let path = dir.join(&filename);
         std::fs::write(&path, &content)?;
         debug!(path = %path.display(), "wrote transform file");
     }
 
     Ok(())
+}
+
+/// Inject auto-wired `inputs` into transform components that lack them.
+fn inject_wired_inputs(
+    yaml: &mut serde_yaml_ng::Value,
+    wired_inputs: &std::collections::HashMap<&str, &[String]>,
+) {
+    use serde_yaml_ng::Value;
+
+    let transforms_key = Value::String("transforms".to_string());
+    let inputs_key = Value::String("inputs".to_string());
+
+    if let Some(Value::Mapping(entries)) = yaml.get_mut(&transforms_key) {
+        for (label_val, component_val) in entries.iter_mut() {
+            let label = match label_val.as_str() {
+                Some(s) => s,
+                None => continue,
+            };
+
+            if let Some(inputs) = wired_inputs.get(label)
+                && let Value::Mapping(component_map) = component_val
+                && !component_map.contains_key(&inputs_key)
+            {
+                let inputs_val =
+                    Value::Sequence(inputs.iter().map(|s| Value::String(s.clone())).collect());
+                component_map.insert(inputs_key.clone(), inputs_val);
+                debug!(label, "injected auto-wired inputs into transform");
+            }
+        }
+    }
 }
 
 // =========================================================================
@@ -125,9 +177,7 @@ fn write_transforms(dir: &Path, transforms: &[LoadedTransform]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::loader::{
-        DecodingConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig,
-    };
+    use crate::config::loader::{SinkConfig, SourceConfig, TransformConfig};
     use std::fs;
     use tempfile::TempDir;
 
@@ -137,9 +187,7 @@ mod tests {
                 brokers: vec!["kafka:9092".into()],
                 topics: vec!["input".into()],
                 group_id: "test-group".into(),
-                decoding: DecodingConfig::default(),
-                sasl: SaslConfig::default(),
-                tls: TlsConfig::default(),
+                ..Default::default()
             },
             sink: SinkConfig {
                 brokers: vec!["kafka:9092".into()],
@@ -147,8 +195,7 @@ mod tests {
                 key_field: ".id".into(),
                 encoding: "json".into(),
                 compression: "none".into(),
-                sasl: SaslConfig::default(),
-                tls: TlsConfig::default(),
+                ..Default::default()
             },
             transforms: TransformConfig {
                 dir: transforms_dir,
@@ -170,8 +217,13 @@ mod tests {
         assert!(output.path().join("00_source.yaml").exists());
         assert!(output.path().join("90_sink.yaml").exists());
         assert!(output.path().join("99_observability.yaml").exists());
-        // No transforms dir when empty
-        assert!(!output.path().join("50_transforms").exists());
+        // No transform files when empty
+        let transform_files: Vec<_> = fs::read_dir(output.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
+            .collect();
+        assert!(transform_files.is_empty());
 
         // Source should reference dfe_source
         let source_content = fs::read_to_string(output.path().join("00_source.yaml")).unwrap();
@@ -201,11 +253,13 @@ mod tests {
 
         assemble(&config, output.path()).unwrap();
 
-        // Transforms dir should exist with 2 files
-        let t_dir = output.path().join("50_transforms");
-        assert!(t_dir.is_dir());
-        let entries: Vec<_> = fs::read_dir(&t_dir).unwrap().collect();
-        assert_eq!(entries.len(), 2);
+        // Transform files should exist in the config dir (flat, prefixed with 50_)
+        let transform_files: Vec<_> = fs::read_dir(output.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
+            .collect();
+        assert_eq!(transform_files.len(), 2);
 
         // Sink should wire to "filter" (terminal transform)
         let sink_content = fs::read_to_string(output.path().join("90_sink.yaml")).unwrap();

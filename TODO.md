@@ -117,17 +117,33 @@
 
 ## 8. dfe-core Integration
 
-- [ ] 8.1 New ArgoCD ApplicationSet pointing to this repo's chart (replaces `helm.vector.dev` source)
-- [ ] 8.2 Migrate existing pipeline values from dfe-core format to big-dial format
-- [ ] 8.3 ExternalSecrets stay as-is (Kafka SASL, Artifactory creds)
-- [ ] 8.4 KEDA TriggerAuthentication stays as-is
-- [ ] 8.5 Karpenter node pools stay as-is (vector_node role)
-- [ ] 8.6 Init container: either keep Artifactory fetch (for transform YAMLs) or migrate to ConfigMap-based delivery
-- [ ] 8.7 Cutover plan: deploy alongside existing Vector pipelines, validate, switch traffic
+- [x] 8.1 New ArgoCD ApplicationSet pointing to this repo's chart (replaces `helm.vector.dev` source)
+  - `dfe-core/gitOps/addons/argo_apps/dfe-transform-vector.yaml` — matrix generator (clusters × pipeline git files)
+  - Scans for `pipelines/*/dfe-transform-vector-*.yaml` (coexists with old `vector-*.yaml`)
+  - Sources: chart from `dfe-transform-vector.git`, common values + ExternalSecrets from dfe-core, pipeline values from pipelines repo
+- [x] 8.2 Migrate existing pipeline values from dfe-core format to big-dial format
+  - `dfe-core/gitOps/addons/helm/dfe-transform-vector/common.yaml` — shared values (image, resources, KEDA, init container, SASL/TLS defaults)
+  - Migration guide: `docs/MIGRATION.md` — before/after format, what changes, what stays
+  - Pipeline-specific values: just pipeline name, topics, group_id, sink topic, KEDA overrides
+- [x] 8.3 ExternalSecrets stay as-is (Kafka SASL, Artifactory creds)
+  - Copied to `dfe-core/gitOps/addons/helm/dfe-transform-vector/` — same format, same AWS Secrets Manager keys
+  - Kustomize patches in ApplicationSet replace tenancy-specific secret keys
+- [x] 8.4 KEDA TriggerAuthentication stays as-is
+  - `keda-trigger-auth-kafka-credential.yaml` — same secret references
+  - ScaledObject now references `config.source.brokers/topics/group_id` (was `config.kafka.*`)
+- [x] 8.5 Karpenter node pools stay as-is (vector_node role)
+  - Same `dedicated: vector` taint toleration in ApplicationSet inline values
+  - Same `role: vector_node` node affinity
+- [x] 8.6 Init container: keep Artifactory fetch pattern for transform YAMLs
+  - Init container defined in `common.yaml` with same curl+unzip pattern
+  - Fetches from `${ARTIFACTORY_VECTOR_TEMPLATES}/vector-artifacts/artifacts-${VERSION}.zip`
+  - Mounts to `/etc/dfe/transforms` via `extraVolumes`/`extraVolumeMounts`
+- [x] 8.7 Cutover plan: deploy alongside existing Vector pipelines, validate, switch traffic
+  - Documented in `docs/MIGRATION.md` — parallel deployment, different consumer groups, validate, switch
 
 ## 9. Testing
 
-- [x] 9.1 **Unit tests** (32 tests passing)
+- [x] 9.1 **Unit tests** (38 tests passing)
   - [x] 9.1.1 Config parsing — cascade, env var override, defaults
   - [x] 9.1.2 Source/sink YAML generation — SASL, TLS, compression, encoding
   - [x] 9.1.3 DAG wiring — auto-wire, explicit wire, broken refs, cycles, orphans
@@ -135,18 +151,56 @@
   - [x] 9.1.5 Lifecycle state — transitions, readiness, liveness
   - [x] 9.1.6 Backoff — doubling, cap, reset
   - [x] 9.1.7 Version parsing
-- [x] 9.2 **Integration tests** (16 tests passing)
+- [x] 9.2 **Integration tests** (35 tests passing)
   - [x] 9.2.1 Config assembly — end-to-end with/without transforms, broken DAG, cyclic DAG
   - [x] 9.2.2 Config loading — YAML file, validation (missing topic, invalid SASL, invalid version_check), env overrides
   - [x] 9.2.3 Lifecycle — state drives readiness, subscriber updates
   - [x] 9.2.4 Metrics — register/encode, lifecycle state gauge
   - [x] 9.2.5 Health server — responds 200 when running, 503 when initialising
   - [x] 9.2.6 Metrics server — responds with Prometheus text format
-- [ ] 9.3 **Testcontainers** (Kafka) — full pipeline test: produce → transform → consume
-- [ ] 9.4 **Config fixture library** `[IN PROGRESS]`
-  - Current state: fixtures created (`tests/fixtures/transforms/01-05`, `tests/fixtures/configs/minimal|with_sasl|with_transforms`), `tests/integration_fixtures.rs` written with 9 tests
-  - Blocker: `extract_components()` returns empty on fixture files with block-scalar VRL containing `{`/`}` — the assembler test passes (it copies files regardless) but the DAG-wiring tests fail; also `with_sasl.yaml` uses `SCRAM-SHA-512` but validator expects `scram_sha_512`
-  - Next: (1) simplify fixture VRL to avoid YAML-special chars in block scalars, (2) add explicit `inputs:` to chain fixtures 02–05, (3) fix `with_sasl.yaml` mechanism format, (4) rewrite individual transform tests to use `assembler::assemble` instead of `extract_components` directly
+- [x] 9.3 **Testcontainers** (Kafka) — full pipeline test: produce → transform → consume
+  - `tests/e2e_kafka.rs` — starts Kafka via testcontainers (apache/kafka-native), assembles config, runs Vector subprocess, verifies transform applied
+  - Run with: `cargo nextest run --test e2e_kafka --run-ignored all`
+  - Requires Docker + Vector binary on PATH
+- [x] 9.4 **Config fixture library** (9 tests passing)
+  - Fixtures: `tests/fixtures/transforms/01-05`, `tests/fixtures/configs/minimal|with_sasl|with_transforms`
+  - Tests: `tests/integration_fixtures.rs` — config loading, individual transform extraction, full chain DAG wiring
+  - Fixed: test assertions used `c.kind == "transforms"` (plural) but `extract_components` trims to singular `"transform"`; added explicit `inputs:` to chain fixtures 02–05; fixed SASL mechanism format to `scram_sha_512`
+
+## 9b. Buffer Configuration & Vector Validate Tests
+
+- [x] 9b.1 **BufferConfig** — `src/config/loader.rs`: memory (max_events) and disk (max_size, min 256 MiB) modes, `when_full` (block/drop_newest)
+- [x] 9b.2 **Buffer YAML generation** — `src/config/generate.rs`: `build_buffer_block()` emits buffer config in sink YAML
+- [x] 9b.3 **Buffer validation** — `src/config/loader.rs`: type, when_full, disk requires max_size >= 268435488
+- [x] 9b.4 **Global config generation** — `src/config/generate.rs`: `generate_global_yaml()` emits `data_dir` + `api` settings; assembler writes `00_global.yaml`
+- [x] 9b.5 **VRL fixture fixes** — fixed all 5 transform fixtures for Vector 0.53.0 VRL compliance (dynamic paths, fallible ops, coalescing)
+- [x] 9b.6 **Vector validate integration tests** — `tests/integration_vector_validate.rs`: 4 tests (memory, disk, drop_newest, default) assemble full 5-fixture chain + run `vector validate --no-environment`
+- [x] 9b.7 **Buffer validation unit tests** — `tests/integration_config.rs`: 6 tests (invalid type, invalid when_full, missing max_size, too small, valid memory, valid disk)
+- [x] 9b.8 **Chart + dfe-core buffer defaults** — `chart/values.yaml` and `dfe-core/common.yaml` updated with memory buffer defaults
+- [x] 9b.9 **process.rs data_dir fix** — changed `--data-dir` CLI flag (doesn't exist) to `VECTOR_DATA_DIR` env var
+- [x] 9b.10 **validate.rs data_dir fix** — added `VECTOR_DATA_DIR` env var to `vector validate` command
+
+## 9c. Production Kafka Tuning
+
+- [x] 9c.1 **SourceConfig production fields** — `auto_offset_reset`, `session_timeout_ms`, `commit_interval_ms`, `drain_timeout_ms`, `topic_lag_metric`, `librdkafka_options` (BTreeMap)
+- [x] 9c.2 **SinkConfig production fields** — `BatchConfig` (max_events=10K, max_bytes, timeout_secs=1), `message_timeout_ms`, `socket_timeout_ms`, `librdkafka_options` (BTreeMap)
+- [x] 9c.3 **Source YAML generator rewrite** — production librdkafka defaults baked in (cooperative-sticky, 10 MiB fetch, 100K pre-fetch queue, auto.commit false, 1 MiB socket buffer); auto-inject security.protocol from SASL/TLS config; user librdkafka_options override defaults
+- [x] 9c.4 **Sink YAML generator rewrite** — production librdkafka defaults (8 MiB batch.size, 20ms linger, 10K batch.num.messages, acks=all, 1 GiB queue, zstd, nagle disabled); acknowledgements moved from source to sink (Vector 0.53+ deprecation); Vector-level batch config; healthcheck enabled
+- [x] 9c.5 **Test fixes** — struct literals updated with `..Default::default()`, acknowledgements assertion moved to sink, unused imports cleaned
+- [x] 9c.6 **Helm + config updates** — chart/values.yaml, deploy/helm/common.yaml, config.example.yaml updated with new fields
+- [x] 9c.7 **dfe-core files relocated** — ArgoCD ApplicationSet and Helm values copied to deploy/ directory (dfe-core changes reverted)
+
+## 9d. Central librdkafka Defaults (Git-Managed Config)
+
+- [x] 9d.1 **Central config file in dfe-devex** — `shared/librdkafka.yaml.example` in dfe-devex git-managed config repo
+  - Consumer profiles: production, devtest, low_latency
+  - Producer profiles: production, exactly_once, low_latency, devtest
+  - Follows same activation pattern as other dfe-devex configs (copy .example → .yaml)
+- [x] 9d.2 **Rustlib fallback** — `src/config/kafka_defaults.rs` loads `$DFE_CONFIG_DIR/shared/librdkafka.yaml`, falls back to `hyperi_rustlib::kafka_config` constants
+  - `OnceLock`-cached, loaded once on first access
+  - `merge_layers()` handles 3-layer merge: base → service overrides → user `librdkafka_options`
+- [x] 9d.3 **Transform-vector integration** — `generate.rs` uses `kafka_defaults::consumer_profile("production")` and `kafka_defaults::producer_profile("production")` + `merge_layers()`
+- [x] 9d.4 **Document in /docs/LIBRDKAFKA.md** — full reference: every setting, justification, cascade, central config file, activation, code references
 
 ## 10. CI/CD
 

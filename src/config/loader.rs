@@ -11,6 +11,7 @@
 //! Big-dial config schema for Kafka source/sink, user-supplied transforms,
 //! Vector subprocess, health/metrics endpoints, and scaling pressure.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,19 @@ pub struct SourceConfig {
     pub sasl: SaslConfig,
     /// TLS configuration.
     pub tls: TlsConfig,
+    /// Auto offset reset: `largest` (default) or `smallest`.
+    pub auto_offset_reset: String,
+    /// Session timeout (ms). Default: 30000.
+    pub session_timeout_ms: u32,
+    /// Offset commit interval (ms). Default: 5000.
+    pub commit_interval_ms: u32,
+    /// Drain timeout (ms) — max wait for pending acks during shutdown/rebalance.
+    /// Must be less than session_timeout_ms. Default: half of session_timeout_ms.
+    pub drain_timeout_ms: Option<u32>,
+    /// Expose per-topic consumer lag metric. Default: true.
+    pub topic_lag_metric: bool,
+    /// Extra librdkafka options (passed through to Vector).
+    pub librdkafka_options: BTreeMap<String, String>,
 }
 
 impl Default for SourceConfig {
@@ -152,6 +166,12 @@ impl Default for SourceConfig {
             decoding: DecodingConfig::default(),
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
+            auto_offset_reset: "largest".to_string(),
+            session_timeout_ms: 30000,
+            commit_interval_ms: 5000,
+            drain_timeout_ms: None,
+            topic_lag_metric: true,
+            librdkafka_options: BTreeMap::new(),
         }
     }
 }
@@ -174,6 +194,16 @@ pub struct SinkConfig {
     pub sasl: SaslConfig,
     /// TLS configuration.
     pub tls: TlsConfig,
+    /// Sink buffer configuration.
+    pub buffer: BufferConfig,
+    /// Sink batch configuration (Vector-level batching).
+    pub batch: BatchConfig,
+    /// Local message timeout (ms). Default: 300000 (5 min).
+    pub message_timeout_ms: u32,
+    /// Network request timeout (ms). Default: 60000 (60s).
+    pub socket_timeout_ms: u32,
+    /// Extra librdkafka options (passed through to Vector).
+    pub librdkafka_options: BTreeMap<String, String>,
 }
 
 impl Default for SinkConfig {
@@ -186,6 +216,63 @@ impl Default for SinkConfig {
             compression: "none".to_string(),
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
+            buffer: BufferConfig::default(),
+            batch: BatchConfig::default(),
+            message_timeout_ms: 300_000,
+            socket_timeout_ms: 60_000,
+            librdkafka_options: BTreeMap::new(),
+        }
+    }
+}
+
+/// Vector-level batch configuration for sinks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BatchConfig {
+    /// Maximum events per batch before flush. Default: 10000.
+    pub max_events: u32,
+    /// Maximum uncompressed batch size (bytes) before flush.
+    pub max_bytes: Option<u64>,
+    /// Max batch age (seconds) before flush. Default: 1.
+    pub timeout_secs: u32,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            max_events: 10_000,
+            max_bytes: None,
+            timeout_secs: 1,
+        }
+    }
+}
+
+/// Buffer configuration for Vector sinks.
+///
+/// Supports two modes:
+/// - `memory`: in-memory buffer (default), configured by `max_events`
+/// - `disk`: persistent disk buffer, configured by `max_size` (bytes, min ~256 MiB)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BufferConfig {
+    /// Buffer type: `memory` or `disk`.
+    #[serde(rename = "type")]
+    pub buffer_type: String,
+    /// Maximum events in memory buffer (only for type=memory). Default: 500.
+    pub max_events: Option<u64>,
+    /// Maximum buffer size in bytes (only for type=disk). Min ~256 MiB (268435488).
+    pub max_size: Option<u64>,
+    /// Behaviour when buffer is full: `block` (default) or `drop_newest`.
+    pub when_full: String,
+}
+
+impl Default for BufferConfig {
+    fn default() -> Self {
+        Self {
+            buffer_type: "memory".to_string(),
+            max_events: None,
+            max_size: None,
+            when_full: "block".to_string(),
         }
     }
 }
@@ -563,6 +650,7 @@ impl Config {
             ));
         }
         self.validate_sasl("sink.sasl", &self.sink.sasl)?;
+        self.validate_buffer(&self.sink.buffer)?;
 
         // Vector version check mode
         let valid_modes = ["strict", "warn", "disabled"];
@@ -587,6 +675,39 @@ impl Config {
                 valid_mechanisms.join(", ")
             )));
         }
+        Ok(())
+    }
+
+    fn validate_buffer(&self, buffer: &BufferConfig) -> Result<()> {
+        let valid_types = ["memory", "disk"];
+        if !valid_types.contains(&buffer.buffer_type.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "sink.buffer.type must be one of: {}",
+                valid_types.join(", ")
+            )));
+        }
+
+        let valid_when_full = ["block", "drop_newest"];
+        if !valid_when_full.contains(&buffer.when_full.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "sink.buffer.when_full must be one of: {}",
+                valid_when_full.join(", ")
+            )));
+        }
+
+        if buffer.buffer_type == "disk" {
+            let Some(max_size) = buffer.max_size else {
+                return Err(crate::Error::Validation(
+                    "sink.buffer.max_size is required when buffer type is disk".into(),
+                ));
+            };
+            if max_size < 268_435_488 {
+                return Err(crate::Error::Validation(format!(
+                    "sink.buffer.max_size must be at least 268435488 (256 MiB), got {max_size}"
+                )));
+            }
+        }
+
         Ok(())
     }
 }

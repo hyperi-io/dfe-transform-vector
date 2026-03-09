@@ -13,5 +13,5 @@ transforms:
       if err == null {
         .parsed = parsed
       } else {
-        .parse_error = to_string(err)
+        .parse_error = err
       }

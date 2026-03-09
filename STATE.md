@@ -91,6 +91,15 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 **Rationale:** Vector must not be an outlier. dfe-engine must manage it identically — same config registry CRUD, same Helm compilation, same KEDA wiring, same multi-instance support.
 **Alternatives considered:** Standalone management — rejected because it would require duplicate tooling.
 
+### Forward MSRV (Latest Stable, Not a Cap)
+
+**Decision:** `rust-version` is set to the latest stable (currently 1.94) and bumped
+freely. It is a build requirement floor, not a compatibility cap.
+**Rationale:** Pre-OSS internal project — we control the build environment and always
+use latest stable. The field ensures cargo resolver picks deps compatible with our
+toolchain. When the project is open-sourced, freeze MSRV and follow a more conservative
+bump policy for downstream consumers.
+
 ### Health Endpoint Paths
 
 **Decision:** `/health/live` and `/health/ready` (not `/healthz` and `/readyz`)
@@ -137,6 +146,7 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 
 **Sibling Projects:**
 
+- `/projects/dfe-transform-vrl` - Embedded VRL transform engine (Rust, for VRL-only pipelines with native msgpack)
 - `/projects/dfe-loader` - Kafka → ClickHouse loader (Rust, same big-dial pattern)
 - `/projects/dfe-receiver` - Inbound data receiver (Rust, same management interface)
 - `/projects/dfe-engine` - Python orchestrator (manages all DFE services)
@@ -147,6 +157,10 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 ## Notes for AI Assistants
 
 This file contains **static project context only**.
+
+**NEVER kill cargo processes** to free the lock. Multiple projects build concurrently
+on this host. Wait for the lock to release, or ask the user — never `kill`, `pkill`,
+or `rm` the cargo lock file.
 
 **DO NOT add:**
 

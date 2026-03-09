@@ -14,7 +14,7 @@ source:
     codec: "json"
   sasl:
     enabled: true
-    mechanism: "SCRAM-SHA-512"
+    mechanism: "scram_sha_512"
     username: "${KAFKA_SASL_USERNAME}"
     password: "${KAFKA_SASL_PASSWORD}"
   tls:
@@ -29,7 +29,7 @@ sink:
   compression: "zstd"
   sasl:
     enabled: true
-    mechanism: "SCRAM-SHA-512"
+    mechanism: "scram_sha_512"
     username: "${KAFKA_SASL_USERNAME}"
     password: "${KAFKA_SASL_PASSWORD}"
   tls:

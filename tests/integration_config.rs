@@ -40,6 +40,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
                 enabled: true,
                 ..Default::default()
             },
+            ..Default::default()
         },
         sink: SinkConfig {
             brokers: vec!["kafka-1:9092".into(), "kafka-2:9092".into()],
@@ -57,6 +58,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
                 enabled: true,
                 ..Default::default()
             },
+            ..Default::default()
         },
         transforms: TransformConfig {
             dir: transforms_dir,
@@ -126,7 +128,6 @@ fn end_to_end_assembly_with_transforms() {
 
     // Verify directory structure
     assert!(output_dir.path().join("00_source.yaml").exists());
-    assert!(output_dir.path().join("50_transforms").is_dir());
     assert!(output_dir.path().join("90_sink.yaml").exists());
     assert!(output_dir.path().join("99_observability.yaml").exists());
 
@@ -139,7 +140,6 @@ fn end_to_end_assembly_with_transforms() {
     assert!(source.contains("SCRAM-SHA-512"));
     assert!(source.contains("${KAFKA_SASL_USERNAME}"));
     assert!(source.contains("cooperative-sticky"));
-    assert!(source.contains("acknowledgements"));
 
     // Verify sink YAML content — should wire to "filter" (last transform)
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
@@ -148,6 +148,7 @@ fn end_to_end_assembly_with_transforms() {
     assert!(sink.contains("enriched_syslog_land"));
     assert!(sink.contains(".org_id"));
     assert!(sink.contains("compression: zstd"));
+    assert!(sink.contains("acknowledgements"));
 
     // Verify observability YAML
     let obs = fs::read_to_string(output_dir.path().join("99_observability.yaml")).unwrap();
@@ -155,17 +156,15 @@ fn end_to_end_assembly_with_transforms() {
     assert!(obs.contains("prometheus_exporter"));
     assert!(obs.contains("0.0.0.0:9598"));
 
-    // Verify transform files were copied (3 files)
-    let t_dir = output_dir.path().join("50_transforms");
-    let entries: Vec<_> = fs::read_dir(&t_dir).unwrap().collect();
-    assert_eq!(entries.len(), 3);
-
-    // Verify transforms are ordered and contain expected content
-    let mut files: Vec<String> = entries
-        .into_iter()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+    // Verify transform files were written flat (3 files, prefixed with 50_)
+    let mut files: Vec<String> = fs::read_dir(output_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("50_"))
         .collect();
     files.sort();
+    assert_eq!(files.len(), 3);
     assert!(files[0].contains("01_parse"));
     assert!(files[1].contains("02_enrich"));
     assert!(files[2].contains("03_filter"));
@@ -182,8 +181,13 @@ fn end_to_end_assembly_no_transforms_wires_source_to_sink() {
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
     assert!(sink.contains("dfe_source"));
 
-    // No transforms dir
-    assert!(!output_dir.path().join("50_transforms").exists());
+    // No transform files
+    let transform_files: Vec<_> = fs::read_dir(output_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
+        .collect();
+    assert!(transform_files.is_empty());
 }
 
 #[test]
@@ -295,6 +299,64 @@ fn config_validation_catches_invalid_version_check() {
     config.vector.version_check = "invalid_mode".into();
     let err = config.validate().unwrap_err();
     assert!(err.to_string().contains("version_check"));
+}
+
+#[test]
+fn config_validation_catches_invalid_buffer_type() {
+    let mut config = full_config(None);
+    config.sink.buffer.buffer_type = "invalid".into();
+    let err = config.validate().unwrap_err();
+    assert!(err.to_string().contains("sink.buffer.type"));
+}
+
+#[test]
+fn config_validation_catches_invalid_when_full() {
+    let mut config = full_config(None);
+    config.sink.buffer.when_full = "ignore".into();
+    let err = config.validate().unwrap_err();
+    assert!(err.to_string().contains("sink.buffer.when_full"));
+}
+
+#[test]
+fn config_validation_catches_disk_buffer_missing_max_size() {
+    let mut config = full_config(None);
+    config.sink.buffer.buffer_type = "disk".into();
+    config.sink.buffer.max_size = None;
+    let err = config.validate().unwrap_err();
+    assert!(err.to_string().contains("max_size is required"));
+}
+
+#[test]
+fn config_validation_catches_disk_buffer_too_small() {
+    let mut config = full_config(None);
+    config.sink.buffer.buffer_type = "disk".into();
+    config.sink.buffer.max_size = Some(1000);
+    let err = config.validate().unwrap_err();
+    assert!(err.to_string().contains("at least 268435488"));
+}
+
+#[test]
+fn config_validation_accepts_memory_buffer() {
+    let mut config = full_config(None);
+    config.sink.buffer = BufferConfig {
+        buffer_type: "memory".into(),
+        max_events: Some(1000),
+        max_size: None,
+        when_full: "block".into(),
+    };
+    config.validate().expect("memory buffer should be valid");
+}
+
+#[test]
+fn config_validation_accepts_disk_buffer() {
+    let mut config = full_config(None);
+    config.sink.buffer = BufferConfig {
+        buffer_type: "disk".into(),
+        max_events: None,
+        max_size: Some(268_435_488),
+        when_full: "drop_newest".into(),
+    };
+    config.validate().expect("disk buffer should be valid");
 }
 
 #[test]

@@ -11,6 +11,8 @@
 transforms:
   reduce_aggregate:
     type: reduce
+    inputs:
+      - redact_pii
     expire_after_ms: 10000
     group_by:
       - host

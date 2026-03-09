@@ -9,17 +9,16 @@
 transforms:
   redact_pii:
     type: remap
+    inputs:
+      - filter_noise
     source: |
-      pii_fields = ["password", "token", "secret", "api_key",
-                    "credit_card", "ssn", "date_of_birth", "phone"]
+      if exists(.password)    { .password = "[REDACTED]" }
+      if exists(.token)       { .token = "[REDACTED]" }
+      if exists(.secret)      { .secret = "[REDACTED]" }
+      if exists(.api_key)     { .api_key = "[REDACTED]" }
+      if exists(.credit_card) { .credit_card = "[REDACTED]" }
+      if exists(.ssn)         { .ssn = "[REDACTED]" }
 
-      for_each(array(pii_fields)) -> |_i, field| {
-        if exists(.(field)) {
-          .(field) = "[REDACTED]"
-        }
-      }
-
-      # Mask email addresses anywhere in the message string
       if is_string(.message) {
-        .message = replace(.message, r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', "[EMAIL]")
+        .message = replace!(.message, r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', "[EMAIL]")
       }
