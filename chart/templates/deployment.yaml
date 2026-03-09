@@ -24,11 +24,28 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- end }}
       serviceAccountName: {{ include "dfe-transform-vector.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -47,7 +64,6 @@ spec:
               containerPort: 8686
               protocol: TCP
           env:
-            # kafka credentials via Secret (figment env cascade overrides file config)
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -61,27 +77,30 @@ spec:
           livenessProbe:
             httpGet:
               path: /health/live
-              port: metrics
+              port: health
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: metrics
+              port: health
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 2
           startupProbe:
             httpGet:
               path: /health/live
-              port: metrics
+              port: health
             failureThreshold: 30
             periodSeconds: 5
           volumeMounts:
             - name: config
               mountPath: /etc/dfe
               readOnly: true
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -90,6 +109,9 @@ spec:
         - name: config
           configMap:
             name: {{ include "dfe-transform-vector.fullname" . }}-config
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

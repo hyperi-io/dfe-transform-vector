@@ -31,8 +31,7 @@ const FIXTURE_CONFIGS: &str = "tests/fixtures/configs";
 #[test]
 fn fixture_minimal_config_loads_and_validates() {
     let path = Path::new(FIXTURE_CONFIGS).join("minimal.yaml");
-    let config = Config::load(Some(path.to_str().unwrap()))
-        .expect("minimal.yaml should load");
+    let config = Config::load(Some(path.to_str().unwrap())).expect("minimal.yaml should load");
     config.validate().expect("minimal.yaml should be valid");
 
     assert_eq!(config.pipeline.name, "test-pipeline");
@@ -44,8 +43,7 @@ fn fixture_minimal_config_loads_and_validates() {
 #[test]
 fn fixture_sasl_config_loads_and_validates() {
     let path = Path::new(FIXTURE_CONFIGS).join("with_sasl.yaml");
-    let config = Config::load(Some(path.to_str().unwrap()))
-        .expect("with_sasl.yaml should load");
+    let config = Config::load(Some(path.to_str().unwrap())).expect("with_sasl.yaml should load");
     config.validate().expect("with_sasl.yaml should be valid");
 
     assert!(config.source.sasl.enabled);
@@ -53,8 +51,20 @@ fn fixture_sasl_config_loads_and_validates() {
     assert!(config.sink.sasl.enabled);
     assert!(config.sink.tls.enabled);
     // Credentials stay as env-var references — Vector interpolates at runtime
-    assert!(config.source.sasl.username.contains("${KAFKA_SASL_USERNAME}"));
-    assert!(config.source.sasl.password.contains("${KAFKA_SASL_PASSWORD}"));
+    assert!(
+        config
+            .source
+            .sasl
+            .username
+            .contains("${KAFKA_SASL_USERNAME}")
+    );
+    assert!(
+        config
+            .source
+            .sasl
+            .password
+            .contains("${KAFKA_SASL_PASSWORD}")
+    );
     assert_eq!(config.sink.compression, "zstd");
 }
 
@@ -63,26 +73,32 @@ fn fixture_with_transforms_config_assembles_full_chain() {
     let config_path = Path::new(FIXTURE_CONFIGS).join("with_transforms.yaml");
     let config = Config::load(Some(config_path.to_str().unwrap()))
         .expect("with_transforms.yaml should load");
-    config.validate().expect("with_transforms.yaml should be valid");
+    config
+        .validate()
+        .expect("with_transforms.yaml should be valid");
 
     let output_dir = TempDir::new().unwrap();
     assembler::assemble(&config, output_dir.path())
         .expect("assembly should succeed with fixture transforms");
 
-    // All four output files/dirs should exist
+    // Source, sink, and observability should exist
     assert!(output_dir.path().join("00_source.yaml").exists());
-    assert!(output_dir.path().join("50_transforms").is_dir());
     assert!(output_dir.path().join("90_sink.yaml").exists());
     assert!(output_dir.path().join("99_observability.yaml").exists());
 
-    // All 5 transform fixtures should be in the output dir
-    let t_dir = output_dir.path().join("50_transforms");
-    let mut names: Vec<String> = fs::read_dir(&t_dir)
+    // All 5 transform fixtures should be in the config dir (flat, prefixed 50_)
+    let mut names: Vec<String> = fs::read_dir(output_dir.path())
         .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("50_"))
         .collect();
     names.sort();
-    assert_eq!(names.len(), 5, "expected 5 transform fixtures, got {names:?}");
+    assert_eq!(
+        names.len(),
+        5,
+        "expected 5 transform fixtures, got {names:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +106,9 @@ fn fixture_with_transforms_config_assembles_full_chain() {
 // ---------------------------------------------------------------------------
 
 /// Load and parse a single transform fixture, returning its loaded YAML.
-fn load_fixture_transform(filename: &str) -> Vec<dfe_transform_vector::config::transforms::LoadedTransform> {
+fn load_fixture_transform(
+    filename: &str,
+) -> Vec<dfe_transform_vector::config::transforms::LoadedTransform> {
     let path = Path::new(FIXTURE_TRANSFORMS).join(filename);
     load_transforms(&dfe_transform_vector::config::loader::TransformConfig {
         dir: None,
@@ -106,7 +124,9 @@ fn fixture_parse_message_is_valid_transform() {
 
     let components = extract_components(&transforms).unwrap();
     assert!(
-        components.iter().any(|c| c.label == "parse_message" && c.kind == "transforms"),
+        components
+            .iter()
+            .any(|c| c.label == "parse_message" && c.kind == "transform"),
         "expected parse_message transform component"
     );
 }
@@ -118,7 +138,9 @@ fn fixture_enrich_metadata_is_valid_transform() {
 
     let components = extract_components(&transforms).unwrap();
     assert!(
-        components.iter().any(|c| c.label == "enrich_metadata" && c.kind == "transforms"),
+        components
+            .iter()
+            .any(|c| c.label == "enrich_metadata" && c.kind == "transform"),
         "expected enrich_metadata transform component"
     );
 }
@@ -130,7 +152,9 @@ fn fixture_filter_noise_is_valid_transform() {
 
     let components = extract_components(&transforms).unwrap();
     assert!(
-        components.iter().any(|c| c.label == "filter_noise" && c.kind == "transforms"),
+        components
+            .iter()
+            .any(|c| c.label == "filter_noise" && c.kind == "transform"),
         "expected filter_noise transform component"
     );
 }
@@ -142,7 +166,9 @@ fn fixture_redact_pii_is_valid_transform() {
 
     let components = extract_components(&transforms).unwrap();
     assert!(
-        components.iter().any(|c| c.label == "redact_pii" && c.kind == "transforms"),
+        components
+            .iter()
+            .any(|c| c.label == "redact_pii" && c.kind == "transform"),
         "expected redact_pii transform component"
     );
 }
@@ -154,7 +180,9 @@ fn fixture_reduce_aggregate_is_valid_transform() {
 
     let components = extract_components(&transforms).unwrap();
     assert!(
-        components.iter().any(|c| c.label == "reduce_aggregate" && c.kind == "transforms"),
+        components
+            .iter()
+            .any(|c| c.label == "reduce_aggregate" && c.kind == "transform"),
         "expected reduce_aggregate transform component"
     );
 }

@@ -1,0 +1,21 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tenant-artifactory
+spec:
+  refreshPolicy: Periodic
+  refreshInterval: 15m
+  secretStoreRef:
+    name: aws-secret-store
+    kind: ClusterSecretStore
+  target:
+    deletionPolicy: Delete
+    name: tenant-artifactory
+    template:
+      metadata:
+        annotations:
+          reloader.stakater.com/auto: "true"
+          stakater-reloader-target: "tenant-artifactory"
+  dataFrom:
+    - extract:
+        key: "test_tenant_artifactory"

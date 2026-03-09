@@ -38,12 +38,19 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
         "running vector validate"
     );
 
-    let output = tokio::process::Command::new(binary)
-        .arg("validate")
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.arg("validate")
         .arg("--config-dir")
         .arg(config_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Vector needs a writable data_dir even for validate
+    if !vector_config.data_dir.is_empty() {
+        cmd.env("VECTOR_DATA_DIR", &vector_config.data_dir);
+    }
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| crate::Error::Vector(format!("failed to run '{binary} validate': {e}")))?;

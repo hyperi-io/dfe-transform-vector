@@ -8,10 +8,13 @@
 transforms:
   filter_noise:
     type: filter
+    inputs:
+      - enrich_metadata
     condition:
       type: vrl
       source: |
-        # Keep the event unless it looks like a health/ping probe
-        !match(string(.path ?? ""), r'^/health') &&
-        !match(string(.event_type ?? ""), r'^(ping|heartbeat)$') &&
+        path = to_string(.path) ?? ""
+        event_type = to_string(.event_type) ?? ""
+        !match(path, r'^/health') &&
+        !match(event_type, r'^(ping|heartbeat)$') &&
         .message != null && .message != ""

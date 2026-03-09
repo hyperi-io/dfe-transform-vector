@@ -1,0 +1,137 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: dfe-transform-vector-pipelines
+  namespace: argo-cd
+spec:
+  goTemplate: true
+  generators:
+  - matrix:
+      generators:
+      - clusters:
+          selector:
+            matchLabels:
+              argocd.argoproj.io/secret-type: cluster
+      - git:
+          repoURL: 'https://github.com/hypersec-io/pipelines.git'
+          revision: Release/{{ .metadata.annotations.tenancy_name }}
+          files:
+          - path: "pipelines/*/dfe-transform-vector-*.yaml"
+
+  template:
+    metadata:
+      name: '{{ index (splitList "." .path.filenameNormalized) 0 }}'
+      namespace: argo-cd
+      labels:
+        appGroup: dfe-transform-vector
+        project: vector
+      annotations:
+        argocd.argoproj.io/sync-wave: '5'
+    spec:
+      ignoreDifferences:
+      - group: "autoscaling"
+        kind: "HorizontalPodAutoscaler"
+        jsonPointers:
+        - /spec
+        - /metadata/labels
+        - /metadata/annotations
+      - group: "apps"
+        kind: "Deployment"
+        jsonPointers:
+        - /spec/replicas
+      syncPolicy:
+        managedNamespaceMetadata:
+          labels:
+            elbv2.k8s.aws/pod-readiness-gate-inject: enabled
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - validate=true
+      project: vector
+      sources:
+        - repoURL: 'https://github.com/hypersec-io/dfe-core.git'
+          targetRevision: main
+          ref: common
+        - repoURL: 'https://github.com/hypersec-io/pipelines.git'
+          targetRevision: Release/{{.metadata.annotations.tenancy_name}}
+          ref: values
+        - repoURL: 'https://github.com/hypersec-io/dfe-transform-vector.git'
+          targetRevision: main
+          path: chart
+          helm:
+            releaseName: '{{ index (splitList "." .path.filenameNormalized) 0 }}'
+            valueFiles:
+              - "$common/gitOps/addons/helm/dfe-transform-vector/common.yaml"
+              - "$values/pipelines/{{.path.basename}}/{{.path.filename}}"
+            values: |
+              podLabels:
+                app.kubernetes.io/component: '{{ index (splitList "." .path.filenameNormalized) 0 }}'
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: topology.kubernetes.io/zone
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: {{ index (splitList "." .path.filenameNormalized) 0 }}
+                  matchLabelKeys:
+                    - pod-template-hash
+                  nodeAffinityPolicy: Honor
+                  nodeTaintsPolicy: Honor
+              serviceAccount:
+                create: true
+                name: "dfe-transform-vector-sa"
+                annotations:
+                  eks.amazonaws.com/role-arn: "arn:aws:iam::{{ .metadata.annotations.account_id }}:role/{{ .metadata.annotations.tenancy_name }}-eks-vector-ingestion"
+              tolerations:
+                - key: dedicated
+                  effect: NoSchedule
+                  operator: Equal
+                  value: vector
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: role
+                        operator: In
+                        values: ["vector_node"]
+
+        - repoURL: 'https://github.com/hypersec-io/dfe-core.git'
+          targetRevision: main
+          path: gitOps/addons/helm/dfe-transform-vector
+          kustomize:
+            patches:
+              - target:
+                  kind: ExternalSecret
+                  name: kafka-sasl-secret
+                patch: |-
+                  - op: replace
+                    path: /spec/dataFrom/0/extract/key
+                    value: "AmazonMSK_{{ .metadata.annotations.tenancy_name }}_vector_msk_auth"
+
+              - target:
+                  kind: ExternalSecret
+                  name: tenant-artifactory
+                patch: |-
+                  - op: replace
+                    path: /spec/dataFrom/0/extract/key
+                    value: "{{ .metadata.annotations.tenancy_name }}_tenant_artifactory"
+
+        - repoURL: 'https://github.com/hypersec-io/dfe-core.git'
+          targetRevision: main
+          path: gitOps/addons/docker_registry_secret
+          kustomize:
+            patches:
+              - target:
+                  kind: ExternalSecret
+                  name: docker-registry-secret
+                patch: |-
+                  - op: replace
+                    path: /spec/data/0/remoteRef/key
+                    value: "{{ .metadata.annotations.tenancy_name }}_tenant_docker_registry"
+
+      destination:
+        server: 'https://kubernetes.default.svc'
+        namespace: '{{ index (splitList "." .path.filenameNormalized) 0 }}'

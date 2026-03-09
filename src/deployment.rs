@@ -121,6 +121,7 @@ pub fn contract() -> DeploymentContract {
             cpu_enabled: true,
             cpu_threshold: 80,
         }),
+        base_image: "ubuntu:24.04".into(),
     }
 }
 

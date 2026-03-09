@@ -8,7 +8,9 @@
 transforms:
   enrich_metadata:
     type: remap
+    inputs:
+      - parse_message
     source: |
-      .pipeline   = "${DFE_PIPELINE_NAME:-unknown}"
+      .pipeline = "${DFE_PIPELINE_NAME:-unknown}"
       .processed_at = now()
-      .source_topic = .metadata.kafka.topic ?? "unknown"
+      .source_topic = to_string(.metadata.kafka.topic) ?? "unknown"

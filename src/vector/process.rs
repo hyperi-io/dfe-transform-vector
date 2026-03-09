@@ -73,9 +73,9 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
         cmd.env("VECTOR_LOG", &vector_config.log_level);
     }
 
-    // Data directory
+    // Data directory (Vector has no --data-dir CLI flag; env var only)
     if !vector_config.data_dir.is_empty() {
-        cmd.arg("--data-dir").arg(&vector_config.data_dir);
+        cmd.env("VECTOR_DATA_DIR", &vector_config.data_dir);
     }
 
     // Vector API address
