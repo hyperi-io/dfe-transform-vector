@@ -13,8 +13,8 @@
 //! health paths, ports, secrets, KEDA scaling, and default config.
 
 use hyperi_rustlib::deployment::{
-    DeploymentContract, HealthContract, KedaContract, PortContract, SecretEnvContract,
-    SecretGroupContract,
+    DeploymentContract, HealthContract, ImageProfile, KedaContract, NativeDepsContract,
+    PortContract, SecretEnvContract, SecretGroupContract,
 };
 
 /// Build the deployment contract for dfe-transform-vector.
@@ -122,6 +122,8 @@ pub fn contract() -> DeploymentContract {
             cpu_threshold: 80,
         }),
         base_image: "ubuntu:24.04".into(),
+        native_deps: NativeDepsContract::default(),
+        image_profile: ImageProfile::default(),
     }
 }
 

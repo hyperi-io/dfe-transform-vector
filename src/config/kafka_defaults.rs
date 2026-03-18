@@ -125,10 +125,10 @@ fn profile_to_map(profile: &[(&str, &str)]) -> HashMap<String, String> {
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
 /// falls back to `hyperi_rustlib::kafka_config` constants.
 pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
-    if let Some(Some(central)) = Some(get_central()) {
-        if let Some(profile) = central.consumer.get(profile_name) {
-            return profile.clone();
-        }
+    if let Some(Some(central)) = Some(get_central())
+        && let Some(profile) = central.consumer.get(profile_name)
+    {
+        return profile.clone();
     }
 
     // Fallback to rustlib constants
@@ -151,10 +151,10 @@ pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
 /// falls back to `hyperi_rustlib::kafka_config` constants.
 pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
-    if let Some(Some(central)) = Some(get_central()) {
-        if let Some(profile) = central.producer.get(profile_name) {
-            return profile.clone();
-        }
+    if let Some(Some(central)) = Some(get_central())
+        && let Some(profile) = central.producer.get(profile_name)
+    {
+        return profile.clone();
     }
 
     // Fallback to rustlib constants

@@ -1,1 +1,1 @@
-../../../ai/standards/languages/TYPESCRIPT.md
+../../../hyperi-ai/standards/languages/TYPESCRIPT.md
