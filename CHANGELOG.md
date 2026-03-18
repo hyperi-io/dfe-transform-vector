@@ -1,3 +1,11 @@
+# [1.0.0-dev.2](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-03-18)
+
+
+### Bug Fixes
+
+* code review remediation — lints, metrics, error handling, style ([045b0fc](https://github.com/hyperi-io/dfe-transform-vector/commit/045b0fcb9da427330dceed58e26d75a375343cd1))
+* hot-reload allowlist — only transforms are safe, all else requires restart ([2bfef0f](https://github.com/hyperi-io/dfe-transform-vector/commit/2bfef0faf3be15a21924d889a88e5a4428c75fa7))
+
 # 1.0.0-dev.1 (2026-03-17)
 
 
