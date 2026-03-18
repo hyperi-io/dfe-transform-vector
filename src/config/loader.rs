@@ -19,10 +19,6 @@ use tracing::debug;
 
 use crate::Result;
 
-// =============================================================================
-// Shared sub-configs (used by both source and sink)
-// =============================================================================
-
 /// SASL authentication for Kafka.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,10 +75,6 @@ impl Default for DecodingConfig {
         }
     }
 }
-
-// =============================================================================
-// Top-level config and sub-sections
-// =============================================================================
 
 /// Main configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -406,10 +398,6 @@ impl Default for ScalingConfig {
         }
     }
 }
-
-// =============================================================================
-// Config loading, cascade, and validation
-// =============================================================================
 
 /// Environment variable prefix for all config overrides.
 const ENV_PREFIX: &str = "DFE_TRANSFORM";

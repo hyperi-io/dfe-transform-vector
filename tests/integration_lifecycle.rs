@@ -67,7 +67,7 @@ fn wrapper_metrics_register_and_encode() {
         .with_label_values(&["success"])
         .inc();
     metrics.config_validation_errors_total.inc();
-    metrics.up.set(1);
+    metrics.pipeline_ready.set(1);
 
     // Encode to Prometheus text format
     let encoder = prometheus::TextEncoder::new();
@@ -79,7 +79,7 @@ fn wrapper_metrics_register_and_encode() {
     // Verify metric names appear in output
     assert!(output.contains("dfe_transform_vector_crashes_total 2"));
     assert!(output.contains("dfe_transform_vector_restarts_total 1"));
-    assert!(output.contains("dfe_transform_vector_up 1"));
+    assert!(output.contains("dfe_pipeline_ready 1"));
     assert!(output.contains("dfe_transform_vector_config_validation_errors_total 1"));
     assert!(output.contains("dfe_transform_vector_config_reloads_total"));
 }
@@ -183,7 +183,7 @@ async fn metrics_server_responds() {
 
     let resp = reqwest_lite(&format!("http://{addr}/metrics")).await;
     assert_eq!(resp.0, 200);
-    assert!(resp.1.contains("dfe_transform_vector_up"));
+    assert!(resp.1.contains("dfe_pipeline_ready"));
     assert!(resp.1.contains("dfe_transform_vector_crashes_total 1"));
     assert!(resp.1.contains("dfe_transform_vector_uptime_seconds"));
 }

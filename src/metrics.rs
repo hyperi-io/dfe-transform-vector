@@ -10,6 +10,13 @@
 //!
 //! HTTP server exposing wrapper metrics and (when available) proxied
 //! Vector internal metrics from the prometheus_exporter sink on :9598.
+//!
+//! Wrapper metrics use `dfe_transform_vector_` prefix for service-specific
+//! counters. The `dfe_pipeline_ready` gauge follows the DFE platform
+//! standard for cross-service dashboards. Transport-level metrics
+//! (`dfe_transport_*`, `dfe_records_*`) come from Vector's internal
+//! prometheus_exporter via the metrics proxy — the wrapper doesn't
+//! handle Kafka I/O directly.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -33,9 +40,12 @@ use crate::vector::Lifecycle;
 use crate::vector::lifecycle::State;
 
 /// Wrapper metrics registered with Prometheus.
+///
+/// Service-specific metrics use `dfe_transform_vector_` prefix.
+/// The `dfe_pipeline_ready` gauge follows the DFE platform standard.
 pub struct WrapperMetrics {
     pub registry: Registry,
-    pub up: IntGauge,
+    pub pipeline_ready: IntGauge,
     pub crashes_total: IntCounter,
     pub restarts_total: IntCounter,
     pub config_reloads_total: IntCounterVec,
@@ -46,26 +56,27 @@ pub struct WrapperMetrics {
 
 impl WrapperMetrics {
     /// Create and register all wrapper metrics.
+    #[allow(clippy::unwrap_used)]
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let up = IntGauge::new(
-            "dfe_transform_vector_up",
-            "Whether Vector subprocess is running (1=up, 0=down)",
+        let pipeline_ready = IntGauge::new(
+            "dfe_pipeline_ready",
+            "Pipeline readiness (1=ready, 0=backpressured/stalled)",
         )
-        .unwrap();
+        .expect("dfe_pipeline_ready metric");
 
         let crashes_total = IntCounter::new(
             "dfe_transform_vector_crashes_total",
             "Total number of Vector subprocess crashes",
         )
-        .unwrap();
+        .expect("crashes_total metric");
 
         let restarts_total = IntCounter::new(
             "dfe_transform_vector_restarts_total",
             "Total number of Vector subprocess restarts",
         )
-        .unwrap();
+        .expect("restarts_total metric");
 
         let config_reloads_total = IntCounterVec::new(
             opts!(
@@ -74,13 +85,13 @@ impl WrapperMetrics {
             ),
             &["result"],
         )
-        .unwrap();
+        .expect("config_reloads_total metric");
 
         let config_validation_errors_total = IntCounter::new(
             "dfe_transform_vector_config_validation_errors_total",
             "Total config validation errors",
         )
-        .unwrap();
+        .expect("config_validation_errors_total metric");
 
         let lifecycle_state = GaugeVec::new(
             opts!(
@@ -89,31 +100,39 @@ impl WrapperMetrics {
             ),
             &["state"],
         )
-        .unwrap();
+        .expect("lifecycle_state metric");
 
         let uptime_seconds = prometheus::Gauge::new(
             "dfe_transform_vector_uptime_seconds",
             "Vector subprocess uptime in seconds",
         )
-        .unwrap();
+        .expect("uptime_seconds metric");
 
-        registry.register(Box::new(up.clone())).unwrap();
-        registry.register(Box::new(crashes_total.clone())).unwrap();
-        registry.register(Box::new(restarts_total.clone())).unwrap();
+        registry
+            .register(Box::new(pipeline_ready.clone()))
+            .expect("register pipeline_ready");
+        registry
+            .register(Box::new(crashes_total.clone()))
+            .expect("register crashes_total");
+        registry
+            .register(Box::new(restarts_total.clone()))
+            .expect("register restarts_total");
         registry
             .register(Box::new(config_reloads_total.clone()))
-            .unwrap();
+            .expect("register config_reloads_total");
         registry
             .register(Box::new(config_validation_errors_total.clone()))
-            .unwrap();
+            .expect("register config_validation_errors_total");
         registry
             .register(Box::new(lifecycle_state.clone()))
-            .unwrap();
-        registry.register(Box::new(uptime_seconds.clone())).unwrap();
+            .expect("register lifecycle_state");
+        registry
+            .register(Box::new(uptime_seconds.clone()))
+            .expect("register uptime_seconds");
 
         Self {
             registry,
-            up,
+            pipeline_ready,
             crashes_total,
             restarts_total,
             config_reloads_total,
@@ -151,6 +170,7 @@ impl Default for WrapperMetrics {
 ///
 /// Serves `/metrics` with wrapper metrics in Prometheus text format,
 /// plus proxied Vector internal metrics from its prometheus_exporter sink.
+// TODO: migrate to hyperi-rustlib `http-server` feature
 pub async fn serve_metrics(
     address: &str,
     metrics: Arc<WrapperMetrics>,
@@ -205,16 +225,13 @@ async fn handle_metrics(
     vector_metrics_address: &str,
 ) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
     if req.uri().path() != "/metrics" {
-        return Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Full::new(Bytes::from("not found")))
-            .unwrap());
+        return Ok(not_found_response());
     }
 
     // Update dynamic metrics before encoding
     let state = lifecycle.state();
     metrics.set_lifecycle_state(state);
-    metrics.up.set(if state.is_ready() { 1 } else { 0 });
+    metrics.pipeline_ready.set(i64::from(state.is_ready()));
     metrics
         .uptime_seconds
         .set(started_at.elapsed().as_secs_f64());
@@ -223,6 +240,7 @@ async fn handle_metrics(
     let encoder = TextEncoder::new();
     let metric_families = metrics.registry.gather();
     let mut buffer = Vec::new();
+    #[allow(clippy::unwrap_used)]
     encoder.encode(&metric_families, &mut buffer).unwrap();
 
     // Proxy Vector's prometheus_exporter metrics (best-effort)
@@ -233,11 +251,24 @@ async fn handle_metrics(
         buffer.extend_from_slice(vector_metrics.as_bytes());
     }
 
-    Ok(Response::builder()
+    Ok(prometheus_response(&buffer, encoder.format_type()))
+}
+
+/// Build a Prometheus text response.
+fn prometheus_response(body: &[u8], content_type: &str) -> Response<Full<Bytes>> {
+    Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", encoder.format_type())
-        .body(Full::new(Bytes::from(buffer)))
-        .unwrap())
+        .header("content-type", content_type)
+        .body(Full::new(Bytes::from(body.to_vec())))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("internal error"))))
+}
+
+/// Build a 404 response.
+fn not_found_response() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Full::new(Bytes::from("not found")))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("not found"))))
 }
 
 /// Fetch metrics from Vector's prometheus_exporter sink (best-effort).

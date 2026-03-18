@@ -11,6 +11,10 @@
 //! Manages Vector.dev as a child process for Kafka-to-Kafka transform pipelines,
 //! making Vector a first-class DFE platform citizen.
 
+// Lints are configured in Cargo.toml [lints] section.
+// Additional crate-level overrides below.
+#![allow(clippy::doc_markdown)]
+
 pub mod config;
 pub mod deployment;
 pub mod error;

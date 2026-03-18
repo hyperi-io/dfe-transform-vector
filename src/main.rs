@@ -217,31 +217,18 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     lifecycle.set(State::Initialising);
 
     // Check Vector binary version
-    match check_vector_version(&config.vector).await {
-        Ok(version) => {
-            if !version.is_empty() {
-                info!(vector_version = %version, "Vector binary version detected");
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Vector version check failed");
-            std::process::exit(1);
-        }
+    let version = check_vector_version(&config.vector).await?;
+    if !version.is_empty() {
+        info!(vector_version = %version, "Vector binary version detected");
     }
 
     // Assemble Vector config directory
     lifecycle.set(State::Validating);
     let config_dir = PathBuf::from(assembler::DEFAULT_CONFIG_DIR);
-    if let Err(e) = assembler::assemble(&config, &config_dir) {
-        error!(error = %e, "failed to assemble Vector config");
-        std::process::exit(1);
-    }
+    assembler::assemble(&config, &config_dir)?;
 
     // Run vector validate on assembled config
-    if let Err(e) = vector_validate(&config.vector, &config_dir).await {
-        error!(error = %e, "Vector config validation failed");
-        std::process::exit(1);
-    }
+    vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
 
     // Wrapper metrics
@@ -357,7 +344,11 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     }
 
     // Update final metrics
-    metrics.set_lifecycle_state(lifecycle.state());
+    let final_state = lifecycle.state();
+    metrics.set_lifecycle_state(final_state);
+    metrics
+        .pipeline_ready
+        .set(i64::from(final_state.is_ready()));
 
     info!("shutdown complete");
     Ok(())

@@ -25,10 +25,6 @@ path = "src/lib.rs"
 name = "dfe-transform-vector"
 path = "src/main.rs"
 
-# =============================================================================
-# Dependencies
-# =============================================================================
-
 [dependencies]
 # Async runtime
 tokio = { version = ">=1.50", features = ["full"] }
@@ -75,13 +71,27 @@ testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["kafka"] }
 rdkafka = { version = "0.39", features = ["cmake-build"] }
 
-# =============================================================================
-# Build Profiles
-# =============================================================================
-
 [profile.release]
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
