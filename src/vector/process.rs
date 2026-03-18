@@ -122,6 +122,10 @@ pub fn reload_vector(child: &Child) -> Result<()> {
 /// The `vector_pid` holder is updated with the current Vector PID whenever
 /// a new child is spawned, and cleared when the child exits. The reload
 /// loop uses this to send SIGHUP for config hot-reload.
+///
+/// Uses `std::sync::Mutex` intentionally — the lock is held for sub-microsecond
+/// reads/writes of a `u32` and is never held across an `.await` point.
+/// `tokio::sync::Mutex` is unnecessary overhead for this pattern.
 pub async fn run_lifecycle(
     vector_config: &VectorConfig,
     config_dir: &Path,
@@ -235,10 +239,6 @@ fn next_backoff(current: Duration, config: &BackoffConfig) -> Duration {
     let next = current.mul_f64(config.multiplier);
     next.min(config.max)
 }
-
-// =========================================================================
-// Tests
-// =========================================================================
 
 #[cfg(test)]
 mod tests {

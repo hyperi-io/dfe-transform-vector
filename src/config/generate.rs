@@ -33,6 +33,7 @@ pub const SINK_LABEL: &str = "dfe_sink";
 ///
 /// Produces the top-level `data_dir` and `api` settings that Vector
 /// needs at the global scope.
+#[must_use]
 pub fn generate_global_yaml(vector: &VectorConfig) -> Value {
     let mut root = serde_yaml_ng::Mapping::new();
 
@@ -55,6 +56,7 @@ pub fn generate_global_yaml(vector: &VectorConfig) -> Value {
 /// Produces a `sources.dfe_source` block with production-tuned librdkafka
 /// options derived from DFE 2.1 templates. Includes fetch sizing, pre-fetch
 /// queuing, commit control, and cooperative-sticky rebalancing.
+#[must_use]
 pub fn generate_source_yaml(source: &SourceConfig) -> Value {
     let mut component = serde_yaml_ng::Mapping::new();
     component.insert(val("type"), val("kafka"));
@@ -121,6 +123,7 @@ pub fn generate_source_yaml(source: &SourceConfig) -> Value {
 ///
 /// Produces a `sinks.dfe_sink` block with production-tuned librdkafka
 /// options, Vector-level batching, buffer config, and acknowledgements.
+#[must_use]
 pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
     let mut component = serde_yaml_ng::Mapping::new();
     component.insert(val("type"), val("kafka"));
@@ -209,6 +212,7 @@ pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
 }
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
+#[must_use]
 pub fn generate_observability_yaml() -> Value {
     let mut metrics_source = serde_yaml_ng::Mapping::new();
     metrics_source.insert(val("type"), val("internal_metrics"));

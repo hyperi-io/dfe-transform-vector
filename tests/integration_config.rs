@@ -1,3 +1,4 @@
+#![allow(unsafe_code)]
 // Project:   dfe-transform-vector
 // File:      tests/integration_config.rs
 // Purpose:   Integration tests for config assembly pipeline
