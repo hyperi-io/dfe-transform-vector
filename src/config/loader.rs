@@ -77,28 +77,46 @@ impl Default for DecodingConfig {
 }
 
 /// Main configuration.
+///
+/// ## Hot-reload behaviour
+///
+/// **Hot-reloaded (takes effect on next poll cycle / SIGHUP):**
+/// - Transform YAML file contents (modified/added/removed in watched directory)
+/// - `transforms.dir` — watcher switches to new directory after successful reload
+/// - `transforms.files` — watcher switches to new file list after successful reload
+///
+/// **Requires pod restart:**
+/// - `source.*` — Kafka consumer connections established at Vector startup
+/// - `sink.*` — Kafka producer connections established at Vector startup
+/// - `pipeline.name` — used in consumer group_id and metrics labels at startup
+/// - `vector.*` — binary path, data_dir, API address, log level set at Vector spawn
+/// - `health.address` — HTTP server binds at startup
+/// - `metrics.*` — HTTP server binds at startup
+/// - `logging.*` — tracing subscriber configured at startup
+/// - `scaling.*` — not consumed at runtime
+/// - `reload.poll_interval_secs` — captured at reload loop start
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Pipeline identity.
+    /// Pipeline identity. **Requires restart.**
     pub pipeline: PipelineConfig,
-    /// Kafka source (input).
+    /// Kafka source (input). **Requires restart.**
     pub source: SourceConfig,
-    /// Kafka sink (output).
+    /// Kafka sink (output). **Requires restart.**
     pub sink: SinkConfig,
-    /// User-supplied transform YAML files.
+    /// User-supplied transform YAML files. **Hot-reloaded.**
     pub transforms: TransformConfig,
-    /// Vector subprocess settings.
+    /// Vector subprocess settings. **Requires restart.**
     pub vector: VectorConfig,
-    /// Health endpoint.
+    /// Health endpoint. **Requires restart** (server binds at startup).
     pub health: HealthConfig,
-    /// Metrics endpoint.
+    /// Metrics endpoint. **Requires restart** (server binds at startup).
     pub metrics: MetricsConfig,
-    /// Logging.
+    /// Logging. **Requires restart** (subscriber configured at startup).
     pub logging: LoggingConfig,
-    /// KEDA scaling pressure.
+    /// KEDA scaling pressure. **Requires restart.**
     pub scaling: ScalingConfig,
-    /// Hot-reload configuration.
+    /// Hot-reload configuration. **Requires restart** (poll interval captured at start).
     pub reload: ReloadConfig,
 }
 
