@@ -1,3 +1,10 @@
+# [1.0.0-dev.4](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-03-19)
+
+
+### Bug Fixes
+
+* add DfeSource convention, bump rustlib to v1.16.5 ([5bd7727](https://github.com/hyperi-io/dfe-transform-vector/commit/5bd7727e2bc105392d0b494e50efa67f9b2d39b3))
+
 # [1.0.0-dev.3](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-03-19)
 
 
