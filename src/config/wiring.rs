@@ -145,8 +145,9 @@ pub fn auto_wire(mut components: Vec<Component>) -> Result<WiringResult> {
         .collect();
 
     // If no terminal found (shouldn't happen if we have transforms), fallback
+    #[allow(clippy::unwrap_used)]
     let sink_inputs = if terminal.is_empty() {
-        // Fall back: use the last component in file-order
+        // Fall back: use the last component in file-order (vec is non-empty — checked above)
         vec![components.last().unwrap().label.clone()]
     } else {
         terminal

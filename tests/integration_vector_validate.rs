@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/integration_vector_validate.rs
 // Purpose:   Integration tests that run vector validate against assembled configs

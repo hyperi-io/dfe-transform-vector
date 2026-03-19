@@ -159,7 +159,7 @@ pub async fn run_lifecycle(
         };
 
         // Publish PID for the reload loop
-        *vector_pid.lock().unwrap() = child.id();
+        *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = child.id();
 
         lifecycle.set(State::Running);
         let started_at = Instant::now();
@@ -167,7 +167,7 @@ pub async fn run_lifecycle(
         // Wait for either: child exit or shutdown signal
         let exit_status = tokio::select! {
             status = child.wait() => {
-                *vector_pid.lock().unwrap() = None;
+                *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 match status {
                     Ok(s) => s,
                     Err(e) => {
@@ -182,7 +182,7 @@ pub async fn run_lifecycle(
             }
             _ = shutdown.changed() => {
                 // Shutdown requested — forward SIGTERM to Vector
-                *vector_pid.lock().unwrap() = None;
+                *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 lifecycle.set(State::ShuttingDown);
                 info!("shutdown requested, sending SIGTERM to Vector");
                 let _ = send_signal(&child, Signal::SIGTERM);

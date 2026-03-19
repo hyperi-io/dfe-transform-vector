@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![allow(unsafe_code, clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/integration_config.rs
 // Purpose:   Integration tests for config assembly pipeline
