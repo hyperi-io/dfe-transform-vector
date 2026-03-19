@@ -17,6 +17,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
+
 use crate::Result;
 
 /// SASL authentication for Kafka.
@@ -98,6 +100,16 @@ impl Default for DecodingConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// DFE source name (e.g. `"syslog"`, `"netflow"`).
+    ///
+    /// When set, derives defaults for fields not explicitly configured:
+    /// - `source.topics` → `["{dfe_source}_land"]`
+    /// - `sink.topic` → `"{dfe_source}_load"`
+    /// - `source.group_id` → `"dfe-transform-vector-{dfe_source}"`
+    ///
+    /// Explicit values always override the derived defaults.
+    /// See [`DfeSource`] for the platform topic naming convention.
+    pub dfe_source: Option<String>,
     /// Pipeline identity. **Requires restart.**
     pub pipeline: PipelineConfig,
     /// Kafka source (input). **Requires restart.**
@@ -132,6 +144,18 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             name: "default".to_string(),
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Returns `Some(&name)` if the pipeline name was explicitly set
+    /// (differs from the hard-coded `"default"`).
+    fn name_if_not_default(&self) -> Option<&str> {
+        if self.name == "default" {
+            None
+        } else {
+            Some(&self.name)
         }
     }
 }
@@ -442,6 +466,11 @@ impl ApplyFlatEnv for Config {
     /// Env var names are the contract with dfe-engine — do not rename.
     /// Format: `DFE_TRANSFORM_<SUFFIX>` (prefix passed by caller).
     fn apply_flat_env(&mut self, prefix: &str) {
+        // DFE source shorthand
+        if let Some(v) = flat_env::flat_env_string(prefix, "DFE_SOURCE") {
+            self.dfe_source = Some(v);
+        }
+
         // Pipeline
         if let Some(v) = flat_env::flat_env_string(prefix, "PIPELINE_NAME") {
             self.pipeline.name = v;
@@ -592,7 +621,49 @@ impl Config {
         // Normalise: credentials present → enable SASL
         config.normalize();
 
+        // Derive topic/CG defaults from dfe_source (if set)
+        config.resolve_source_defaults()?;
+
         Ok(config)
+    }
+
+    /// Derive topic and consumer group defaults from `dfe_source`.
+    ///
+    /// Only fills fields that still hold their hard-coded defaults — explicit
+    /// config always wins. Called after all env/YAML loading is complete.
+    fn resolve_source_defaults(&mut self) -> Result<()> {
+        let Some(ref source_name) = self.dfe_source else {
+            return Ok(());
+        };
+
+        let dfe = DfeSource::new(source_name);
+        let defaults = SourceConfig::default();
+        let sink_defaults = SinkConfig::default();
+
+        // source.topics — only override if still the hard-coded default
+        if self.source.topics == defaults.topics {
+            self.source.topics = vec![dfe.input_topic()];
+        }
+
+        // sink.topic — only override if still empty (default)
+        if self.sink.topic == sink_defaults.topic {
+            self.sink.topic = dfe.output_topic();
+        }
+
+        // source.group_id — only override if still the hard-coded default
+        if self.source.group_id == defaults.group_id {
+            let cg = dfe
+                .consumer_group(
+                    "transform-vector",
+                    ServiceRole::Transform,
+                    self.pipeline.name_if_not_default(),
+                    None,
+                )
+                .map_err(|e| crate::Error::Config(e.to_string()))?;
+            self.source.group_id = cg;
+        }
+
+        Ok(())
     }
 
     /// Validate the configuration.
