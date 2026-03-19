@@ -225,3 +225,11 @@
 
 **Phase 4 — Production cutover**
 8.7 (parallel deploy, validate, switch)
+
+---
+
+## Parked — Waiting on hyperi-rustlib
+
+- [ ] Migrate metrics to rustlib DFE metric extensions (dual-emit old + new names)
+- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature
+- [ ] Add `dfe_pipeline_ready` gauge (standard metric, replaces `dfe_transform_vector_up`)
