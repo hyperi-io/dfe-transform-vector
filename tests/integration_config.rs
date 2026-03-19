@@ -21,6 +21,7 @@ use tempfile::TempDir;
 /// Build a complete test config with realistic values.
 fn full_config(transforms_dir: Option<String>) -> Config {
     Config {
+        dfe_source: None,
         pipeline: PipelineConfig {
             name: "syslog-enrichment".into(),
         },
@@ -368,4 +369,118 @@ fn config_env_override_flat() {
     let config = Config::load(None).unwrap();
     assert_eq!(config.pipeline.name, "env-override-test");
     unsafe { std::env::remove_var("DFE_TRANSFORM_PIPELINE_NAME") };
+}
+
+// =========================================================================
+// DfeSource integration tests
+// =========================================================================
+
+#[test]
+fn dfe_source_derives_topics_and_cg() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.yaml");
+    fs::write(
+        &config_path,
+        r#"
+dfe_source: syslog
+sink:
+  brokers:
+    - kafka:9092
+source:
+  brokers:
+    - kafka:9092
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    assert_eq!(config.source.topics, vec!["syslog_land"]);
+    assert_eq!(config.sink.topic, "syslog_load");
+    assert_eq!(config.source.group_id, "dfe-transform-vector-syslog");
+}
+
+#[test]
+fn dfe_source_with_pipeline_name_uses_pipeline_in_cg() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.yaml");
+    fs::write(
+        &config_path,
+        r#"
+dfe_source: syslog
+pipeline:
+  name: syslog-enriched
+sink:
+  brokers:
+    - kafka:9092
+source:
+  brokers:
+    - kafka:9092
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    assert_eq!(config.source.topics, vec!["syslog_land"]);
+    assert_eq!(config.sink.topic, "syslog_load");
+    assert_eq!(
+        config.source.group_id,
+        "dfe-transform-vector-syslog-enriched"
+    );
+}
+
+#[test]
+fn dfe_source_explicit_overrides_win() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.yaml");
+    fs::write(
+        &config_path,
+        r#"
+dfe_source: syslog
+source:
+  brokers:
+    - kafka:9092
+  topics:
+    - custom_input_topic
+  group_id: custom-consumer-group
+sink:
+  brokers:
+    - kafka:9092
+  topic: custom_output_topic
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    // Explicit values should NOT be overridden by DfeSource
+    assert_eq!(config.source.topics, vec!["custom_input_topic"]);
+    assert_eq!(config.sink.topic, "custom_output_topic");
+    assert_eq!(config.source.group_id, "custom-consumer-group");
+}
+
+#[test]
+fn dfe_source_not_set_uses_explicit_config() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.yaml");
+    fs::write(
+        &config_path,
+        r#"
+source:
+  brokers:
+    - kafka:9092
+  topics:
+    - raw_events
+  group_id: my-group
+sink:
+  brokers:
+    - kafka:9092
+  topic: out_events
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    assert_eq!(config.source.topics, vec!["raw_events"]);
+    assert_eq!(config.sink.topic, "out_events");
+    assert_eq!(config.source.group_id, "my-group");
+    assert!(config.dfe_source.is_none());
 }

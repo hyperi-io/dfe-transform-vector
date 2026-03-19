@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "dfe-transform-vector"
-version = "1.0.0-dev.1"
+version = "1.0.0-dev.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1048,9 +1048,9 @@ dependencies = [
 
 [[package]]
 name = "hyperi-rustlib"
-version = "1.16.3"
+version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ba5f1f8cd8e24fd0fef2741cc103107d5d5496b9f1da81ea18ba05084a879fe"
+checksum = "42d349fbc90741297b2237d0d0c00286c3114cbcc7ab286079ac8326a04889cd"
 dependencies = [
  "clap",
  "dirs",
