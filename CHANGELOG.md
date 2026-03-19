@@ -1,3 +1,10 @@
+# [1.0.0-dev.3](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-03-19)
+
+
+### Bug Fixes
+
+* rustlib v1.16.3 observability remediation ([0bcab5a](https://github.com/hyperi-io/dfe-transform-vector/commit/0bcab5ae63654a2b39131057d389dbb02ce8b209))
+
 # [1.0.0-dev.2](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-03-18)
 
 
