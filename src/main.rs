@@ -231,8 +231,11 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
 
-    // Wrapper metrics
-    let metrics = Arc::new(WrapperMetrics::new());
+    // Install global metrics recorder (must be before DfeMetrics::register)
+    let _metrics_mgr = hyperi_rustlib::metrics::MetricsManager::new("dfe");
+
+    // Wrapper metrics with DfeMetrics dual-emit
+    let metrics = Arc::new(WrapperMetrics::new().with_dfe_metrics());
     let started_at = Instant::now();
 
     // Shutdown signal channel
@@ -275,6 +278,7 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     // Signal handler: SIGTERM/SIGINT → shutdown, SIGHUP → manual reload
     let shutdown_tx_signal = shutdown_tx.clone();
     let reload_tx_signal = reload_tx.clone();
+    #[allow(clippy::unwrap_used)]
     tokio::spawn(async move {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();

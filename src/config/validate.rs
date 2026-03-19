@@ -17,6 +17,7 @@
 use std::path::Path;
 use std::process::Stdio;
 
+use hyperi_rustlib::logger::security;
 use tracing::{debug, error};
 
 use super::loader::VectorConfig;
@@ -125,6 +126,7 @@ pub async fn check_vector_version(vector_config: &VectorConfig) -> Result<String
             "Vector version mismatch: expected '{}', got '{}'",
             vector_config.version, version
         );
+        security::data_quality_alert("version_check", &msg);
         match vector_config.version_check.as_str() {
             "strict" => {
                 error!("{}", msg);

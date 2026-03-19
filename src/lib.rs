@@ -12,8 +12,9 @@
 //! making Vector a first-class DFE platform citizen.
 
 // Lints are configured in Cargo.toml [lints] section.
-// Additional crate-level overrides below.
 #![allow(clippy::doc_markdown)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::expect_used))]
 
 pub mod config;
 pub mod deployment;

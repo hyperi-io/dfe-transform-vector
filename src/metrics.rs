@@ -35,6 +35,8 @@ use prometheus::{
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
+use hyperi_rustlib::metrics::DfeMetrics;
+
 use crate::Result;
 use crate::vector::Lifecycle;
 use crate::vector::lifecycle::State;
@@ -52,11 +54,13 @@ pub struct WrapperMetrics {
     pub config_validation_errors_total: IntCounter,
     pub lifecycle_state: GaugeVec,
     pub uptime_seconds: prometheus::Gauge,
+    /// Standard DFE metrics (dual-emit alongside service-specific metrics).
+    pub dfe: Option<DfeMetrics>,
 }
 
 impl WrapperMetrics {
     /// Create and register all wrapper metrics.
-    #[allow(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     pub fn new() -> Self {
         let registry = Registry::new();
 
@@ -139,10 +143,23 @@ impl WrapperMetrics {
             config_validation_errors_total,
             lifecycle_state,
             uptime_seconds,
+            dfe: None,
         }
     }
 
+    /// Create metrics with DfeMetrics dual-emit enabled.
+    ///
+    /// Calls `DfeMetrics::register()` to describe all `dfe_*` metric names
+    /// with the global recorder. Must be called **after** `MetricsManager::new()`
+    /// installs the Prometheus recorder.
+    pub fn with_dfe_metrics(mut self) -> Self {
+        self.dfe = Some(DfeMetrics::register());
+        self
+    }
+
     /// Update lifecycle state gauge (set current state to 1, all others to 0).
+    ///
+    /// Dual-emits `dfe_pipeline_ready` via `DfeMetrics` when registered.
     pub fn set_lifecycle_state(&self, state: State) {
         let all_states = [
             "initialising",
@@ -156,6 +173,11 @@ impl WrapperMetrics {
         for s in &all_states {
             let val = if *s == state.as_str() { 1.0 } else { 0.0 };
             self.lifecycle_state.with_label_values(&[s]).set(val);
+        }
+
+        // Dual-emit via DfeMetrics
+        if let Some(ref dfe) = self.dfe {
+            dfe.pipeline_ready(state.is_ready());
         }
     }
 }

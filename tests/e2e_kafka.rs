@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/e2e_kafka.rs
 // Purpose:   End-to-end Kafka pipeline test via testcontainers

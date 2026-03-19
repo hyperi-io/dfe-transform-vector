@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use hyperi_rustlib::logger::security;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use tokio::sync::mpsc;
@@ -212,6 +213,7 @@ pub async fn run_reload_loop(
                 .with_label_values(&["error"])
                 .inc();
             metrics.config_validation_errors_total.inc();
+            security::input_validation_failure("config_reload", &e.to_string(), None);
             continue;
         }
 
@@ -267,7 +269,11 @@ pub async fn run_reload_loop(
         }
 
         // Send SIGHUP to Vector to pick up the new config
-        let pid = vector_pid.lock().unwrap().as_ref().copied();
+        let pid = vector_pid
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .copied();
         match pid {
             Some(pid) => {
                 if let Err(e) = send_sighup(pid) {
@@ -297,6 +303,11 @@ pub async fn run_reload_loop(
             .config_reloads_total
             .with_label_values(&["success"])
             .inc();
+        security::config_changed(
+            "config_reload",
+            "system",
+            "transform config reloaded via SIGHUP",
+        );
     }
 }
 

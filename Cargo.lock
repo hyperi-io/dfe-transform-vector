@@ -9,6 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
+ "getrandom 0.3.4",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -490,6 +491,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "dfe-transform-vector"
-version = "0.1.0"
+version = "1.0.0-dev.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -855,6 +870,12 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+
+[[package]]
+name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
@@ -1027,9 +1048,9 @@ dependencies = [
 
 [[package]]
 name = "hyperi-rustlib"
-version = "1.16.2"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e17a97d71aa61fc4b6b99d18ed2ae23b34b55d8b81c5acb2cc0f31e29c7dfd6"
+checksum = "3ba5f1f8cd8e24fd0fef2741cc103107d5d5496b9f1da81ea18ba05084a879fe"
 dependencies = [
  "clap",
  "dirs",
@@ -1047,6 +1068,7 @@ dependencies = [
  "toml 1.0.7+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "tracing-throttle",
 ]
 
 [[package]]
@@ -2967,6 +2989,18 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tracing-throttle"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e4e430251f5ca8f86ea941286923dc2e91be7ca95fec777d75ee8ae1c493f64"
+dependencies = [
+ "ahash",
+ "dashmap",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/integration_lifecycle.rs
 // Purpose:   Integration tests for lifecycle and health/metrics
