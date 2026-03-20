@@ -233,3 +233,7 @@
 - [ ] Migrate metrics to rustlib DFE metric extensions (dual-emit old + new names)
 - [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature
 - [ ] Add `dfe_pipeline_ready` gauge (standard metric, replaces `dfe_transform_vector_up`)
+
+## Backlog
+
+- [ ] Rustlib capability review — audit bespoke code for functions now available in rustlib (config, http-server, metrics, scaling, etc.)

@@ -154,6 +154,12 @@ bump policy for downstream consumers.
 
 This file contains **static project context only**.
 
+**NEVER use path dependencies to hyperi-rustlib.** The `Cargo.toml` must always
+reference hyperi-rustlib from crates.io (`version = ">=X.Y"`). Never add
+`[patch.crates-io]` or `path = "/projects/hyperi-rustlib"` overrides. The local
+checkout at `/projects/hyperi-rustlib` is for reading source code only — never
+for build-time linking. This rule must not be removed.
+
 **NEVER kill cargo processes** to free the lock. Multiple projects build concurrently
 on this host. Wait for the lock to release, or ask the user — never `kill`, `pkill`,
 or `rm` the cargo lock file.

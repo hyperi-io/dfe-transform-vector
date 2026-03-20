@@ -1,14 +1,26 @@
-## [1.0.1](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0...v1.0.1) (2026-03-20)
+# [1.0.0-dev.4](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-03-19)
 
 
 ### Bug Fixes
 
 * add DfeSource convention, bump rustlib to v1.16.5 ([5bd7727](https://github.com/hyperi-io/dfe-transform-vector/commit/5bd7727e2bc105392d0b494e50efa67f9b2d39b3))
-* code review remediation — lints, metrics, error handling, style ([045b0fc](https://github.com/hyperi-io/dfe-transform-vector/commit/045b0fcb9da427330dceed58e26d75a375343cd1))
-* hot-reload allowlist — only transforms are safe, all else requires restart ([2bfef0f](https://github.com/hyperi-io/dfe-transform-vector/commit/2bfef0faf3be15a21924d889a88e5a4428c75fa7))
+
+# [1.0.0-dev.3](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-03-19)
+
+
+### Bug Fixes
+
 * rustlib v1.16.3 observability remediation ([0bcab5a](https://github.com/hyperi-io/dfe-transform-vector/commit/0bcab5ae63654a2b39131057d389dbb02ce8b209))
 
-# 1.0.0 (2026-03-18)
+# [1.0.0-dev.2](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-03-18)
+
+
+### Bug Fixes
+
+* code review remediation — lints, metrics, error handling, style ([045b0fc](https://github.com/hyperi-io/dfe-transform-vector/commit/045b0fcb9da427330dceed58e26d75a375343cd1))
+* hot-reload allowlist — only transforms are safe, all else requires restart ([2bfef0f](https://github.com/hyperi-io/dfe-transform-vector/commit/2bfef0faf3be15a21924d889a88e5a4428c75fa7))
+
+# 1.0.0-dev.1 (2026-03-17)
 
 
 ### Bug Fixes
@@ -16,12 +28,9 @@
 * add build.type app, remove legacy publish workflow ([6ffbff3](https://github.com/hyperi-io/dfe-transform-vector/commit/6ffbff3bbd7b2f983c45bd1025cfe31099320f3e))
 * add figment env cascade and flat env var overrides ([c06f75a](https://github.com/hyperi-io/dfe-transform-vector/commit/c06f75ab7bf2e2c5fc1b9b1983295f1a94077793))
 * buffer config, Kafka production tuning, central librdkafka defaults [skip ci] ([573df67](https://github.com/hyperi-io/dfe-transform-vector/commit/573df67753d01a499be1e029df9224314f73337c))
-* code review remediation — lints, metrics, error handling, style ([045b0fc](https://github.com/hyperi-io/dfe-transform-vector/commit/045b0fcb9da427330dceed58e26d75a375343cd1))
 * enable cross-compilation, container, and Helm publishing in CI ([e099958](https://github.com/hyperi-io/dfe-transform-vector/commit/e0999586d793deb3d491c91de948235c936053b8))
 * exclude ai, ci, chart, docs dirs from cargo publish package [skip ci] ([cfb324b](https://github.com/hyperi-io/dfe-transform-vector/commit/cfb324bd8737768e661b1469d7738352d289b842))
-* hot-reload allowlist — only transforms are safe, all else requires restart ([2bfef0f](https://github.com/hyperi-io/dfe-transform-vector/commit/2bfef0faf3be15a21924d889a88e5a4428c75fa7))
 * migrate to hyperi-ci, switch rustlib to crates.io ([1d02b06](https://github.com/hyperi-io/dfe-transform-vector/commit/1d02b06b0230869b91a6a5ac0d057790d26e4f43))
-* rustlib v1.16.3 observability remediation ([0bcab5a](https://github.com/hyperi-io/dfe-transform-vector/commit/0bcab5ae63654a2b39131057d389dbb02ce8b209))
 * use ubuntu 24.04 LTS base image in Dockerfile ([7a41141](https://github.com/hyperi-io/dfe-transform-vector/commit/7a41141debd0ede6244e0452bfb5879db1685a11))
 
 
@@ -38,3 +47,5 @@
 * rust project scaffold with config, CLI, and build tooling ([2008a04](https://github.com/hyperi-io/dfe-transform-vector/commit/2008a045869fc00aaf2b6d10fd90606967a1afee))
 * wire hyperi-rustlib CLI and deployment modules ([4919a26](https://github.com/hyperi-io/dfe-transform-vector/commit/4919a262d415b02b5b4c486d4b0568188c246888))
 * wire orchestrator loop in main — config, subprocess, health, metrics ([8f64aa0](https://github.com/hyperi-io/dfe-transform-vector/commit/8f64aa05ccdfe40a67d38413292c6b4efd365d69))
+
+# Changelog
