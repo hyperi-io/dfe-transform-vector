@@ -27,6 +27,12 @@ use dfe_transform_vector::config::validate::{check_vector_version, vector_valida
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health::serve_health;
 use dfe_transform_vector::metrics::{WrapperMetrics, serve_metrics};
+
+/// Git commit hash for build info metric.
+const COMMIT: &str = match option_env!("GIT_COMMIT") {
+    Some(c) => c,
+    None => "unknown",
+};
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle, run_lifecycle};
 
@@ -231,11 +237,8 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
 
-    // Install global metrics recorder (must be before DfeMetrics::register)
-    let _metrics_mgr = hyperi_rustlib::metrics::MetricsManager::new("dfe");
-
-    // Wrapper metrics with DfeMetrics dual-emit
-    let metrics = Arc::new(WrapperMetrics::new().with_dfe_metrics());
+    // Wrapper metrics (installs global recorder, registers DfeMetrics + AppMetrics)
+    let metrics = Arc::new(WrapperMetrics::new(COMMIT));
     let started_at = Instant::now();
 
     // Shutdown signal channel
@@ -350,9 +353,6 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     // Update final metrics
     let final_state = lifecycle.state();
     metrics.set_lifecycle_state(final_state);
-    metrics
-        .pipeline_ready
-        .set(i64::from(final_state.is_ready()));
 
     info!("shutdown complete");
     Ok(())
