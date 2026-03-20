@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.1...v1.0.2) (2026-03-20)
+
+
+### Bug Fixes
+
+* migrate e2e tests to rustlib transport-kafka, bump rustlib to v1.16.7 ([da4584a](https://github.com/hyperi-io/dfe-transform-vector/commit/da4584a46002e1e81ffba26ddf737cd0e51b6e02))
+
 # [1.0.0-dev.4](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-03-19)
 
 
