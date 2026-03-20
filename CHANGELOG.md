@@ -1,3 +1,11 @@
+## [1.0.3](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.2...v1.0.3) (2026-03-20)
+
+
+### Bug Fixes
+
+* align release deps with main (metrics crate, rustlib >=1.18) ([9be6580](https://github.com/hyperi-io/dfe-transform-vector/commit/9be6580a2391f2887de0c2f5cec17dde1b5b26eb))
+* migrate metrics from prometheus crate to MetricsManager ([cd087c4](https://github.com/hyperi-io/dfe-transform-vector/commit/cd087c4161380ccac7665a014c5bb2df8de15445))
+
 ## [1.0.2](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.1...v1.0.2) (2026-03-20)
 
 
