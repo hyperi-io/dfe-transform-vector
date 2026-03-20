@@ -31,11 +31,12 @@ tokio = { version = ">=1.50", features = ["full"] }
 tokio-util = { version = ">=0.7", features = ["rt"] }
 
 # Shared library (CLI framework, deployment artefact generation, logging)
-hyperi-rustlib = { version = ">=1.16.6", features = [
+hyperi-rustlib = { version = ">=1.18", features = [
     "cli",
     "deployment",
     "logger",
     "metrics",
+    "metrics-dfe",
 ] }
 
 # Configuration
@@ -56,8 +57,10 @@ anyhow = ">=1.0"
 tracing = ">=0.1"
 tracing-subscriber = { version = ">=0.3", features = ["env-filter", "json"] }
 
-# Metrics and HTTP
-prometheus = ">=0.14"
+# Metrics
+metrics = ">=0.24"
+
+# HTTP (health server + Vector metrics proxy)
 hyper = { version = ">=1.8", features = ["server", "http1"] }
 hyper-util = { version = ">=0.1", features = ["tokio"] }
 http-body-util = ">=0.1"
@@ -68,7 +71,7 @@ nix = { version = ">=0.29", features = ["signal", "process"] }
 [dev-dependencies]
 tempfile = ">=3.10"
 tokio-test = ">=0.4"
-hyperi-rustlib = { version = ">=1.16.6", features = [
+hyperi-rustlib = { version = ">=1.18", features = [
     "transport-kafka",
 ] }
 
