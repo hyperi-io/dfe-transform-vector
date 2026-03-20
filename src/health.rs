@@ -20,17 +20,26 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
 use crate::Result;
 use crate::vector::Lifecycle;
 
+/// Health response body.
+#[derive(Serialize)]
+struct HealthBody {
+    status: &'static str,
+    state: String,
+}
+
 /// Start the health HTTP server.
 ///
 /// Serves:
 /// - `/health/live` — 200 if wrapper process is alive
 /// - `/health/ready` — 200 if Vector is running and healthy, 503 otherwise
+// TODO: migrate to hyperi-rustlib `http-server` feature
 pub async fn serve_health(address: &str, lifecycle: Lifecycle) -> Result<()> {
     let addr: SocketAddr = address
         .parse()
@@ -74,45 +83,49 @@ fn handle_health(
 
     match req.uri().path() {
         "/health/live" => {
-            let (status, body) = if state.is_alive() {
-                (
-                    StatusCode::OK,
-                    format!(r#"{{"status":"alive","state":"{}"}}"#, state),
-                )
+            let (status_code, status_text) = if state.is_alive() {
+                (StatusCode::OK, "alive")
             } else {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!(r#"{{"status":"dead","state":"{}"}}"#, state),
-                )
+                (StatusCode::SERVICE_UNAVAILABLE, "dead")
             };
-            Ok(json_response(status, &body))
+            Ok(json_response(status_code, status_text, &state.to_string()))
         }
         "/health/ready" => {
-            let (status, body) = if state.is_ready() {
-                (
-                    StatusCode::OK,
-                    format!(r#"{{"status":"ready","state":"{}"}}"#, state),
-                )
+            let (status_code, status_text) = if state.is_ready() {
+                (StatusCode::OK, "ready")
             } else {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!(r#"{{"status":"not_ready","state":"{}"}}"#, state),
-                )
+                (StatusCode::SERVICE_UNAVAILABLE, "not_ready")
             };
-            Ok(json_response(status, &body))
+            Ok(json_response(status_code, status_text, &state.to_string()))
         }
-        _ => Ok(json_response(
-            StatusCode::NOT_FOUND,
-            r#"{"error":"not found"}"#,
-        )),
+        _ => Ok(not_found_response()),
     }
 }
 
-/// Build a JSON HTTP response.
-fn json_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
+/// Build a JSON health response using serde_json.
+fn json_response(
+    status: StatusCode,
+    status_text: &'static str,
+    state: &str,
+) -> Response<Full<Bytes>> {
+    let body = HealthBody {
+        status: status_text,
+        state: state.to_string(),
+    };
+    let json = serde_json::to_string(&body).unwrap_or_else(|_| r#"{"status":"error"}"#.into());
+
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(body.to_string())))
-        .unwrap()
+        .body(Full::new(Bytes::from(json)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from(r#"{"status":"error"}"#))))
+}
+
+/// Build a 404 JSON response.
+fn not_found_response() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(r#"{"error":"not found"}"#)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from(r#"{"error":"not found"}"#))))
 }

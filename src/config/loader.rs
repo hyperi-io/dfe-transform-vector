@@ -17,11 +17,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::Result;
+use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
 
-// =============================================================================
-// Shared sub-configs (used by both source and sink)
-// =============================================================================
+use crate::Result;
 
 /// SASL authentication for Kafka.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,33 +78,57 @@ impl Default for DecodingConfig {
     }
 }
 
-// =============================================================================
-// Top-level config and sub-sections
-// =============================================================================
-
 /// Main configuration.
+///
+/// ## Hot-reload behaviour
+///
+/// **Hot-reloaded (takes effect on next poll cycle / SIGHUP):**
+/// - Transform YAML file contents (modified/added/removed in watched directory)
+/// - `transforms.dir` — watcher switches to new directory after successful reload
+/// - `transforms.files` — watcher switches to new file list after successful reload
+///
+/// **Requires pod restart:**
+/// - `source.*` — Kafka consumer connections established at Vector startup
+/// - `sink.*` — Kafka producer connections established at Vector startup
+/// - `pipeline.name` — used in consumer group_id and metrics labels at startup
+/// - `vector.*` — binary path, data_dir, API address, log level set at Vector spawn
+/// - `health.address` — HTTP server binds at startup
+/// - `metrics.*` — HTTP server binds at startup
+/// - `logging.*` — tracing subscriber configured at startup
+/// - `scaling.*` — not consumed at runtime
+/// - `reload.poll_interval_secs` — captured at reload loop start
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Pipeline identity.
+    /// DFE source name (e.g. `"syslog"`, `"netflow"`).
+    ///
+    /// When set, derives defaults for fields not explicitly configured:
+    /// - `source.topics` → `["{dfe_source}_land"]`
+    /// - `sink.topic` → `"{dfe_source}_load"`
+    /// - `source.group_id` → `"dfe-transform-vector-{dfe_source}"`
+    ///
+    /// Explicit values always override the derived defaults.
+    /// See [`DfeSource`] for the platform topic naming convention.
+    pub dfe_source: Option<String>,
+    /// Pipeline identity. **Requires restart.**
     pub pipeline: PipelineConfig,
-    /// Kafka source (input).
+    /// Kafka source (input). **Requires restart.**
     pub source: SourceConfig,
-    /// Kafka sink (output).
+    /// Kafka sink (output). **Requires restart.**
     pub sink: SinkConfig,
-    /// User-supplied transform YAML files.
+    /// User-supplied transform YAML files. **Hot-reloaded.**
     pub transforms: TransformConfig,
-    /// Vector subprocess settings.
+    /// Vector subprocess settings. **Requires restart.**
     pub vector: VectorConfig,
-    /// Health endpoint.
+    /// Health endpoint. **Requires restart** (server binds at startup).
     pub health: HealthConfig,
-    /// Metrics endpoint.
+    /// Metrics endpoint. **Requires restart** (server binds at startup).
     pub metrics: MetricsConfig,
-    /// Logging.
+    /// Logging. **Requires restart** (subscriber configured at startup).
     pub logging: LoggingConfig,
-    /// KEDA scaling pressure.
+    /// KEDA scaling pressure. **Requires restart.**
     pub scaling: ScalingConfig,
-    /// Hot-reload configuration.
+    /// Hot-reload configuration. **Requires restart** (poll interval captured at start).
     pub reload: ReloadConfig,
 }
 
@@ -122,6 +144,18 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             name: "default".to_string(),
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Returns `Some(&name)` if the pipeline name was explicitly set
+    /// (differs from the hard-coded `"default"`).
+    fn name_if_not_default(&self) -> Option<&str> {
+        if self.name == "default" {
+            None
+        } else {
+            Some(&self.name)
         }
     }
 }
@@ -407,27 +441,10 @@ impl Default for ScalingConfig {
     }
 }
 
-// =============================================================================
-// Config loading, cascade, and validation
-// =============================================================================
-
 /// Environment variable prefix for all config overrides.
 const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
-/// Read a single env var with our prefix.
-fn env_var(name: &str) -> Option<String> {
-    std::env::var(format!("{ENV_PREFIX}_{name}")).ok()
-}
-
-/// Read a comma-separated env var as a list.
-fn env_var_list(name: &str) -> Option<Vec<String>> {
-    env_var(name).map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
-}
-
-/// Read an env var parsed to a specific type.
-fn env_var_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
-    env_var(name).and_then(|v| v.parse().ok())
-}
+use hyperi_rustlib::config::flat_env::{self, ApplyFlatEnv, Normalize};
 
 /// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
 fn apply_figment_env(config: &mut Config) -> Result<()> {
@@ -443,125 +460,118 @@ fn apply_figment_env(config: &mut Config) -> Result<()> {
     Ok(())
 }
 
-/// Apply explicit flat env var overrides (highest priority after CLI args).
-///
-/// These K8s-friendly overrides use single underscores and are explicit
-/// per-field rather than relying on figment's automatic nesting.
-fn apply_env_overrides(config: &mut Config) {
-    // Pipeline
-    if let Some(v) = env_var("PIPELINE_NAME") {
-        config.pipeline.name = v;
-        debug!("override: pipeline.name from env");
-    }
+impl ApplyFlatEnv for Config {
+    /// Apply explicit flat env var overrides (highest priority after CLI args).
+    ///
+    /// Env var names are the contract with dfe-engine — do not rename.
+    /// Format: `DFE_TRANSFORM_<SUFFIX>` (prefix passed by caller).
+    fn apply_flat_env(&mut self, prefix: &str) {
+        // DFE source shorthand
+        if let Some(v) = flat_env::flat_env_string(prefix, "DFE_SOURCE") {
+            self.dfe_source = Some(v);
+        }
 
-    // Source
-    if let Some(v) = env_var_list("SOURCE_BROKERS") {
-        config.source.brokers = v;
-        debug!("override: source.brokers from env");
-    }
-    if let Some(v) = env_var_list("SOURCE_TOPICS") {
-        config.source.topics = v;
-        debug!("override: source.topics from env");
-    }
-    if let Some(v) = env_var("SOURCE_GROUP_ID") {
-        config.source.group_id = v;
-        debug!("override: source.group_id from env");
-    }
-    if let Some(v) = env_var("SOURCE_SASL_USERNAME") {
-        config.source.sasl.enabled = true;
-        config.source.sasl.username = v;
-        debug!("override: source.sasl.username from env");
-    }
-    if let Some(v) = env_var("SOURCE_SASL_PASSWORD") {
-        config.source.sasl.enabled = true;
-        config.source.sasl.password = v;
-        debug!("override: source.sasl.password from env");
-    }
-    if let Some(v) = env_var("SOURCE_SASL_MECHANISM") {
-        config.source.sasl.mechanism = v;
-        debug!("override: source.sasl.mechanism from env");
-    }
+        // Pipeline
+        if let Some(v) = flat_env::flat_env_string(prefix, "PIPELINE_NAME") {
+            self.pipeline.name = v;
+        }
 
-    // Sink
-    if let Some(v) = env_var_list("SINK_BROKERS") {
-        config.sink.brokers = v;
-        debug!("override: sink.brokers from env");
-    }
-    if let Some(v) = env_var("SINK_TOPIC") {
-        config.sink.topic = v;
-        debug!("override: sink.topic from env");
-    }
-    if let Some(v) = env_var("SINK_KEY_FIELD") {
-        config.sink.key_field = v;
-        debug!("override: sink.key_field from env");
-    }
-    if let Some(v) = env_var("SINK_ENCODING") {
-        config.sink.encoding = v;
-        debug!("override: sink.encoding from env");
-    }
-    if let Some(v) = env_var("SINK_COMPRESSION") {
-        config.sink.compression = v;
-        debug!("override: sink.compression from env");
-    }
-    if let Some(v) = env_var("SINK_SASL_USERNAME") {
-        config.sink.sasl.enabled = true;
-        config.sink.sasl.username = v;
-        debug!("override: sink.sasl.username from env");
-    }
-    if let Some(v) = env_var("SINK_SASL_PASSWORD") {
-        config.sink.sasl.enabled = true;
-        config.sink.sasl.password = v;
-        debug!("override: sink.sasl.password from env");
-    }
-    if let Some(v) = env_var("SINK_SASL_MECHANISM") {
-        config.sink.sasl.mechanism = v;
-        debug!("override: sink.sasl.mechanism from env");
-    }
+        // Source
+        if let Some(v) = flat_env::flat_env_list(prefix, "SOURCE_BROKERS") {
+            self.source.brokers = v;
+        }
+        if let Some(v) = flat_env::flat_env_list(prefix, "SOURCE_TOPICS") {
+            self.source.topics = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SOURCE_GROUP_ID") {
+            self.source.group_id = v;
+        }
+        if let Some(v) = flat_env::flat_env_string_sensitive(prefix, "SOURCE_SASL_USERNAME") {
+            self.source.sasl.username = v;
+        }
+        if let Some(v) = flat_env::flat_env_string_sensitive(prefix, "SOURCE_SASL_PASSWORD") {
+            self.source.sasl.password = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SOURCE_SASL_MECHANISM") {
+            self.source.sasl.mechanism = v;
+        }
 
-    // Transforms
-    if let Some(v) = env_var("TRANSFORMS_DIR") {
-        config.transforms.dir = Some(v);
-        debug!("override: transforms.dir from env");
-    }
+        // Sink
+        if let Some(v) = flat_env::flat_env_list(prefix, "SINK_BROKERS") {
+            self.sink.brokers = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_TOPIC") {
+            self.sink.topic = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_KEY_FIELD") {
+            self.sink.key_field = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_ENCODING") {
+            self.sink.encoding = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_COMPRESSION") {
+            self.sink.compression = v;
+        }
+        if let Some(v) = flat_env::flat_env_string_sensitive(prefix, "SINK_SASL_USERNAME") {
+            self.sink.sasl.username = v;
+        }
+        if let Some(v) = flat_env::flat_env_string_sensitive(prefix, "SINK_SASL_PASSWORD") {
+            self.sink.sasl.password = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_SASL_MECHANISM") {
+            self.sink.sasl.mechanism = v;
+        }
 
-    // Vector
-    if let Some(v) = env_var("VECTOR_BINARY") {
-        config.vector.binary = v;
-        debug!("override: vector.binary from env");
-    }
-    if let Some(v) = env_var("VECTOR_DATA_DIR") {
-        config.vector.data_dir = v;
-        debug!("override: vector.data_dir from env");
-    }
-    if let Some(v) = env_var("VECTOR_LOG_LEVEL") {
-        config.vector.log_level = v;
-        debug!("override: vector.log_level from env");
-    }
-    if let Some(v) = env_var("VECTOR_VERSION") {
-        config.vector.version = v;
-        debug!("override: vector.version from env");
-    }
-    if let Some(v) = env_var("VECTOR_VERSION_CHECK") {
-        config.vector.version_check = v;
-        debug!("override: vector.version_check from env");
-    }
+        // Transforms
+        if let Some(v) = flat_env::flat_env_string(prefix, "TRANSFORMS_DIR") {
+            self.transforms.dir = Some(v);
+        }
 
-    // Health
-    if let Some(v) = env_var("HEALTH_ADDRESS") {
-        config.health.address = v;
-        debug!("override: health.address from env");
-    }
+        // Vector
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_BINARY") {
+            self.vector.binary = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_DATA_DIR") {
+            self.vector.data_dir = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_LOG_LEVEL") {
+            self.vector.log_level = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_VERSION") {
+            self.vector.version = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_VERSION_CHECK") {
+            self.vector.version_check = v;
+        }
 
-    // Metrics
-    if let Some(v) = env_var("METRICS_ADDRESS") {
-        config.metrics.address = v;
-        debug!("override: metrics.address from env");
-    }
+        // Health
+        if let Some(v) = flat_env::flat_env_string(prefix, "HEALTH_ADDRESS") {
+            self.health.address = v;
+        }
 
-    // Scaling
-    if let Some(v) = env_var_parsed::<f64>("SCALING_PRESSURE_THRESHOLD") {
-        config.scaling.pressure_threshold = v;
-        debug!("override: scaling.pressure_threshold from env");
+        // Metrics
+        if let Some(v) = flat_env::flat_env_string(prefix, "METRICS_ADDRESS") {
+            self.metrics.address = v;
+        }
+
+        // Scaling
+        if let Some(v) = flat_env::flat_env_parsed::<f64>(prefix, "SCALING_PRESSURE_THRESHOLD") {
+            self.scaling.pressure_threshold = v;
+        }
+    }
+}
+
+impl Normalize for Config {
+    /// Apply side-effect normalisations after env overrides.
+    ///
+    /// Credentials present → enable SASL automatically.
+    fn normalize(&mut self) {
+        if !self.source.sasl.username.is_empty() || !self.source.sasl.password.is_empty() {
+            self.source.sasl.enabled = true;
+        }
+        if !self.sink.sasl.username.is_empty() || !self.sink.sasl.password.is_empty() {
+            self.sink.sasl.enabled = true;
+        }
     }
 }
 
@@ -606,9 +616,54 @@ impl Config {
         apply_figment_env(&mut config)?;
 
         // Apply explicit flat env overrides (highest priority)
-        apply_env_overrides(&mut config);
+        config.apply_flat_env(ENV_PREFIX);
+
+        // Normalise: credentials present → enable SASL
+        config.normalize();
+
+        // Derive topic/CG defaults from dfe_source (if set)
+        config.resolve_source_defaults()?;
 
         Ok(config)
+    }
+
+    /// Derive topic and consumer group defaults from `dfe_source`.
+    ///
+    /// Only fills fields that still hold their hard-coded defaults — explicit
+    /// config always wins. Called after all env/YAML loading is complete.
+    fn resolve_source_defaults(&mut self) -> Result<()> {
+        let Some(ref source_name) = self.dfe_source else {
+            return Ok(());
+        };
+
+        let dfe = DfeSource::new(source_name);
+        let defaults = SourceConfig::default();
+        let sink_defaults = SinkConfig::default();
+
+        // source.topics — only override if still the hard-coded default
+        if self.source.topics == defaults.topics {
+            self.source.topics = vec![dfe.input_topic()];
+        }
+
+        // sink.topic — only override if still empty (default)
+        if self.sink.topic == sink_defaults.topic {
+            self.sink.topic = dfe.output_topic();
+        }
+
+        // source.group_id — only override if still the hard-coded default
+        if self.source.group_id == defaults.group_id {
+            let cg = dfe
+                .consumer_group(
+                    "transform-vector",
+                    ServiceRole::Transform,
+                    self.pipeline.name_if_not_default(),
+                    None,
+                )
+                .map_err(|e| crate::Error::Config(e.to_string()))?;
+            self.source.group_id = cg;
+        }
+
+        Ok(())
     }
 
     /// Validate the configuration.

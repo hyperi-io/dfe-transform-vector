@@ -124,6 +124,7 @@ fn profile_to_map(profile: &[(&str, &str)]) -> HashMap<String, String> {
 ///
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
 /// falls back to `hyperi_rustlib::kafka_config` constants.
+#[must_use]
 pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
     if let Some(Some(central)) = Some(get_central())
         && let Some(profile) = central.consumer.get(profile_name)
@@ -150,6 +151,7 @@ pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
 ///
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
 /// falls back to `hyperi_rustlib::kafka_config` constants.
+#[must_use]
 pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
     if let Some(Some(central)) = Some(get_central())
         && let Some(profile) = central.producer.get(profile_name)
@@ -179,6 +181,7 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
 /// 1. Central config (or rustlib fallback) baseline
 /// 2. Service-specific overrides (only if not already set by user)
 /// 3. User config YAML `librdkafka_options` (highest priority)
+#[must_use]
 pub fn merge_layers(
     base: &HashMap<String, String>,
     service_overrides: &[(&str, &str)],

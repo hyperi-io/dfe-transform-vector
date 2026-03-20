@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use hyperi_rustlib::logger::security;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use tokio::sync::mpsc;
@@ -42,24 +43,35 @@ pub enum ChangeKind {
 }
 
 /// Classify the difference between old and new config.
+///
+/// Uses an **allowlist** pattern: only `transforms` changes are safe for
+/// hot-reload. All other config fields require a pod restart because their
+/// values are consumed at startup and not re-read at runtime.
+///
+/// This is intentionally conservative — any new config fields added in the
+/// future will default to "requires restart" until explicitly allowed here.
 pub fn classify_change(old: &Config, new: &Config) -> ChangeKind {
     if old == new {
         return ChangeKind::None;
     }
 
-    // Check if source or sink changed (unsafe — requires restart)
-    let source_changed = old.source != new.source;
-    let sink_changed = old.sink != new.sink;
-    let pipeline_changed = old.pipeline != new.pipeline;
-    let vector_changed = old.vector != new.vector;
+    // Allowlist: only transform changes can be hot-reloaded.
+    // Everything else is bound at startup (servers, connections, labels).
+    let only_transforms_changed = old.source == new.source
+        && old.sink == new.sink
+        && old.pipeline == new.pipeline
+        && old.vector == new.vector
+        && old.health == new.health
+        && old.metrics == new.metrics
+        && old.logging == new.logging
+        && old.scaling == new.scaling
+        && old.reload == new.reload;
 
-    if source_changed || sink_changed || pipeline_changed || vector_changed {
-        return ChangeKind::Unsafe;
+    if only_transforms_changed {
+        ChangeKind::TransformsOnly
+    } else {
+        ChangeKind::Unsafe
     }
-
-    // Only transforms, health, metrics, logging, scaling, or reload changed
-    // These are all safe for hot-reload
-    ChangeKind::TransformsOnly
 }
 
 /// Snapshot of file modification times for change detection.
@@ -201,6 +213,7 @@ pub async fn run_reload_loop(
                 .with_label_values(&["error"])
                 .inc();
             metrics.config_validation_errors_total.inc();
+            security::input_validation_failure("config_reload", &e.to_string(), None);
             continue;
         }
 
@@ -213,8 +226,8 @@ pub async fn run_reload_loop(
             }
             ChangeKind::Unsafe => {
                 warn!(
-                    "source/sink/pipeline/vector config changed — requires pod restart, \
-                     hot-reload not possible for these changes"
+                    "non-transform config changed — requires pod restart. \
+                     Only transform YAML file changes can be hot-reloaded."
                 );
                 metrics
                     .config_reloads_total
@@ -256,7 +269,11 @@ pub async fn run_reload_loop(
         }
 
         // Send SIGHUP to Vector to pick up the new config
-        let pid = vector_pid.lock().unwrap().as_ref().copied();
+        let pid = vector_pid
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .copied();
         match pid {
             Some(pid) => {
                 if let Err(e) = send_sighup(pid) {
@@ -286,12 +303,13 @@ pub async fn run_reload_loop(
             .config_reloads_total
             .with_label_values(&["success"])
             .inc();
+        security::config_changed(
+            "config_reload",
+            "system",
+            "transform config reloaded via SIGHUP",
+        );
     }
 }
-
-// =========================================================================
-// Tests
-// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -357,11 +375,51 @@ mod tests {
     }
 
     #[test]
-    fn classify_logging_change_is_safe() {
+    fn classify_logging_change_requires_restart() {
         let old = base_config();
         let mut new = old.clone();
         new.logging.level = "debug".into();
-        assert_eq!(classify_change(&old, &new), ChangeKind::TransformsOnly);
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    #[test]
+    fn classify_health_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.health.address = "0.0.0.0:9999".into();
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    #[test]
+    fn classify_metrics_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.metrics.address = "0.0.0.0:9999".into();
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    #[test]
+    fn classify_scaling_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.scaling.pressure_threshold = 0.5;
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    #[test]
+    fn classify_reload_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.reload.poll_interval_secs = 60;
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    #[test]
+    fn classify_vector_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.vector.log_level = "debug".into();
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
     }
 
     #[test]
