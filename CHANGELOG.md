@@ -1,3 +1,13 @@
+## [1.0.1](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0...v1.0.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* add DfeSource convention, bump rustlib to v1.16.5 ([5bd7727](https://github.com/hyperi-io/dfe-transform-vector/commit/5bd7727e2bc105392d0b494e50efa67f9b2d39b3))
+* code review remediation — lints, metrics, error handling, style ([045b0fc](https://github.com/hyperi-io/dfe-transform-vector/commit/045b0fcb9da427330dceed58e26d75a375343cd1))
+* hot-reload allowlist — only transforms are safe, all else requires restart ([2bfef0f](https://github.com/hyperi-io/dfe-transform-vector/commit/2bfef0faf3be15a21924d889a88e5a4428c75fa7))
+* rustlib v1.16.3 observability remediation ([0bcab5a](https://github.com/hyperi-io/dfe-transform-vector/commit/0bcab5ae63654a2b39131057d389dbb02ce8b209))
+
 # 1.0.0 (2026-03-18)
 
 
