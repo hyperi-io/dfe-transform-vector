@@ -1,3 +1,10 @@
+# [1.0.0-dev.6](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.5...v1.0.0-dev.6) (2026-03-20)
+
+
+### Bug Fixes
+
+* migrate metrics from prometheus crate to MetricsManager ([cd087c4](https://github.com/hyperi-io/dfe-transform-vector/commit/cd087c4161380ccac7665a014c5bb2df8de15445))
+
 # [1.0.0-dev.5](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.4...v1.0.0-dev.5) (2026-03-20)
 
 
