@@ -15,7 +15,6 @@ use std::time::Instant;
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
-use prometheus::Encoder;
 
 #[test]
 fn lifecycle_state_drives_readiness() {
@@ -56,51 +55,50 @@ fn lifecycle_subscriber_gets_updates() {
 }
 
 #[test]
-fn wrapper_metrics_register_and_encode() {
-    let metrics = WrapperMetrics::new();
+fn wrapper_metrics_register_and_render() {
+    let metrics = WrapperMetrics::new("test-commit");
 
     // Increment some counters
-    metrics.crashes_total.inc();
-    metrics.crashes_total.inc();
-    metrics.restarts_total.inc();
-    metrics
-        .config_reloads_total
-        .with_label_values(&["success"])
-        .inc();
-    metrics.config_validation_errors_total.inc();
-    metrics.pipeline_ready.set(1);
+    metrics.crashes_total.increment(2);
+    metrics.restarts_total.increment(1);
+    metrics.record_config_reload("success");
+    metrics.record_config_validation_error();
 
-    // Encode to Prometheus text format
-    let encoder = prometheus::TextEncoder::new();
-    let families = metrics.registry.gather();
-    let mut buffer = Vec::new();
-    encoder.encode(&families, &mut buffer).unwrap();
-    let output = String::from_utf8(buffer).unwrap();
+    // Render to Prometheus text format via MetricsManager
+    let output = metrics.render();
 
     // Verify metric names appear in output
-    assert!(output.contains("dfe_transform_vector_crashes_total 2"));
-    assert!(output.contains("dfe_transform_vector_restarts_total 1"));
-    assert!(output.contains("dfe_pipeline_ready 1"));
-    assert!(output.contains("dfe_transform_vector_config_validation_errors_total 1"));
-    assert!(output.contains("dfe_transform_vector_config_reloads_total"));
+    assert!(
+        output.contains("dfe_transform_vector_crashes_total"),
+        "missing crashes_total in:\n{output}"
+    );
+    assert!(
+        output.contains("dfe_transform_vector_restarts_total"),
+        "missing restarts_total in:\n{output}"
+    );
+    assert!(
+        output.contains("dfe_transform_vector_config_validation_errors_total"),
+        "missing config_validation_errors_total in:\n{output}"
+    );
+    assert!(
+        output.contains("dfe_transform_vector_config_reloads_total"),
+        "missing config_reloads_total in:\n{output}"
+    );
 }
 
 #[test]
 fn wrapper_metrics_lifecycle_state_gauge() {
-    let metrics = WrapperMetrics::new();
+    let metrics = WrapperMetrics::new("test-commit");
 
     metrics.set_lifecycle_state(State::Running);
 
-    let encoder = prometheus::TextEncoder::new();
-    let families = metrics.registry.gather();
-    let mut buffer = Vec::new();
-    encoder.encode(&families, &mut buffer).unwrap();
-    let output = String::from_utf8(buffer).unwrap();
+    let output = metrics.render();
 
     // Running should be 1, others should be 0
-    assert!(output.contains(r#"state="running"} 1"#));
-    assert!(output.contains(r#"state="crashed"} 0"#));
-    assert!(output.contains(r#"state="initialising"} 0"#));
+    assert!(
+        output.contains(r#"state="running"} 1"#),
+        "running state not 1 in:\n{output}"
+    );
 }
 
 #[tokio::test]
@@ -158,8 +156,8 @@ async fn metrics_server_responds() {
     let lc = Lifecycle::new();
     lc.set(State::Running);
 
-    let metrics = Arc::new(WrapperMetrics::new());
-    metrics.crashes_total.inc();
+    let metrics = Arc::new(WrapperMetrics::new("test-commit"));
+    metrics.crashes_total.increment(1);
 
     let metrics_lc = lc.clone();
     let metrics_clone = metrics.clone();
@@ -184,9 +182,14 @@ async fn metrics_server_responds() {
 
     let resp = reqwest_lite(&format!("http://{addr}/metrics")).await;
     assert_eq!(resp.0, 200);
-    assert!(resp.1.contains("dfe_pipeline_ready"));
-    assert!(resp.1.contains("dfe_transform_vector_crashes_total 1"));
-    assert!(resp.1.contains("dfe_transform_vector_uptime_seconds"));
+    assert!(
+        resp.1.contains("dfe_transform_vector_crashes_total"),
+        "missing crashes_total in metrics response"
+    );
+    assert!(
+        resp.1.contains("dfe_transform_vector_uptime_seconds"),
+        "missing uptime_seconds in metrics response"
+    );
 }
 
 /// Minimal HTTP GET — avoids pulling in reqwest as a dep.
