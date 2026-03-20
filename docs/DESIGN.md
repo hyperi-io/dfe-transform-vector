@@ -77,7 +77,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 descriptor = ServiceDescriptor(
     name="transform-vector",
     display_name="DFE Transform - Vector",
-    image="harbor.hyperi.io/dfe/dfe-transform-vector",
+    image="ghcr.io/hyperi-io/dfe-transform-vector",
     default_port=9000,
     metrics_port=9090,
     kafka_role=KafkaRole.BOTH,
@@ -221,33 +221,26 @@ During config reload, readiness stays healthy (old config still running). During
 **Wrapper metrics** (emitted by the Rust binary):
 
 ```
+# DFE platform standard
+dfe_pipeline_ready 1                          # 1=ready, 0=not ready
+
 # Process lifecycle
-dfe_transform_vector_info{version="1.0.0", vector_version="0.48.0"} 1
-dfe_transform_vector_up 1
 dfe_transform_vector_lifecycle_state{state="running"} 1
 dfe_transform_vector_uptime_seconds 3600
 
 # Subprocess health
 dfe_transform_vector_crashes_total 0
 dfe_transform_vector_restarts_total 1
-dfe_transform_vector_crash_backoff_seconds 0
 
 # Config management
 dfe_transform_vector_config_reloads_total{result="success"} 5
 dfe_transform_vector_config_reloads_total{result="failure"} 0
 dfe_transform_vector_config_validation_errors_total 0
-dfe_transform_vector_config_last_reload_timestamp_seconds 1709500000
-
-# Scaling signal (KEDA-compatible)
-dfe_transform_vector_scaling_pressure 0.45
-
-# Vector binary version tracking
-dfe_transform_vector_vector_version_info{
-    pinned="0.48.0",
-    running="0.48.0",
-    latest_known="0.49.1"
-} 1
 ```
+
+Transport-level metrics (`dfe_transport_*`, `dfe_records_*`) come from Vector's
+internal prometheus_exporter via the metrics proxy — the wrapper doesn't handle
+Kafka I/O directly.
 
 **Proxied Vector metrics** (from Vector's `prometheus_exporter` sink on :9598, merged into our :9090 endpoint):
 
@@ -263,19 +256,12 @@ vector_kafka_consumer_offset_lag{...} 200
 
 The combined `/metrics` endpoint gives Prometheus a single scrape target that shows both wrapper state and Vector pipeline state.
 
-### 4.4 Scaling Pressure
+### 4.4 Scaling
 
-Like dfe-loader, we expose a `scaling_pressure` gauge (0.0–1.0) that KEDA can use:
-
-```
-scaling_pressure = max(
-    kafka_consumer_lag_pressure,     # from Vector's kafka lag metrics
-    memory_pressure,                 # buffer byte size / configured limit
-    error_rate_pressure,             # component_errors / events_in over window
-)
-```
-
-This is derived by polling Vector's `/metrics` endpoint and computing the composite signal — same pattern as dfe-loader.
+KEDA scales based on Kafka consumer lag (ScaledObject targets the consumer group
+directly). The wrapper exposes `dfe_pipeline_ready` as a basic readiness signal.
+Composite scaling pressure (weighted Kafka lag + memory + error rate) is planned
+for a future release via the rustlib `scaling` feature.
 
 ---
 
@@ -364,8 +350,6 @@ sources:
     group_id: dfe-transform-vector-syslog-enrichment
     decoding:
       codec: json
-    acknowledgements:
-      enabled: true
     sasl:
       enabled: true
       mechanism: SCRAM-SHA-512
@@ -443,12 +427,10 @@ Config change detected (file watcher or SIGHUP)
   │   ├─ If invalid: log error, increment metric, keep old config
   │   └─ Emit config_reloads_total{result=success|failure}
   │
-  └─ Source/sink change (unsafe — requires restart)
-      ├─ Re-read full config
-      ├─ Re-generate source + sink YAML
-      ├─ Re-run full validation
-      ├─ If valid: graceful Vector restart (SIGTERM → wait → respawn)
-      └─ If invalid: log error, keep old config
+  └─ Any other config change (unsafe — requires pod restart)
+      ├─ Log warning: "config change requires pod restart"
+      ├─ Emit config_reloads_total{result="restart_required"}
+      └─ Keep old config running — operator must restart the pod
 ```
 
 ---
@@ -458,16 +440,14 @@ Config change detected (file watcher or SIGHUP)
 ### 6.1 Lifecycle States
 
 ```
-Initializing ──► Validating ──► Starting ──► Running ──► ShuttingDown
-                     │                          │
-                     │                          ├──► Reloading ──► Running
-                     │                          │
-                     ▼                          ▼
-                ConfigError               Crashed ──► Restarting ──► Running
-                (terminal)                   │
-                                             ▼
-                                        MaxCrashes
-                                        (terminal — pod restarts via K8s)
+Initialising ──► Validating ──► Starting ──► Running ──► ShuttingDown
+                                                │
+                                                ├──► Reloading ──► Running
+                                                │
+                                                ▼
+                                             Crashed
+                                           (wrapper restarts Vector with backoff;
+                                            K8s handles pod-level restart)
 ```
 
 ### 6.2 Signal Handling
@@ -554,16 +534,9 @@ vector:
 | `warn` | Log warning, emit metric, continue. For dev/staging. |
 | `disabled` | Skip check entirely. |
 
-**Metric:**
-```
-dfe_transform_vector_vector_version_info{
-    pinned="0.48.0",
-    running="0.48.0",
-    latest_known="0.49.1"
-} 1
-
-dfe_transform_vector_vector_version_mismatch 0  # 1 if pinned != running
-```
+Version check failures are logged at startup. No runtime version metrics are
+currently emitted — this is deferred until the rustlib `version-check` feature
+is adopted.
 
 ### 7.2 Version Update Strategy
 
@@ -582,23 +555,23 @@ Coupling:           None — wrapper is version-      Binary in /usr/local/bin/
 
 **Dockerfile pattern:**
 
-```dockerfile
-# Stage 1: Rust build (changes rarely)
-FROM rust:bookworm AS builder
-COPY . /build
-RUN cargo build --release
+The Dockerfile is generated via `emit-dockerfile` from the `DeploymentContract`.
+CI builds the Rust binary externally (cross-compile amd64 + arm64), then the
+Dockerfile copies it into the runtime image alongside the Vector binary.
 
-# Stage 2: Vector binary (changes on Vector releases)
-FROM debian:bookworm-slim AS vector
+```dockerfile
+# Runtime image — CI builds the binary externally
+FROM ubuntu:24.04
 ARG VECTOR_VERSION=0.48.0
 ARG TARGETARCH
-RUN curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${TARGETARCH}-unknown-linux-gnu.tar.gz" \
-    | tar xz -C /usr/local/bin --strip-components=2 "./vector-${TARGETARCH}-unknown-linux-gnu/bin/vector"
 
-# Stage 3: Runtime
-FROM debian:bookworm-slim
-COPY --from=builder /build/target/release/dfe-transform-vector /usr/local/bin/
-COPY --from=vector /usr/local/bin/vector /usr/local/bin/
+# Vector binary from official release
+COPY vector /usr/local/bin/vector
+
+# Wrapper binary (built by CI, copied in)
+COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
+
+RUN mkdir -p /var/lib/vector /var/run/vector/config
 USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/dfe-transform-vector"]
 ```
@@ -632,17 +605,11 @@ Each CI build validates the wrapper against the pinned Vector version:
 
 ### 7.4 Version Drift Detection
 
-For deployed instances, the wrapper periodically (daily) checks for known Vector releases and exposes the information as a metric:
-
-```
-dfe_transform_vector_vector_version_info{
-    pinned="0.48.0",
-    running="0.48.0",
-    latest_known="0.49.1"
-} 1
-```
-
-This is **informational only** — no auto-update at runtime. The metric enables Grafana alerts ("Vector is N versions behind") that feed into the upgrade decision. Actual upgrades happen through the image build pipeline.
+Version drift is detected at startup via the `version_check` config setting. The
+wrapper runs `vector --version`, parses the output, and compares against the
+pinned version. In `strict` mode, a mismatch prevents startup. In `warn` mode,
+it logs and continues. Periodic release checking is not implemented — version
+tracking is a container image pipeline concern.
 
 ---
 
@@ -706,6 +673,22 @@ Vector's Kafka source with `acknowledgements: true` only commits offsets after d
 
 The wrapper does not touch the data path — it only manages config and process lifecycle.
 
+### 8.5 Memory Backpressure (MemoryGuard)
+
+**Not applicable to this project.** The `hyperi-rustlib` `MemoryGuard` provides
+cgroup-aware memory backpressure for services that buffer data in-process
+(dfe-receiver, dfe-loader, dfe-transform-vrl, dfe-fetcher, dfe-archiver).
+
+dfe-transform-vector does not buffer data — Vector manages all Kafka I/O,
+buffering, and memory allocation as an independent subprocess. The Rust
+wrapper's own memory footprint is constant and negligible (config structs,
+HTTP servers, prometheus registry). Vector's memory is controlled via its
+own `buffer` config (`max_events`, `max_size`) and container resource limits.
+
+If the wrapper ever adds its own data buffering, `MemoryGuard` should be
+adopted at that point using pattern D (transport backpressure) from the
+DFE remediation guide.
+
 ---
 
 ## 9. Helm Chart
@@ -736,7 +719,7 @@ No dependency on the official Vector Helm chart. This is a purpose-built chart f
 Matches what dfe-engine's HelmValuesCompiler generates:
 
 ```yaml
-image: harbor.hyperi.io/dfe/dfe-transform-vector
+image: ghcr.io/hyperi-io/dfe-transform-vector
 imageTag: "1.0.0"
 replicas: 2
 

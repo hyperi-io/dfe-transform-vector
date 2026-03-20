@@ -217,35 +217,25 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     lifecycle.set(State::Initialising);
 
     // Check Vector binary version
-    match check_vector_version(&config.vector).await {
-        Ok(version) => {
-            if !version.is_empty() {
-                info!(vector_version = %version, "Vector binary version detected");
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Vector version check failed");
-            std::process::exit(1);
-        }
+    let version = check_vector_version(&config.vector).await?;
+    if !version.is_empty() {
+        info!(vector_version = %version, "Vector binary version detected");
     }
 
     // Assemble Vector config directory
     lifecycle.set(State::Validating);
     let config_dir = PathBuf::from(assembler::DEFAULT_CONFIG_DIR);
-    if let Err(e) = assembler::assemble(&config, &config_dir) {
-        error!(error = %e, "failed to assemble Vector config");
-        std::process::exit(1);
-    }
+    assembler::assemble(&config, &config_dir)?;
 
     // Run vector validate on assembled config
-    if let Err(e) = vector_validate(&config.vector, &config_dir).await {
-        error!(error = %e, "Vector config validation failed");
-        std::process::exit(1);
-    }
+    vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
 
-    // Wrapper metrics
-    let metrics = Arc::new(WrapperMetrics::new());
+    // Install global metrics recorder (must be before DfeMetrics::register)
+    let _metrics_mgr = hyperi_rustlib::metrics::MetricsManager::new("dfe");
+
+    // Wrapper metrics with DfeMetrics dual-emit
+    let metrics = Arc::new(WrapperMetrics::new().with_dfe_metrics());
     let started_at = Instant::now();
 
     // Shutdown signal channel
@@ -288,6 +278,7 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     // Signal handler: SIGTERM/SIGINT → shutdown, SIGHUP → manual reload
     let shutdown_tx_signal = shutdown_tx.clone();
     let reload_tx_signal = reload_tx.clone();
+    #[allow(clippy::unwrap_used)]
     tokio::spawn(async move {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
@@ -357,7 +348,11 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     }
 
     // Update final metrics
-    metrics.set_lifecycle_state(lifecycle.state());
+    let final_state = lifecycle.state();
+    metrics.set_lifecycle_state(final_state);
+    metrics
+        .pipeline_ready
+        .set(i64::from(final_state.is_ready()));
 
     info!("shutdown complete");
     Ok(())

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/integration_fixtures.rs
 // Purpose:   Tests that exercise the fixture config and transform library

@@ -9,7 +9,7 @@ CI is live via `hyperi-ci`. Run `hyperi-ci check` (or `make check`) locally befo
 **Project:** dfe-transform-vector
 **Purpose:** Rust wrapper that manages Vector.dev as a subprocess for Kafka→transform→Kafka pipelines, making Vector a first-class DFE platform citizen alongside dfe-loader and dfe-receiver.
 
-> **Note:** The `ai/` submodule provides standards and configuration - not code
+> **Note:** The `hyperi-ai/` submodule provides standards and configuration - not code
 > to import. Your project never imports or links to it.
 
 ---
@@ -49,7 +49,7 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 1. **Config Engine** (`src/config/`) - Big-dial config loading (7-layer cascade via hyperi-rustlib), source/sink YAML generation, transform loading, DAG wiring and validation
 2. **Process Manager** (`src/vector/`) - Vector subprocess lifecycle: spawn, signal forwarding, crash recovery with backoff, health polling
 3. **Observability Server** (`src/health.rs`, `src/metrics.rs`) - HTTP server exposing `/health/live`, `/health/ready`, `/metrics` (wrapper + proxied Vector metrics), KEDA scaling pressure signal
-4. **Helm Chart** (`chart/`) - Purpose-built chart (not the official Vector chart), generates StatefulSet, Service, ConfigMaps, PodMonitor, KEDA ScaledObject
+4. **Helm Chart** (`chart/`) - Purpose-built chart (not the official Vector chart), generates Deployment, Service, ConfigMap, KEDA ScaledObject
 5. **dfe-engine Plugin** - Python ServicePlugin (ServiceDescriptor, Pydantic config model, deployment config) registered via entry point for unified management
 
 ### Tech Stack
@@ -78,7 +78,7 @@ A Rust binary (`dfe-transform-vector`) runs as PID 1 in a K8s pod. It:
 ### Drop the Official Vector Helm Chart
 
 **Decision:** Write our own Helm chart instead of using timberio/vector
-**Rationale:** The chart adds almost no value for our use case — we always deploy as StatefulSet, generate our own config, handle our own probes. Its defaults are empty (no probes, no init containers). Our chart matches dfe-loader/dfe-receiver patterns exactly.
+**Rationale:** The chart adds almost no value for our use case — we generate our own config and handle our own probes. Its defaults are empty (no probes, no init containers). Our chart matches dfe-loader/dfe-receiver patterns exactly.
 **Alternatives considered:** Continuing with official chart + heavy overrides — rejected because overrides already replicate 90% of the chart.
 
 ### Same Management Interface as dfe-loader/dfe-receiver

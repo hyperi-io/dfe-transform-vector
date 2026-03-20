@@ -28,11 +28,6 @@ use_field_init_shorthand = true
 # Use try! shorthand: ? instead of try!()
 use_try_shorthand = true
 
-# --- Nightly-only options (uncomment when using nightly rustfmt) ---
+# Nightly-only (uncomment when stable rustfmt supports these)
 # imports_granularity = "Module"
 # group_imports = "StdExternalCrate"
-# blank_lines_upper_bound = 1
-# format_strings = false
-# format_macro_matchers = true
-# format_macro_bodies = true
-# normalize_doc_attributes = true

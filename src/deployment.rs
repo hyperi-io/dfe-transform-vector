@@ -23,6 +23,7 @@ use hyperi_rustlib::deployment::{
 /// - Dockerfile (runtime image with appuser, health check, ports)
 /// - Helm chart (Deployment, Service, ConfigMap, Secret, KEDA, HPA)
 /// - Docker Compose fragment (local dev)
+#[must_use]
 pub fn contract() -> DeploymentContract {
     DeploymentContract {
         app_name: "dfe-transform-vector".into(),
@@ -131,6 +132,7 @@ pub fn contract() -> DeploymentContract {
 ///
 /// Calls the standard `generate_dockerfile()` and inserts Vector-specific
 /// lines (binary COPY, data directories) before the USER directive.
+#[must_use]
 pub fn emit_dockerfile() -> String {
     let contract = contract();
     let base = hyperi_rustlib::deployment::generate_dockerfile(&contract);

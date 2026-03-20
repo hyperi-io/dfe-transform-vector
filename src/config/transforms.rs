@@ -103,10 +103,6 @@ fn load_files(paths: &[PathBuf]) -> Result<Vec<LoadedTransform>> {
     Ok(transforms)
 }
 
-// =========================================================================
-// Tests
-// =========================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
