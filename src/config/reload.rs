@@ -196,11 +196,8 @@ pub async fn run_reload_loop(
             Ok(c) => c,
             Err(e) => {
                 error!(error = %e, "failed to re-load config during reload");
-                metrics
-                    .config_reloads_total
-                    .with_label_values(&["error"])
-                    .inc();
-                metrics.config_validation_errors_total.inc();
+                metrics.record_config_reload("error");
+                metrics.record_config_validation_error();
                 continue;
             }
         };
@@ -208,11 +205,8 @@ pub async fn run_reload_loop(
         // Validate new config
         if let Err(e) = new_config.validate() {
             error!(error = %e, "new config validation failed during reload");
-            metrics
-                .config_reloads_total
-                .with_label_values(&["error"])
-                .inc();
-            metrics.config_validation_errors_total.inc();
+            metrics.record_config_reload("error");
+            metrics.record_config_validation_error();
             security::input_validation_failure("config_reload", &e.to_string(), None);
             continue;
         }
@@ -229,10 +223,7 @@ pub async fn run_reload_loop(
                     "non-transform config changed — requires pod restart. \
                      Only transform YAML file changes can be hot-reloaded."
                 );
-                metrics
-                    .config_reloads_total
-                    .with_label_values(&["rejected"])
-                    .inc();
+                metrics.record_config_reload("rejected");
                 continue;
             }
             ChangeKind::TransformsOnly => {
@@ -246,10 +237,7 @@ pub async fn run_reload_loop(
         // Re-assemble config directory
         if let Err(e) = assembler::assemble(&new_config, &config_dir) {
             error!(error = %e, "failed to re-assemble config during reload");
-            metrics
-                .config_reloads_total
-                .with_label_values(&["error"])
-                .inc();
+            metrics.record_config_reload("error");
             lifecycle.set(State::Running);
             continue;
         }
@@ -257,11 +245,8 @@ pub async fn run_reload_loop(
         // Re-validate with vector validate
         if let Err(e) = vector_validate(&new_config.vector, &config_dir).await {
             error!(error = %e, "vector validate failed during reload");
-            metrics
-                .config_reloads_total
-                .with_label_values(&["error"])
-                .inc();
-            metrics.config_validation_errors_total.inc();
+            metrics.record_config_reload("error");
+            metrics.record_config_validation_error();
             // Re-assemble with old config to restore
             let _ = assembler::assemble(&current_config, &config_dir);
             lifecycle.set(State::Running);
@@ -278,10 +263,7 @@ pub async fn run_reload_loop(
             Some(pid) => {
                 if let Err(e) = send_sighup(pid) {
                     error!(error = %e, "failed to send SIGHUP to Vector");
-                    metrics
-                        .config_reloads_total
-                        .with_label_values(&["error"])
-                        .inc();
+                    metrics.record_config_reload("error");
                     lifecycle.set(State::Running);
                     continue;
                 }
@@ -299,10 +281,7 @@ pub async fn run_reload_loop(
         lifecycle.set(State::Running);
 
         info!("config hot-reload completed successfully");
-        metrics
-            .config_reloads_total
-            .with_label_values(&["success"])
-            .inc();
+        metrics.record_config_reload("success");
         security::config_changed(
             "config_reload",
             "system",
