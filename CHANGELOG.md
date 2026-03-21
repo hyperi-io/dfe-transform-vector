@@ -1,3 +1,10 @@
+# [1.0.0-dev.7](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.6...v1.0.0-dev.7) (2026-03-21)
+
+
+### Bug Fixes
+
+* inline Renovate config (preset resolution broken) ([208d9ab](https://github.com/hyperi-io/dfe-transform-vector/commit/208d9ab2123e05a6a6351f48654aee00fac4544b))
+
 # [1.0.0-dev.6](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.5...v1.0.0-dev.6) (2026-03-20)
 
 
