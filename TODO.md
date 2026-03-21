@@ -228,12 +228,15 @@
 
 ---
 
-## Parked — Waiting on hyperi-rustlib
+## Completed (Metrics Migration)
 
-- [ ] Migrate metrics to rustlib DFE metric extensions (dual-emit old + new names)
-- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature
-- [ ] Add `dfe_pipeline_ready` gauge (standard metric, replaces `dfe_transform_vector_up`)
+- [x] Migrate metrics from `prometheus` crate to `metrics` crate + `MetricsManager`
+- [x] Add `AppMetrics` (info, start_time, config_reloads) from dfe_groups
+- [x] Add `DfeMetrics` dual-emit (`dfe_pipeline_ready` gauge)
+- [x] Bump rustlib to >=1.18 with `metrics-dfe` feature
+- [x] Rustlib capability review — bespoke metrics replaced with standard patterns
 
 ## Backlog
 
-- [ ] Rustlib capability review — audit bespoke code for functions now available in rustlib (config, http-server, metrics, scaling, etc.)
+- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (when ready)
+- [ ] Dual-mode e2e test infrastructure (docker + remote Kafka)
