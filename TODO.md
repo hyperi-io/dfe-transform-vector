@@ -238,5 +238,8 @@
 
 ## Backlog
 
-- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (when ready)
-- [ ] Dual-mode e2e test infrastructure (docker + remote Kafka)
+- [ ] Update hyperi-ai submodule
+- [ ] Documentation review (use `/doco` skill)
+- [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
+- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (blocked: waiting for rustlib v1.19 with `RenderHandle` on crates.io — CI queued)
+- [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented
