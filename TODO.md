@@ -236,10 +236,18 @@
 - [x] Bump rustlib to >=1.18 with `metrics-dfe` feature
 - [x] Rustlib capability review — bespoke metrics replaced with standard patterns
 
+## Completed (Test Restructuring)
+
+- [x] Restructured tests to HyperI testing standards (single-binary integration pattern)
+- [x] Created `scripts/fetch-vector.sh` (auto-download Vector binary for tests)
+- [x] Added `vector_binary_path()` OnceLock helper + `skip_if_no_vector!` macro
+- [x] Added 28 new tests: smoke (14), deployment (5), metrics (9), reload (2), CLI (6), health JSON (2), edge cases (5)
+- [x] AI trap audit: added malformed YAML, empty file, unknown fields, Reloading readiness, ShuttingDown state tests
+- [x] DFE Metrics Survey (`~/DFE-METRICS-SURVEY.md`) — all 7 Rust apps inventoried
+
 ## Backlog
 
-- [ ] Update hyperi-ai submodule
 - [ ] Documentation review (use `/doco` skill)
 - [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
-- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (blocked: waiting for rustlib v1.19 with `RenderHandle` on crates.io — CI queued)
+- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (unblocked: rustlib v1.19 with `RenderHandle` on crates.io)
 - [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented
