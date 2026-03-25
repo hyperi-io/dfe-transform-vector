@@ -1,3 +1,11 @@
+# [1.0.0-dev.8](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.7...v1.0.0-dev.8) (2026-03-25)
+
+
+### Bug Fixes
+
+* migrate health/metrics to rustlib HttpServer, add version-check, bump to >=1.19 ([95efad6](https://github.com/hyperi-io/dfe-transform-vector/commit/95efad6fd88d95699119745805857d6e40ebf83a))
+* restructure tests to HyperI standards, add smoke and edge-case coverage ([b6d212e](https://github.com/hyperi-io/dfe-transform-vector/commit/b6d212e425e9ddd92661140cd12ef8d047dba8d2))
+
 # [1.0.0-dev.7](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.6...v1.0.0-dev.7) (2026-03-21)
 
 
