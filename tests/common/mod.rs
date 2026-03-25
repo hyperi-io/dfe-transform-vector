@@ -94,6 +94,7 @@ pub fn kafka_admin(config: &KafkaConfig) -> KafkaAdmin {
 }
 
 /// Skip test if Kafka is not reachable in the current test mode.
+#[allow(unused_macros)]
 macro_rules! skip_if_no_kafka {
     () => {
         let kf = $crate::common::kafka_test_config();
@@ -108,4 +109,92 @@ macro_rules! skip_if_no_kafka {
     };
 }
 
+#[allow(unused_imports)]
 pub(crate) use skip_if_no_kafka;
+
+/// Resolve the Vector binary path via fetch script or system PATH.
+///
+/// Tries `scripts/fetch-vector.sh` first (downloads and caches in `.tmp/`),
+/// falls back to `vector` on system PATH. Returns `None` if unavailable.
+/// Uses `OnceLock` so the fetch runs at most once per test binary.
+pub fn vector_binary_path() -> Option<&'static std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::OnceLock;
+
+    static BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
+    BIN.get_or_init(|| {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fetch-vector.sh");
+        if script.exists()
+            && let Ok(output) = Command::new("bash").arg(&script).output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(last_line) = stdout.trim().lines().last() {
+                let p = PathBuf::from(last_line);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+        // Fallback: system PATH
+        Command::new("vector")
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|_| PathBuf::from("vector"))
+    })
+    .as_ref()
+}
+
+/// Skip test if Vector binary is not available.
+#[allow(unused_macros)]
+macro_rules! skip_if_no_vector {
+    () => {
+        if $crate::common::vector_binary_path().is_none() {
+            eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+            return;
+        }
+    };
+}
+
+#[allow(unused_imports)]
+pub(crate) use skip_if_no_vector;
+
+/// Minimal HTTP GET — avoids pulling in reqwest as a dep.
+pub async fn reqwest_lite(url: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let url = url.strip_prefix("http://").unwrap();
+    let (host_port, path) = url.split_once('/').unwrap_or((url, ""));
+    let path = format!("/{path}");
+
+    let mut stream = TcpStream::connect(host_port).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+
+    let status_line = response.lines().next().unwrap_or("");
+    let status_code: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
+
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+
+    (status_code, body)
+}
+
+/// Get a free port by binding to :0, extracting the address, then dropping the listener.
+pub async fn free_port() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    addr.to_string()
+}

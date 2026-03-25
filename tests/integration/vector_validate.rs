@@ -1,6 +1,5 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
-// File:      tests/integration_vector_validate.rs
+// File:      tests/integration/vector_validate.rs
 // Purpose:   Integration tests that run vector validate against assembled configs
 // Language:  Rust
 //
@@ -12,7 +11,8 @@
 //! Assembles full configs with Kafka source, transforms, and Kafka sink,
 //! then runs `vector validate --config-dir` to verify Vector accepts them.
 //!
-//! Requires the `vector` binary on PATH.
+//! Uses `scripts/fetch-vector.sh` to auto-download the Vector binary (cached
+//! in `.tmp/vector/`). Falls back to system PATH. Skips gracefully if unavailable.
 //! Run with: `cargo nextest run -E 'test(vector_validate)' --run-ignored all`
 
 use std::fs;
@@ -26,11 +26,9 @@ use dfe_transform_vector::config::loader::{
 };
 use tempfile::TempDir;
 
-const FIXTURE_TRANSFORMS: &str = "tests/fixtures/transforms";
+use crate::common;
 
-fn vector_available() -> bool {
-    Command::new("vector").arg("--version").output().is_ok()
-}
+const FIXTURE_TRANSFORMS: &str = "tests/fixtures/transforms";
 
 fn build_config(buffer: BufferConfig) -> (Config, TempDir) {
     let work_dir = TempDir::new().expect("failed to create work dir");
@@ -78,6 +76,9 @@ fn build_config(buffer: BufferConfig) -> (Config, TempDir) {
 }
 
 fn assemble_and_validate(config: &Config, work_dir: &Path) -> std::process::Output {
+    let vector_bin = common::vector_binary_path()
+        .expect("Vector binary should be available (checked by caller)");
+
     let config_dir = work_dir.join("config");
     assembler::assemble(config, &config_dir).expect("assembly should succeed");
 
@@ -99,7 +100,7 @@ fn assemble_and_validate(config: &Config, work_dir: &Path) -> std::process::Outp
     assert_eq!(transform_count, 5, "expected 5 transform files");
 
     // Run vector validate (--no-environment skips health checks since Kafka isn't running)
-    Command::new("vector")
+    Command::new(vector_bin)
         .arg("validate")
         .arg("--no-environment")
         .arg("--config-dir")
@@ -112,10 +113,7 @@ fn assemble_and_validate(config: &Config, work_dir: &Path) -> std::process::Outp
 #[test]
 #[ignore] // requires Vector binary — run with: cargo nextest run -E 'test(vector_validate)' --run-ignored all
 fn vector_validate_full_chain_memory_buffer() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let buffer = BufferConfig {
         buffer_type: "memory".to_string(),
@@ -139,10 +137,7 @@ fn vector_validate_full_chain_memory_buffer() {
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_disk_buffer() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let buffer = BufferConfig {
         buffer_type: "disk".to_string(),
@@ -166,10 +161,7 @@ fn vector_validate_full_chain_disk_buffer() {
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_drop_newest() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let buffer = BufferConfig {
         buffer_type: "memory".to_string(),
@@ -193,10 +185,7 @@ fn vector_validate_full_chain_drop_newest() {
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_default_buffer() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let (config, work_dir) = build_config(BufferConfig::default());
     let output = assemble_and_validate(&config, work_dir.path());
@@ -213,10 +202,7 @@ fn vector_validate_full_chain_default_buffer() {
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_sasl_tls() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let work_dir = TempDir::new().expect("failed to create work dir");
     let data_dir = work_dir.path().join("data");
@@ -298,7 +284,9 @@ fn vector_validate_full_chain_sasl_tls() {
         "security.protocol missing from sink"
     );
 
-    let output = Command::new("vector")
+    let vector_bin = common::vector_binary_path()
+        .expect("Vector binary should be available (checked by caller)");
+    let output = Command::new(vector_bin)
         .arg("validate")
         .arg("--no-environment")
         .arg("--config-dir")
@@ -321,10 +309,7 @@ fn vector_validate_full_chain_sasl_tls() {
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_sasl_tls_skip_verify() {
-    if !vector_available() {
-        eprintln!("skipping: Vector binary not available");
-        return;
-    }
+    common::skip_if_no_vector!();
 
     let work_dir = TempDir::new().expect("failed to create work dir");
     let data_dir = work_dir.path().join("data");
@@ -410,7 +395,9 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         "librdkafka ssl cert verification not disabled in sink"
     );
 
-    let output = Command::new("vector")
+    let vector_bin = common::vector_binary_path()
+        .expect("Vector binary should be available (checked by caller)");
+    let output = Command::new(vector_bin)
         .arg("validate")
         .arg("--no-environment")
         .arg("--config-dir")

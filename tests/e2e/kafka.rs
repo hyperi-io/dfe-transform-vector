@@ -1,6 +1,5 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
-// File:      tests/e2e_kafka.rs
+// File:      tests/e2e/kafka.rs
 // Purpose:   End-to-end Kafka pipeline test (dual-mode: docker/remote)
 // Language:  Rust
 //
@@ -18,8 +17,6 @@
 //! - `remote` — devex cluster from env vars (SASL_SSL)
 //!
 //! Also requires the `vector` binary on PATH.
-
-mod common;
 
 use std::fs;
 use std::process::Command;
@@ -124,19 +121,19 @@ fn build_test_config(kf: &KafkaConfig, transforms_dir: &str) -> Config {
 
 #[tokio::test]
 async fn e2e_kafka_produce_transform_consume() {
-    common::skip_if_no_kafka!();
+    crate::common::skip_if_no_kafka!();
 
     if !vector_available() {
         eprintln!("skipping: Vector binary not available");
         return;
     }
 
-    let kf = common::kafka_test_config();
-    let mode = common::TestMode::detect();
+    let kf = crate::common::kafka_test_config();
+    let mode = crate::common::TestMode::detect();
     eprintln!("TEST_MODE={mode:?}, brokers={:?}", kf.brokers);
 
     // Create topics via rustlib KafkaAdmin (skip if ACLs prevent it)
-    let admin = common::kafka_admin(&kf);
+    let admin = crate::common::kafka_admin(&kf);
     if let Err(e) = admin
         .create_topics(&[(SOURCE_TOPIC, 1, 1), (SINK_TOPIC, 1, 1)])
         .await
