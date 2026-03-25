@@ -8,32 +8,26 @@
 
 //! Prometheus metrics endpoint (`/metrics`).
 //!
-//! HTTP server exposing wrapper metrics and (when available) proxied
-//! Vector internal metrics from the prometheus_exporter sink on :9598.
+//! Uses rustlib `HttpServer` (axum) for the HTTP transport with a custom
+//! `/metrics` route that renders wrapper metrics AND proxies Vector's
+//! internal prometheus_exporter output from `:9598`.
 //!
-//! Uses `MetricsManager` from hyperi-rustlib for the Prometheus recorder
-//! and `metrics` crate macros for recording. Service-specific metrics use
-//! `dfe_transform_vector_` prefix. Transport-level metrics come from
-//! Vector's internal prometheus_exporter via the metrics proxy.
+//! Wrapper metrics use `dfe_transform_vector_` prefix for service-specific
+//! counters. The `dfe_pipeline_ready` gauge follows the DFE platform
+//! standard. Transport-level metrics (`dfe_transport_*`, `dfe_records_*`)
+//! come from Vector's internal prometheus_exporter via the metrics proxy.
 
-use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
-use metrics::{Counter, Gauge};
-use tokio::net::TcpListener;
-use tracing::{debug, error, info};
-
+use hyperi_rustlib::http_server::{
+    HttpServer, HttpServerConfig, IntoResponse, Response, Router, State as AxumState, get,
+};
 use hyperi_rustlib::metrics::MetricsManager;
 use hyperi_rustlib::metrics::dfe::DfeMetrics;
 use hyperi_rustlib::metrics::dfe_groups::AppMetrics;
+use metrics::{Counter, Gauge};
+use tracing::{debug, info};
 
 use crate::Result;
 use crate::vector::Lifecycle;
@@ -144,6 +138,15 @@ impl WrapperMetrics {
     }
 }
 
+/// Shared state for the metrics axum handler.
+#[derive(Clone)]
+struct MetricsState {
+    metrics: Arc<WrapperMetrics>,
+    lifecycle: Lifecycle,
+    started_at: Instant,
+    vector_metrics_address: String,
+}
+
 /// Start the metrics HTTP server.
 ///
 /// Serves `/metrics` with wrapper metrics in Prometheus text format,
@@ -155,92 +158,59 @@ pub async fn serve_metrics(
     started_at: Instant,
     vector_metrics_address: String,
 ) -> Result<()> {
-    let addr: SocketAddr = address
-        .parse()
-        .map_err(|e| crate::Error::Config(format!("invalid metrics address '{address}': {e}")))?;
+    let state = MetricsState {
+        metrics,
+        lifecycle,
+        started_at,
+        vector_metrics_address,
+    };
 
-    let listener = TcpListener::bind(addr).await.map_err(|e| {
-        crate::Error::Config(format!("failed to bind metrics server on {addr}: {e}"))
-    })?;
+    let app = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(state);
 
-    info!(address = %addr, "metrics server listening");
+    let config = HttpServerConfig {
+        bind_address: address.to_string(),
+        enable_health_endpoints: false,
+        enable_metrics_endpoint: false,
+        enable_config_endpoint: false,
+        ..Default::default()
+    };
 
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                error!(error = %e, "metrics server accept error");
-                continue;
-            }
-        };
+    info!(address, "metrics server listening");
 
-        let m = metrics.clone();
-        let lc = lifecycle.clone();
-        let start = started_at;
-        let vec_addr = vector_metrics_address.clone();
-        tokio::spawn(async move {
-            let io = TokioIo::new(stream);
-            let svc = service_fn(move |req| {
-                let m = m.clone();
-                let lc = lc.clone();
-                let vec_addr = vec_addr.clone();
-                async move { handle_metrics(req, &m, &lc, start, &vec_addr).await }
-            });
-            if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
-                debug!(error = %e, "metrics connection error");
-            }
-        });
-    }
+    let server = HttpServer::new(config);
+    server
+        .serve(app)
+        .await
+        .map_err(|e| crate::Error::Config(format!("metrics server error: {e}")))
 }
 
-/// Handle a metrics request.
-async fn handle_metrics(
-    req: Request<hyper::body::Incoming>,
-    metrics: &WrapperMetrics,
-    lifecycle: &Lifecycle,
-    started_at: Instant,
-    vector_metrics_address: &str,
-) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
-    if req.uri().path() != "/metrics" {
-        return Ok(not_found_response());
-    }
-
+/// Handle GET /metrics — render wrapper metrics + proxy Vector metrics.
+async fn metrics_handler(AxumState(state): AxumState<MetricsState>) -> impl IntoResponse {
     // Update dynamic metrics before rendering
-    let state = lifecycle.state();
-    metrics.set_lifecycle_state(state);
-    metrics
+    let lifecycle_state = state.lifecycle.state();
+    state.metrics.set_lifecycle_state(lifecycle_state);
+    state
+        .metrics
         .uptime_seconds
-        .set(started_at.elapsed().as_secs_f64());
+        .set(state.started_at.elapsed().as_secs_f64());
 
     // Render wrapper metrics via MetricsManager
-    let mut output = metrics.render();
+    let mut output = state.metrics.render();
 
     // Proxy Vector's prometheus_exporter metrics (best-effort)
-    if state.is_ready()
-        && let Some(vector_metrics) = fetch_vector_metrics(vector_metrics_address).await
+    if lifecycle_state.is_ready()
+        && let Some(vector_metrics) = fetch_vector_metrics(&state.vector_metrics_address).await
     {
         output.push('\n');
         output.push_str(&vector_metrics);
     }
 
-    Ok(prometheus_response(output.as_bytes()))
-}
-
-/// Build a Prometheus text response.
-fn prometheus_response(body: &[u8]) -> Response<Full<Bytes>> {
     Response::builder()
-        .status(StatusCode::OK)
         .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(Full::new(Bytes::from(body.to_vec())))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("internal error"))))
-}
-
-/// Build a 404 response.
-fn not_found_response() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Full::new(Bytes::from("not found")))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("not found"))))
+        .body(output)
+        .unwrap_or_else(|_| Response::new("internal error".to_string()))
 }
 
 /// Fetch metrics from Vector's prometheus_exporter sink (best-effort).

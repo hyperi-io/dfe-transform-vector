@@ -22,6 +22,14 @@ use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
 use crate::Result;
 
 /// SASL authentication for Kafka.
+///
+/// NOTE: `password` is `String`, not `SensitiveString`, because the config
+/// goes through a figment serialize→merge→deserialize round-trip in
+/// `apply_figment_env()`. `SensitiveString` serialises as `***REDACTED***`
+/// which destroys the value during the round-trip. Password protection is
+/// handled by: (1) `flat_env_string_sensitive` which masks the env var in
+/// logs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`
+/// env-var interpolation — the actual secret never appears in our config.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SaslConfig {
