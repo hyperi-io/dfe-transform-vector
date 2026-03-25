@@ -18,6 +18,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment};
+use hyperi_rustlib::version_check::{VersionCheck, VersionCheckConfig};
 use tracing::{error, info};
 
 use dfe_transform_vector::config::Config;
@@ -217,6 +218,14 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vector"
     );
+
+    // Fire-and-forget startup version check
+    VersionCheck::new(VersionCheckConfig {
+        product: "dfe-transform-vector".into(),
+        current_version: env!("CARGO_PKG_VERSION").into(),
+        ..Default::default()
+    })
+    .check_on_startup();
 
     // Lifecycle state machine
     let lifecycle = Lifecycle::new();

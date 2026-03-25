@@ -245,9 +245,66 @@
 - [x] AI trap audit: added malformed YAML, empty file, unknown fields, Reloading readiness, ShuttingDown state tests
 - [x] DFE Metrics Survey (`~/DFE-METRICS-SURVEY.md`) — all 7 Rust apps inventoried
 
+## Completed (rustlib v1.19 Migration)
+
+- [x] Bumped rustlib to >=1.19 with `config-reload`, `http-server`, `version-check` features
+- [x] Migrated health.rs from bespoke hyper to rustlib `HttpServer` (axum)
+- [x] Migrated metrics.rs `serve_metrics` from bespoke hyper to rustlib `HttpServer` (axum)
+- [x] Removed hyper/hyper-util/http-body-util direct deps (axum comes via rustlib)
+- [x] Wired `VersionCheck::check_on_startup()` in `run_transform_service()`
+- [x] SensitiveString — incompatible with figment serialize round-trip, documented as upstream fix needed
+
+## Planned: Composite Scaling Pressure
+
+Weighted scaling signal combining consumer lag + Vector buffer pressure + error rate.
+Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains primary.
+
+### Data Sources
+
+1. **Consumer lag** (weight 0.5) — rdkafka admin client
+   - Query committed offsets vs high watermark for `config.source.group_id`
+   - Brokers, SASL/TLS from existing config (no new credentials)
+   - rdkafka promoted from dev-dep to full dep (feature-gated)
+
+2. **Buffer pressure** (weight 0.3) — Vector GraphQL API `:8686`
+   - `vector_buffer_byte_size / buffer.max_size` for `dfe_sink` component
+   - HTTP POST to `http://localhost:8686/graphql` with component query
+   - Graceful fail: if Vector API unavailable, skip this component
+
+3. **Error rate** (weight 0.2) — Vector GraphQL API `:8686`
+   - `component_errors_total / events_in_total` over sliding window
+   - Same GraphQL endpoint, same graceful-fail behaviour
+   - Only `dfe_source` and `dfe_sink` components (not internal metrics)
+
+### Implementation
+
+- [ ] `src/scaling.rs` — `ScalingPoller` struct with configurable poll interval (default 30s)
+- [ ] rdkafka admin client for consumer lag (reuse source config for brokers/SASL/TLS)
+- [ ] Vector GraphQL client (raw HTTP POST, no graphql crate — just serde_json)
+- [ ] `weighted_composite()` — normalise each source to 0-100, apply weights
+- [ ] Emit `dfe_scaling_pressure` gauge (already registered via DfeMetrics)
+- [ ] Feature gate: `scaling = ["dep:rdkafka"]` in Cargo.toml
+- [ ] Graceful degradation: each source fails independently, remaining sources re-weight
+- [ ] Tests: mock GraphQL responses, mock Kafka admin responses
+
+### Metrics Emitted
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `dfe_scaling_pressure` | gauge | Composite 0-100 (already registered via DfeMetrics) |
+| `dfe_transform_vector_consumer_lag` | gauge | Sum of partition lags |
+| `dfe_transform_vector_buffer_pressure` | gauge | 0.0-1.0 ratio |
+| `dfe_transform_vector_error_rate` | gauge | Errors/events ratio over window |
+
+### Risks
+
+- Vector GraphQL schema is unversioned — field names may change between releases
+- rdkafka as full dep adds ~2MB binary size and librdkafka runtime requirement
+- Feature-gated mitigates both: disabled by default, KEDA direct lag still works
+
 ## Backlog
 
 - [ ] Documentation review (use `/doco` skill)
 - [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
-- [ ] Migrate health/metrics HTTP servers to rustlib `http-server` feature (unblocked: rustlib v1.19 with `RenderHandle` on crates.io)
+- [x] Migrate health/metrics HTTP servers to rustlib `http-server` feature
 - [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented
