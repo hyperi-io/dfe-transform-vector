@@ -14,13 +14,22 @@
 
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use hyperi_rustlib::logger::security::{self, SecurityEvent, SecurityOutcome};
+use hyperi_rustlib::logger::{log_debounced, log_state_change};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
+
+/// Log spam protection: only log crash events at most once per 10 seconds.
+static CRASH_LOG_DEBOUNCE: AtomicU64 = AtomicU64::new(0);
+
+/// Log spam protection: only log state transitions, not every check cycle.
+static VECTOR_RUNNING: AtomicBool = AtomicBool::new(false);
 
 use super::lifecycle::{Lifecycle, State};
 use crate::Result;
@@ -162,6 +171,9 @@ pub async fn run_lifecycle(
         *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = child.id();
 
         lifecycle.set(State::Running);
+        if log_state_change(&VECTOR_RUNNING, true) {
+            info!("Vector subprocess is running");
+        }
         let started_at = Instant::now();
 
         // Wait for either: child exit or shutdown signal
@@ -184,7 +196,9 @@ pub async fn run_lifecycle(
                 // Shutdown requested — forward SIGTERM to Vector
                 *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 lifecycle.set(State::ShuttingDown);
+                log_state_change(&VECTOR_RUNNING, false);
                 info!("shutdown requested, sending SIGTERM to Vector");
+                security::config_changed("shutdown", "system", "graceful shutdown initiated");
                 let _ = send_signal(&child, Signal::SIGTERM);
 
                 // Wait for child to exit with timeout
@@ -210,13 +224,26 @@ pub async fn run_lifecycle(
         let exit_code = exit_status.code().unwrap_or(-1);
         crash_count += 1;
 
-        error!(
-            exit_code,
-            uptime_secs = uptime.as_secs(),
-            crash_count,
-            "Vector exited unexpectedly"
-        );
+        // Log spam protection: debounce crash logs in tight restart loops
+        if log_debounced(&CRASH_LOG_DEBOUNCE, 10_000) {
+            error!(
+                exit_code,
+                uptime_secs = uptime.as_secs(),
+                crash_count,
+                "Vector exited unexpectedly"
+            );
+        }
 
+        // Security audit trail for subprocess crashes
+        SecurityEvent::new("process.crash", "vector_subprocess", SecurityOutcome::Error)
+            .reason(&format!("exit_code={exit_code}"))
+            .detail(&format!(
+                "crash_count={crash_count}, uptime_secs={}",
+                uptime.as_secs()
+            ))
+            .emit();
+
+        log_state_change(&VECTOR_RUNNING, false);
         lifecycle.set(State::Crashed);
 
         // Reset backoff if Vector ran long enough
