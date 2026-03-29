@@ -213,10 +213,16 @@ async fn metrics_handler(AxumState(state): AxumState<MetricsState>) -> impl Into
         .unwrap_or_else(|_| Response::new("internal error".to_string()))
 }
 
+/// Maximum size for proxied Vector metrics response (10 MiB).
+///
+/// Prevents OOM if Vector's prometheus_exporter returns an unexpectedly
+/// large response (misconfigured labels, high cardinality, etc.).
+const MAX_METRICS_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Fetch metrics from Vector's prometheus_exporter sink (best-effort).
 ///
 /// Returns `None` if Vector isn't running or the fetch fails.
-/// Uses a short timeout to avoid blocking the metrics response.
+/// Uses a short timeout and bounded read to avoid blocking or OOM.
 async fn fetch_vector_metrics(address: &str) -> Option<String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -234,14 +240,18 @@ async fn fetch_vector_metrics(address: &str) -> Option<String> {
     let mut stream = stream;
     stream.write_all(request.as_bytes()).await.ok()?;
 
-    let mut response = String::new();
+    // Bounded read: cap at MAX_METRICS_RESPONSE_BYTES to prevent OOM
+    let mut response_bytes = Vec::with_capacity(64 * 1024);
+    let mut limited = stream.take(MAX_METRICS_RESPONSE_BYTES);
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        stream.read_to_string(&mut response),
+        limited.read_to_end(&mut response_bytes),
     )
     .await
     .ok()?
     .ok()?;
+
+    let response = String::from_utf8(response_bytes).ok()?;
 
     // Extract body from HTTP response
     let body = response.split("\r\n\r\n").nth(1)?;
