@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hyperi_rustlib::logger::security::{self, SecurityEvent, SecurityOutcome};
+use hyperi_rustlib::logger::security::{SecurityEvent, SecurityOutcome};
 use hyperi_rustlib::logger::{log_debounced, log_state_change};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
