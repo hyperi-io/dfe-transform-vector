@@ -18,7 +18,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment};
-use hyperi_rustlib::logger::security;
+use hyperi_rustlib::logger::security::{self, SecurityEvent, SecurityOutcome};
 use hyperi_rustlib::version_check::{VersionCheck, VersionCheckConfig};
 use tracing::{error, info};
 
@@ -304,13 +304,19 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
             tokio::select! {
                 _ = sigterm.recv() => {
                     info!("received SIGTERM");
-                    security::config_changed("signal", "system", "SIGTERM received, initiating shutdown");
+                    SecurityEvent::new("process.shutdown", "SIGTERM", SecurityOutcome::Success)
+                        .actor("system")
+                        .detail("graceful shutdown initiated")
+                        .emit();
                     let _ = shutdown_tx_signal.send(true);
                     return;
                 }
                 _ = sigint.recv() => {
                     info!("received SIGINT");
-                    security::config_changed("signal", "system", "SIGINT received, initiating shutdown");
+                    SecurityEvent::new("process.shutdown", "SIGINT", SecurityOutcome::Success)
+                        .actor("system")
+                        .detail("graceful shutdown initiated")
+                        .emit();
                     let _ = shutdown_tx_signal.send(true);
                     return;
                 }
