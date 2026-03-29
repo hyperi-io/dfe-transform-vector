@@ -8,7 +8,7 @@
 
 [package]
 name = "dfe-transform-vector"
-version = "1.0.0-dev.8"
+version = "1.0.4"
 edition = "2024"
 authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Rust wrapper for Vector.dev subprocess — Kafka-to-Kafka transform pipelines"
@@ -31,7 +31,7 @@ tokio = { version = ">=1.50", features = ["full"] }
 tokio-util = { version = ">=0.7", features = ["rt"] }
 
 # Shared library (CLI framework, deployment artefact generation, logging)
-hyperi-rustlib = { version = ">=1.19", features = [
+hyperi-rustlib = { version = ">=1.20.0", features = [
     "cli",
     "config-reload",
     "deployment",
@@ -72,7 +72,7 @@ nix = { version = ">=0.29", features = ["signal", "process"] }
 [dev-dependencies]
 tempfile = ">=3.10"
 tokio-test = ">=0.4"
-hyperi-rustlib = { version = ">=1.19", features = [
+hyperi-rustlib = { version = ">=1.20.0", features = [
     "transport-kafka",
 ] }
 
