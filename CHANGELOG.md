@@ -1,3 +1,12 @@
+## [1.0.5](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.4...v1.0.5) (2026-03-29)
+
+
+### Bug Fixes
+
+* add log spam protection, security events, disable broken e2e test ([6782774](https://github.com/hyperi-io/dfe-transform-vector/commit/6782774470c8236aa23da64ff3ed594670e26c94))
+* remove unused security self-import (clippy) ([35717cd](https://github.com/hyperi-io/dfe-transform-vector/commit/35717cd8da7acb75391337914f9548396d637a19))
+* use process.shutdown security events for signals, clarify crash audit intent ([e05b7eb](https://github.com/hyperi-io/dfe-transform-vector/commit/e05b7eb1c733c4594bcb676c1abd4810dacf8942))
+
 # [1.0.0-dev.8](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.0-dev.7...v1.0.0-dev.8) (2026-03-25)
 
 
