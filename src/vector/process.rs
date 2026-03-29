@@ -198,7 +198,10 @@ pub async fn run_lifecycle(
                 lifecycle.set(State::ShuttingDown);
                 log_state_change(&VECTOR_RUNNING, false);
                 info!("shutdown requested, sending SIGTERM to Vector");
-                security::config_changed("shutdown", "system", "graceful shutdown initiated");
+                SecurityEvent::new("process.shutdown", "SIGTERM_forward", SecurityOutcome::Success)
+                    .actor("system")
+                    .detail("graceful shutdown initiated")
+                    .emit();
                 let _ = send_signal(&child, Signal::SIGTERM);
 
                 // Wait for child to exit with timeout
@@ -234,7 +237,8 @@ pub async fn run_lifecycle(
             );
         }
 
-        // Security audit trail for subprocess crashes
+        // Security audit trail: deliberately NOT debounced — every crash
+        // is a security-relevant event for the audit log
         SecurityEvent::new("process.crash", "vector_subprocess", SecurityOutcome::Error)
             .reason(&format!("exit_code={exit_code}"))
             .detail(&format!(
