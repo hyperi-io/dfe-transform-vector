@@ -79,7 +79,7 @@ impl WrapperMetrics {
         );
 
         let app = AppMetrics::new(&manager, env!("CARGO_PKG_VERSION"), commit);
-        let dfe = DfeMetrics::register();
+        let dfe = DfeMetrics::register(&manager);
 
         Self {
             manager,
