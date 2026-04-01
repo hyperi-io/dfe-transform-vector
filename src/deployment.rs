@@ -125,6 +125,8 @@ pub fn contract() -> DeploymentContract {
         base_image: "ubuntu:24.04".into(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
+        schema_version: 2,
+        oci_labels: hyperi_rustlib::deployment::OciLabels::default(),
     }
 }
 
