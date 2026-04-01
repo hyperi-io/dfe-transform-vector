@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "dfe-transform-vector"
-version = "1.0.0-dev.7"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -813,9 +813,9 @@ dependencies = [
 
 [[package]]
 name = "hyperi-rustlib"
-version = "1.19.6"
+version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acb8754cd4fee6c3abd0411728078648403a17a346c2b1f928a8ace530affb10"
+checksum = "3b76dff10df7efb395b00f79a9a79837ef551df17d0fff5f2114e12b16b60887"
 dependencies = [
  "async-trait",
  "axum",
@@ -837,6 +837,7 @@ dependencies = [
  "sysinfo",
  "thiserror",
  "tokio",
+ "tokio-util",
  "toml 1.0.7+spec-1.1.0",
  "tower",
  "tower-http",

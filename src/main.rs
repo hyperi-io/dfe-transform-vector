@@ -142,7 +142,11 @@ impl DfeApp for App {
         Ok(config)
     }
 
-    async fn run_service(&self, config: Config) -> Result<(), CliError> {
+    async fn run_service(
+        &self,
+        config: Config,
+        _runtime: hyperi_rustlib::cli::ServiceRuntime,
+    ) -> Result<(), CliError> {
         run_transform_service(&self.common, config)
             .await
             .map_err(|e| CliError::Service(e.to_string()))
