@@ -1,3 +1,12 @@
+## [1.0.6](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.5...v1.0.6) (2026-04-02)
+
+
+### Bug Fixes
+
+* bump rustlib to v2.4.3, add debug/trace logging, fix SensitiveString in tests ([56806f5](https://github.com/hyperi-io/dfe-transform-vector/commit/56806f5455bf7b800d8b460411d7656b550e992b))
+* update DfeMetrics::register() to pass &MetricsManager for manifest ([9f56d3c](https://github.com/hyperi-io/dfe-transform-vector/commit/9f56d3c9f888065743a176ee9e24b7ac53900c03))
+* update to rustlib v2.x ServiceRuntime + deployment contract fields ([d74ea37](https://github.com/hyperi-io/dfe-transform-vector/commit/d74ea373be76ab74067e82c31d003db99976900e))
+
 ## [1.0.5](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.4...v1.0.5) (2026-03-29)
 
 
