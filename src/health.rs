@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hyperi_rustlib::http_server::{HttpServer, HttpServerConfig};
-use tracing::info;
+use tracing::{info, trace};
 
 use crate::Result;
 use crate::vector::Lifecycle;
@@ -63,6 +63,8 @@ async fn sync_readiness(lifecycle: Lifecycle, ready_flag: Arc<AtomicBool>) {
             break;
         }
         let state = lifecycle.state();
-        ready_flag.store(state.is_ready(), Ordering::SeqCst);
+        let ready = state.is_ready();
+        trace!(state = %state, ready, "health readiness poll");
+        ready_flag.store(ready, Ordering::SeqCst);
     }
 }

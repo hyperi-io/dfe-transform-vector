@@ -20,7 +20,7 @@ use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, Version
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment};
 use hyperi_rustlib::logger::security::{self, SecurityEvent, SecurityOutcome};
 use hyperi_rustlib::version_check::{VersionCheck, VersionCheckConfig};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
@@ -222,6 +222,20 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
         pipeline = %config.pipeline.name,
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vector"
+    );
+
+    // Log startup config at debug level for diagnostics
+    debug!(
+        vector_binary = %config.vector.binary,
+        vector_data_dir = %config.vector.data_dir,
+        vector_api_address = %config.vector.api_address,
+        vector_log_level = %config.vector.log_level,
+        config_path = ?config.reload.enabled.then_some("reload enabled"),
+        restart_initial_secs = 1,
+        restart_max_secs = 60,
+        restart_backoff_multiplier = 2.0,
+        restart_reset_after_secs = 300,
+        "startup config"
     );
 
     // Fire-and-forget startup version check

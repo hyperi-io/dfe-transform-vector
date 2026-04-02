@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "dfe-transform-vector"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -813,9 +813,9 @@ dependencies = [
 
 [[package]]
 name = "hyperi-rustlib"
-version = "2.4.2"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b76dff10df7efb395b00f79a9a79837ef551df17d0fff5f2114e12b16b60887"
+checksum = "99e1ce2d4647bde478d9543029599ccc4e560e7c2886e489e5a9c5ed2a37ffc6"
 dependencies = [
  "async-trait",
  "axum",
@@ -829,6 +829,7 @@ dependencies = [
  "owo-colors",
  "parking_lot",
  "rdkafka",
+ "regex",
  "reqwest",
  "rmp-serde",
  "serde",
@@ -1649,6 +1650,18 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror",
+]
+
+[[package]]
+name = "regex"
+version = "1.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]

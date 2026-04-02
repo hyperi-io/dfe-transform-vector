@@ -17,6 +17,7 @@ use std::env;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
+use hyperi_rustlib::SensitiveString;
 use hyperi_rustlib::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile};
 
 /// Test backend mode.
@@ -66,7 +67,9 @@ pub fn kafka_test_config() -> KafkaConfig {
                 .unwrap_or_else(|_| "SASL_SSL".into()),
             sasl_mechanism: env::var("KAFKA_SASL_MECHANISM").ok(),
             sasl_username: env::var("KAFKA_SASL_USER").ok(),
-            sasl_password: env::var("KAFKA_SASL_PASSWORD").ok(),
+            sasl_password: env::var("KAFKA_SASL_PASSWORD")
+                .ok()
+                .map(SensitiveString::new),
             ssl_skip_verify: true,
             ..Default::default()
         },

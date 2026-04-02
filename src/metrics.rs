@@ -27,7 +27,7 @@ use hyperi_rustlib::metrics::MetricsManager;
 use hyperi_rustlib::metrics::dfe::DfeMetrics;
 use hyperi_rustlib::metrics::dfe_groups::AppMetrics;
 use metrics::{Counter, Gauge};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::Result;
 use crate::vector::Lifecycle;
@@ -188,23 +188,43 @@ pub async fn serve_metrics(
 
 /// Handle GET /metrics — render wrapper metrics + proxy Vector metrics.
 async fn metrics_handler(AxumState(state): AxumState<MetricsState>) -> impl IntoResponse {
+    let scrape_start = std::time::Instant::now();
+
     // Update dynamic metrics before rendering
     let lifecycle_state = state.lifecycle.state();
     state.metrics.set_lifecycle_state(lifecycle_state);
-    state
-        .metrics
-        .uptime_seconds
-        .set(state.started_at.elapsed().as_secs_f64());
+    let uptime = state.started_at.elapsed().as_secs_f64();
+    state.metrics.uptime_seconds.set(uptime);
 
     // Render wrapper metrics via MetricsManager
     let mut output = state.metrics.render();
+    let wrapper_render_ms = scrape_start.elapsed().as_millis();
 
     // Proxy Vector's prometheus_exporter metrics (best-effort)
-    if lifecycle_state.is_ready()
-        && let Some(vector_metrics) = fetch_vector_metrics(&state.vector_metrics_address).await
-    {
+    let proxy_start = std::time::Instant::now();
+    let proxied = if lifecycle_state.is_ready() {
+        fetch_vector_metrics(&state.vector_metrics_address).await
+    } else {
+        None
+    };
+    let proxy_ms = proxy_start.elapsed().as_millis();
+
+    if let Some(vector_metrics) = proxied {
+        trace!(
+            wrapper_render_ms,
+            proxy_fetch_ms = proxy_ms,
+            vector_metrics_address = %state.vector_metrics_address,
+            "metric scrape timing"
+        );
         output.push('\n');
         output.push_str(&vector_metrics);
+    } else {
+        trace!(
+            wrapper_render_ms,
+            proxy_skipped = !lifecycle_state.is_ready(),
+            lifecycle_state = %lifecycle_state,
+            "metric scrape timing (no Vector proxy)"
+        );
     }
 
     Response::builder()
