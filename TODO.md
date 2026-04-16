@@ -302,9 +302,21 @@ Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains 
 - rdkafka as full dep adds ~2MB binary size and librdkafka runtime requirement
 - Feature-gated mitigates both: disabled by default, KEDA direct lag still works
 
+## Completed (rustlib v2.5 + Release Config)
+
+- [x] Bumped hyperi-rustlib from >=2.4.6 to >=2.5.4 (no API changes, clean build)
+- [x] Added missing `breaking: true → major` rule to `.releaserc.yaml` (matches reference configs)
+- [x] Cleaned up stale remote branches (chore/merge-to-release, fix/merge-to-release, fix/merge-to-release-ga)
+- [x] Code review + security review — no blockers
+
 ## Backlog
 
 - [ ] Documentation review (use `/doco` skill)
 - [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
+- [ ] Add logging to `fetch_vector_metrics()` error paths (metrics.rs:246-289)
+- [ ] Fix HTTP status parsing in metrics proxy (`.contains("200")` → explicit parse)
+- [ ] Add enum validation for codec, encoding, compression, auto_offset_reset (config/loader.rs)
+- [ ] Validate drain_timeout_ms < session_timeout_ms (config/loader.rs:193)
+- [ ] Fix deny.toml `unmaintained` field (invalid value for cargo-deny)
 - [x] Migrate health/metrics HTTP servers to rustlib `http-server` feature
 - [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented
