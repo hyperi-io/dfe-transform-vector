@@ -369,3 +369,129 @@ Note: Vector runs as subprocess — most knobs apply to the Rust integration lay
 - [x] Fix deny.toml `unmaintained` field (invalid value for cargo-deny)
 - [x] Migrate health/metrics HTTP servers to rustlib `http-server` feature
 - [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented
+
+---
+
+## Rust Release-Track Optimisation (hyperi-ci Tier 1/2)
+
+**Context:** hyperi-ci is shipping channel-gated build optimisations for Rust
+binaries (see `hyperi-ai/standards/languages/RUST.md` — *Release-Track Build
+Optimisation*). This project has no `[features]` section and needs the full
+allocator setup.
+
+### Tier 1 prep — **ACTION REQUIRED**
+
+Current state: **⚠️ NEEDS FULL SETUP — no `[features]` section, no allocator.**
+
+Expected gain when done: **+15-25% throughput** on `beta`/`release` builds.
+
+- [ ] Add `[features]` section and allocator deps to `Cargo.toml`:
+  ```toml
+  [features]
+  default = []
+  jemalloc = ["dep:tikv-jemallocator"]
+  mimalloc = ["dep:mimalloc"]
+
+  [dependencies]
+  # ... existing deps ...
+  tikv-jemallocator = { version = "0.6", optional = true }
+  mimalloc = { version = "0.1", optional = true }
+  ```
+- [ ] Wire global allocator in `src/main.rs`:
+  ```rust
+  #[cfg(feature = "jemalloc")]
+  #[global_allocator]
+  static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+  #[cfg(all(feature = "mimalloc", not(feature = "jemalloc")))]
+  #[global_allocator]
+  static GLOBAL_MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+  ```
+- [ ] Verify `[profile.release] lto = "thin"` in `Cargo.toml` (CI overrides to
+      `fat` on beta+). If absent, add it.
+- [ ] **Consideration:** this project is a thin wrapper around Vector, which
+      has its own build-time optimisations. The allocator change applies to
+      the wrapper/lifecycle/metrics code this project adds — the Vector binary
+      itself is a separate concern. Still worth doing for the wrapper hot path.
+
+### Tier 2 opt-in (PGO + BOLT — release channel only)
+
+Current state: **⚠️ LIKELY NOT WORTH IT — this is a lifecycle/supervisor, not
+a data-plane binary.** The hot path lives inside Vector, not in this wrapper.
+PGO would profile the wrapper's lifecycle/metrics code, not the Vector
+throughput loop. Expected gain: minimal.
+
+- [ ] If you still want PGO: document why in the workload script comments
+- [ ] Otherwise: leave `pgo` unset in `.hyperi-ci.yaml`
+
+**If implementing Tier 2:**
+- [ ] Workload MUST exercise the proxy/lifecycle code under sustained Vector
+      traffic — NOT port checks or "does Vector start?" tests. Bad workload =
+      negative PGO gain.
+
+---
+
+## Rust Release-Track Optimisation (hyperi-ci Tier 1/2)
+
+**Context:** hyperi-ci is shipping channel-gated build optimisations for Rust
+binaries (see `hyperi-ai/standards/languages/RUST.md` — *Release-Track Build
+Optimisation*). Local `cargo build` is unaffected.
+
+### Tier 1 prep — **ACTION REQUIRED (full setup)**
+
+Current state: **⚠️ MOST SETUP MISSING.**
+
+This project has **no `[features]` section at all** and **no
+`#[global_allocator]` wiring in `main.rs`**. Full setup required:
+
+**1. Add `[features]` section and allocator deps to `Cargo.toml`:**
+
+```toml
+[dependencies]
+# ... existing ...
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", optional = true }
+
+[features]
+default = []         # Do NOT include jemalloc — CI opts in per channel
+jemalloc = ["dep:tikv-jemallocator"]
+mimalloc = ["dep:mimalloc"]
+```
+
+**2. Wire the global allocator in `src/main.rs`:**
+
+```rust
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "mimalloc", not(feature = "jemalloc")))]
+#[global_allocator]
+static GLOBAL_MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+**3. Verify `[profile.release] lto = "thin"`** (CI overrides to `fat` on beta+).
+
+- [ ] Add `tikv-jemallocator` + `mimalloc` optional deps
+- [ ] Add `[features]` section with `default = []`, `jemalloc`, `mimalloc`
+- [ ] Wire `#[global_allocator]` in `src/main.rs`
+- [ ] Verify `[profile.release] lto = "thin"`
+- [ ] `cargo build --features jemalloc` compiles clean
+- [ ] `cargo test` still passes
+
+### Tier 2 opt-in (PGO + BOLT — release channel only)
+
+Current state: **⚠️ NOT CONFIGURED — opt-in required.**
+
+- [ ] Decide whether PGO is worth +30-60 min release build time
+- [ ] If yes: write `scripts/pgo-workload.sh` that drives the Vector sidecar
+      with **actual traffic** — spin up source + sink, route realistic
+      volumes, exercise the transform paths, at least 5 min sustained
+- [ ] **PGO workload MUST NOT be a port check, config validation, or
+      "does it start up" test** — profile data from those paths is misleading
+      and causes NEGATIVE PGO gains. Drive real events through the pipeline.
+- [ ] Add `.hyperi-ci.yaml` config under `build.rust.optimize.pgo` + `.bolt`
+
+Note: this project orchestrates the Vector sidecar. PGO optimises the Rust
+orchestrator only — Vector itself is a separate binary. Weigh whether PGO on
+the thin orchestration layer is worth the build time cost (probably not).

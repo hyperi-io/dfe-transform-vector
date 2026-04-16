@@ -179,3 +179,55 @@ or `rm` the cargo lock file.
 - How things work (not what's happening)
 
 When in doubt, ask: "Will this be true next week?" If no, it doesn't belong here.
+
+---
+
+## Rust Release-Track Optimisation Readiness
+
+**Tier 1 (allocator + fat LTO on beta+):** ⚠️ **NEEDS FULL SETUP**
+
+This project has no `[features]` section in `Cargo.toml` and no
+`#[global_allocator]` wiring in `src/main.rs`. Without setup, only fat LTO
+applies automatically — no jemalloc/mimalloc benefit.
+
+Required:
+- Add `[features]` section with `jemalloc` + `mimalloc`
+- Add `tikv-jemallocator` + `mimalloc` as optional deps
+- Wire `#[global_allocator]` in `src/main.rs`
+- Keep `default = []`
+
+Expected gain: +15-25% throughput on release builds (jemalloc on the
+wrapper/lifecycle/metrics code — the Vector binary itself has its own build).
+
+**Tier 2 (PGO + BOLT on release):** ⚠️ **LIKELY NOT WORTH IT**
+
+This is a supervisor/lifecycle wrapper around Vector — the data-plane hot
+path lives inside Vector itself, not this code. PGO here would profile the
+wrapper, not the ingest loop. Skip unless there's a specific reason.
+
+See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
+
+---
+
+## Rust Release-Track Optimisation Readiness
+
+**Tier 1 (allocator + fat LTO on beta+):** ⚠️ **NEEDS FULL SETUP**
+
+Project has no `[features]` section and no `#[global_allocator]`. Required:
+
+1. Add `[features]` section to `Cargo.toml` (with `default = []`)
+2. Add `tikv-jemallocator` + `mimalloc` optional deps
+3. Wire `#[global_allocator]` in `src/main.rs` under feature flags
+4. Keep `[profile.release] lto = "thin"` — CI overrides to `fat`
+
+Without Tier 1 setup, hyperi-ci warns and uses system allocator on
+`beta`/`release` (release build still succeeds).
+
+**Tier 2 (PGO + BOLT on release):** ⚠️ **LIKELY NOT WORTH IT**
+
+This project is a thin orchestration layer over the Vector sidecar. PGO
+optimises the Rust orchestrator, not Vector itself. The +30-60 min build
+cost may exceed the benefit. Evaluate per realistic workload before opting
+in.
+
+See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
