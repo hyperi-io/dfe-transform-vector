@@ -16,6 +16,7 @@ out/
 test-results/
 coverage/
 target/
+.tmp/
 **/*.rs.bk
 *.pdb
 *.profraw
