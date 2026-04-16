@@ -7,3 +7,4 @@
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 mod kafka;
+mod metrics_proxy;
