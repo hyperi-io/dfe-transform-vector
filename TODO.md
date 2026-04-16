@@ -322,6 +322,42 @@ Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains 
 - [x] Dependencies: updated all to latest (aws-lc-rs, clap, etc.)
 - [x] Added 18 new validation tests (143 total, up from 125)
 
+## Completed (E2E Test Coverage)
+
+- [x] Metrics proxy e2e — spawns real Vector with `internal_metrics` → `prometheus_exporter`,
+      verifies wrapper /metrics proxies actual Vector output. Validates the HTTP status parse
+      fix and error-path logging against real responses.
+- [x] Metrics proxy graceful-degradation e2e — verifies wrapper returns 200 with wrapper-only
+      metrics when Vector is unreachable (regression guard for proxy fallback behaviour).
+- [x] Kafka pipeline e2e — live-first with testcontainers fallback. Full pipeline: produce →
+      Vector transform → consume, verifies remap transform actually applied end-to-end.
+      In SASL mode, also asserts security.protocol injection in generated YAML.
+- [x] Test cleanup: Vector uses `kill_on_drop(true)` (guaranteed SIGKILL on any exit path),
+      topics have unique nanosecond suffixes, explicit delete on happy path. Testcontainers
+      Kafka stops on fixture drop (RAII).
+
+## Completed (Testcontainers Integration)
+
+- [x] Added `testcontainers` + `testcontainers-modules` (kafka feature) as dev-deps
+- [x] `KafkaFixture::acquire()` — live-first with automatic testcontainers fallback
+- [x] Authenticated probe against live cluster (stale creds → testcontainers fallback)
+- [x] `.env.example` updated — no more TEST_MODE; auto-detection explained
+
+## Active
+
+### Performance Review
+
+Audit applicable optimisations from [dfe-loader/docs/PERFORMANCE.md](/projects/dfe-loader/docs/PERFORMANCE.md).
+Note: Vector runs as subprocess — most knobs apply to the Rust integration layer (config gen, metrics proxy, supervision), not the Vector binary itself.
+
+- [ ] Allocator: enable `jemalloc` or `mimalloc` feature, benchmark vs system glibc on representative workload
+- [ ] Build profile: confirm `lto = "thin"`, `codegen-units = 1`, `panic = "abort"`, `strip = true` in release
+- [ ] Profile under load (perf, flamegraph, jeprof) — record baseline for regression detection
+- [ ] PGO + BOLT: evaluate ROI for production binary (10-20% + 5-15% gain)
+- [ ] Batch tuning: validate buffer/flush thresholds align with rustlib Kafka transport (10K recv / 20K prefetch)
+
+---
+
 ## Backlog
 
 - [ ] Documentation review (use `/doco` skill)
