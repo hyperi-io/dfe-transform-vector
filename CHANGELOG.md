@@ -1,3 +1,10 @@
+## [1.0.8](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.7...v1.0.8) (2026-04-16)
+
+
+### Bug Fixes
+
+* config validation hardening, metrics proxy fixes, deny.toml migration ([856aa7d](https://github.com/hyperi-io/dfe-transform-vector/commit/856aa7d8e0e057976a4e254a4b685539f4151344))
+
 ## [1.0.7](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.6...v1.0.7) (2026-04-16)
 
 
