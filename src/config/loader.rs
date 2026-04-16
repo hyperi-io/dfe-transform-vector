@@ -701,6 +701,34 @@ impl Config {
         }
         self.validate_sasl("source.sasl", &self.source.sasl)?;
 
+        // Source codec
+        let valid_codecs = ["json", "raw_bytes", "protobuf"];
+        if !valid_codecs.contains(&self.source.decoding.codec.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "source.decoding.codec must be one of: {}",
+                valid_codecs.join(", ")
+            )));
+        }
+
+        // Source auto_offset_reset
+        let valid_offsets = ["largest", "smallest"];
+        if !valid_offsets.contains(&self.source.auto_offset_reset.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "source.auto_offset_reset must be one of: {}",
+                valid_offsets.join(", ")
+            )));
+        }
+
+        // Source drain_timeout_ms must be less than session_timeout_ms
+        if let Some(drain) = self.source.drain_timeout_ms
+            && drain >= self.source.session_timeout_ms
+        {
+            return Err(crate::Error::Validation(format!(
+                "source.drain_timeout_ms ({drain}) must be less than session_timeout_ms ({})",
+                self.source.session_timeout_ms
+            )));
+        }
+
         // Sink
         if self.sink.brokers.is_empty() {
             return Err(crate::Error::Validation(
@@ -715,12 +743,38 @@ impl Config {
         self.validate_sasl("sink.sasl", &self.sink.sasl)?;
         self.validate_buffer(&self.sink.buffer)?;
 
+        // Sink encoding
+        let valid_encodings = ["json", "raw_bytes"];
+        if !valid_encodings.contains(&self.sink.encoding.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "sink.encoding must be one of: {}",
+                valid_encodings.join(", ")
+            )));
+        }
+
+        // Sink compression
+        let valid_compressions = ["none", "gzip", "lz4", "snappy", "zstd"];
+        if !valid_compressions.contains(&self.sink.compression.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "sink.compression must be one of: {}",
+                valid_compressions.join(", ")
+            )));
+        }
+
         // Vector version check mode
         let valid_modes = ["strict", "warn", "disabled"];
         if !valid_modes.contains(&self.vector.version_check.as_str()) {
             return Err(crate::Error::Validation(format!(
                 "vector.version_check must be one of: {}",
                 valid_modes.join(", ")
+            )));
+        }
+
+        // Scaling pressure threshold must be in [0.0, 1.0]
+        if !(0.0..=1.0).contains(&self.scaling.pressure_threshold) {
+            return Err(crate::Error::Validation(format!(
+                "scaling.pressure_threshold must be between 0.0 and 1.0, got {}",
+                self.scaling.pressure_threshold
             )));
         }
 
@@ -736,6 +790,13 @@ impl Config {
             return Err(crate::Error::Validation(format!(
                 "{prefix}.mechanism must be one of: {}",
                 valid_mechanisms.join(", ")
+            )));
+        }
+        // Username is required when SASL is enabled (password may use env var
+        // interpolation like ${KAFKA_SASL_PASSWORD} which appears non-empty).
+        if sasl.username.is_empty() {
+            return Err(crate::Error::Validation(format!(
+                "{prefix}.username must not be empty when SASL is enabled"
             )));
         }
         Ok(())

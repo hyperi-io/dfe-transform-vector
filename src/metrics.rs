@@ -247,38 +247,66 @@ async fn fetch_vector_metrics(address: &str) -> Option<String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    let stream = tokio::time::timeout(
+    let stream = match tokio::time::timeout(
         std::time::Duration::from_secs(2),
         TcpStream::connect(address),
     )
     .await
-    .ok()?
-    .ok()?;
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            trace!(address, error = %e, "Vector metrics proxy: connect failed");
+            return None;
+        }
+        Err(_) => {
+            trace!(address, "Vector metrics proxy: connect timeout");
+            return None;
+        }
+    };
 
     let request = format!("GET /metrics HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
 
     let mut stream = stream;
-    stream.write_all(request.as_bytes()).await.ok()?;
+    if let Err(e) = stream.write_all(request.as_bytes()).await {
+        trace!(address, error = %e, "Vector metrics proxy: write failed");
+        return None;
+    }
 
     // Bounded read: cap at MAX_METRICS_RESPONSE_BYTES to prevent OOM
     let mut response_bytes = Vec::with_capacity(64 * 1024);
     let mut limited = stream.take(MAX_METRICS_RESPONSE_BYTES);
-    tokio::time::timeout(
+    match tokio::time::timeout(
         std::time::Duration::from_secs(5),
         limited.read_to_end(&mut response_bytes),
     )
     .await
-    .ok()?
-    .ok()?;
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            trace!(address, error = %e, "Vector metrics proxy: read failed");
+            return None;
+        }
+        Err(_) => {
+            trace!(address, "Vector metrics proxy: read timeout");
+            return None;
+        }
+    }
 
-    let response = String::from_utf8(response_bytes).ok()?;
+    let response = match String::from_utf8(response_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            trace!(address, error = %e, "Vector metrics proxy: invalid UTF-8");
+            return None;
+        }
+    };
 
     // Extract body from HTTP response
     let body = response.split("\r\n\r\n").nth(1)?;
 
-    // Verify we got a 200 response
+    // Verify we got a 200 response by parsing the status code
     let status_line = response.lines().next()?;
-    if !status_line.contains("200") {
+    let status_code = status_line.split_whitespace().nth(1).unwrap_or("");
+    if status_code != "200" {
         debug!(
             status = status_line,
             "Vector metrics proxy got non-200 response"

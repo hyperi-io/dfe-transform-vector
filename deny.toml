@@ -1,71 +1,12 @@
-# Project:   dfe-transform-vector
-# File:      deny.toml
-# Purpose:   cargo-deny configuration for dependency checking
-# Language:  TOML
-#
-# License:   FSL-1.1-ALv2
-# Copyright: (c) 2026 HYPERI PTY LIMITED
-#
-# cargo-deny checks dependencies for:
-# - Security advisories (known vulnerabilities)
-# - License compliance
-# - Banned crates
-# - Duplicate versions
-#
+# cargo-deny v0.19+ configuration
 # Run: cargo deny check
-# Docs: https://embarkstudios.github.io/cargo-deny/
-
-# =============================================================================
-# Global Options
-# =============================================================================
-
-# Target platforms to check (empty = all)
-targets = [
-    { triple = "x86_64-unknown-linux-gnu" },
-    { triple = "aarch64-unknown-linux-gnu" },
-    { triple = "x86_64-apple-darwin" },
-    { triple = "aarch64-apple-darwin" },
-]
-
-# =============================================================================
-# Advisories - Security vulnerability checking
-# =============================================================================
 
 [advisories]
-# Path to advisory database (default location)
-db-path = "~/.cargo/advisory-db"
-
-# Advisory database URLs
-db-urls = ["https://github.com/rustsec/advisory-db"]
-
-# How to handle vulnerabilities
-vulnerability = "deny"
-
-# How to handle unmaintained crates
-unmaintained = "warn"
-
-# How to handle yanked crates
-yanked = "warn"
-
-# How to handle advisories marked as "notice"
-notice = "warn"
-
-# Ignore specific advisories (use sparingly, document reason)
-ignore = [
-    # Example: "RUSTSEC-2020-0001", # Reason for ignoring
-]
-
-# =============================================================================
-# Licenses - License compliance checking
-# =============================================================================
+ignore = []
 
 [licenses]
-# How to handle unlicensed crates
-unlicensed = "deny"
-
-# Approved licenses (SPDX identifiers)
-# https://spdx.org/licenses/
 allow = [
+    "FSL-1.1-ALv2",
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -79,75 +20,14 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
     "Unlicense",
+    "OpenSSL",
 ]
-
-# How to handle copyleft licenses (GPL, LGPL, etc.)
-copyleft = "warn"
-
-# Default action for licenses not in allow/deny lists
-default = "deny"
-
-# Confidence threshold for license detection (0.0 - 1.0)
-confidence-threshold = 0.8
-
-# Crate-specific license exceptions
-exceptions = [
-    # Example: { allow = ["LGPL-3.0"], crate = "some-lgpl-crate" }
-]
-
-# Private crates (skip license check)
-private = { ignore = true }
-
-# =============================================================================
-# Bans - Crate banning and duplicate detection
-# =============================================================================
 
 [bans]
-# How to handle multiple versions of the same crate
 multiple-versions = "warn"
-
-# How to handle wildcard dependencies (e.g., foo = "*")
 wildcards = "deny"
 
-# Highlight duplicate crate versions in output
-highlight = "all"
-
-# Allow specific crates to have multiple versions
-skip = [
-    # Example: { crate = "windows-sys", reason = "Multiple versions needed by deps" }
-]
-
-# Deny specific crates entirely
-deny = [
-    # Example: { crate = "openssl", reason = "Use rustls instead" }
-]
-
-# Allow specific crates (overrides workspace-level denies)
-allow = [
-    # List of allowed crates
-]
-
-# =============================================================================
-# Sources - Crate source restrictions
-# =============================================================================
-
 [sources]
-# How to handle crates from unknown registries
 unknown-registry = "deny"
-
-# How to handle crates from git repositories
 unknown-git = "deny"
-
-# Allowed registries
-allow-registry = [
-    "https://github.com/rust-lang/crates.io-index",
-]
-
-# Allowed git sources (for internal crates)
-allow-git = [
-    # Example: "https://github.com/hyperi-io/*"
-]
-
-# Allow specific organisations on specific hosts
-[sources.allow-org]
-# github = ["hyperi-io"]
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
