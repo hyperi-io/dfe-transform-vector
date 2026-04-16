@@ -309,14 +309,27 @@ Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains 
 - [x] Cleaned up stale remote branches (chore/merge-to-release, fix/merge-to-release, fix/merge-to-release-ga)
 - [x] Code review + security review — no blockers
 
+## Completed (Bug Fixes + Validation Hardening)
+
+- [x] Config validation: codec, encoding, compression, auto_offset_reset enum validation
+- [x] Config validation: drain_timeout_ms < session_timeout_ms relational check
+- [x] Config validation: scaling.pressure_threshold bounded to [0.0, 1.0]
+- [x] Config validation: SASL username required when SASL enabled
+- [x] Metrics proxy: fixed HTTP status parsing (`.contains("200")` → explicit status code parse)
+- [x] Metrics proxy: added trace logging to all error paths (connect, write, read, timeout, UTF-8)
+- [x] Health server: added warn log when lifecycle channel closes
+- [x] deny.toml: migrated to cargo-deny 0.19 format (removed deprecated fields)
+- [x] Dependencies: updated all to latest (aws-lc-rs, clap, etc.)
+- [x] Added 18 new validation tests (143 total, up from 125)
+
 ## Backlog
 
 - [ ] Documentation review (use `/doco` skill)
 - [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
-- [ ] Add logging to `fetch_vector_metrics()` error paths (metrics.rs:246-289)
-- [ ] Fix HTTP status parsing in metrics proxy (`.contains("200")` → explicit parse)
-- [ ] Add enum validation for codec, encoding, compression, auto_offset_reset (config/loader.rs)
-- [ ] Validate drain_timeout_ms < session_timeout_ms (config/loader.rs:193)
-- [ ] Fix deny.toml `unmaintained` field (invalid value for cargo-deny)
+- [x] Add logging to `fetch_vector_metrics()` error paths (metrics.rs:246-289)
+- [x] Fix HTTP status parsing in metrics proxy (`.contains("200")` → explicit parse)
+- [x] Add enum validation for codec, encoding, compression, auto_offset_reset (config/loader.rs)
+- [x] Validate drain_timeout_ms < session_timeout_ms (config/loader.rs:193)
+- [x] Fix deny.toml `unmaintained` field (invalid value for cargo-deny)
 - [x] Migrate health/metrics HTTP servers to rustlib `http-server` feature
 - [x] Dual-mode e2e test infrastructure (docker + remote Kafka) — already implemented

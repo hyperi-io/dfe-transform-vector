@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hyperi_rustlib::http_server::{HttpServer, HttpServerConfig};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::Result;
 use crate::vector::Lifecycle;
@@ -60,6 +60,7 @@ async fn sync_readiness(lifecycle: Lifecycle, ready_flag: Arc<AtomicBool>) {
     let mut rx = lifecycle.subscribe();
     loop {
         if rx.changed().await.is_err() {
+            warn!("lifecycle channel closed, health readiness sync stopped");
             break;
         }
         let state = lifecycle.state();

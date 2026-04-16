@@ -485,6 +485,357 @@ sink:
 }
 
 // ---------------------------------------------------------------------------
+// Enum and range validation (codec, encoding, compression, offset, thresholds)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_validation_catches_invalid_codec() {
+    let mut config = full_config(None);
+    config.source.decoding.codec = "msgpack".into();
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("source.decoding.codec"),
+        "expected codec validation error, got: {err}"
+    );
+    assert!(err.to_string().contains("json, raw_bytes, protobuf"));
+}
+
+#[test]
+fn config_validation_catches_invalid_encoding() {
+    let mut config = full_config(None);
+    config.sink.encoding = "csv".into();
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("sink.encoding"),
+        "expected encoding validation error, got: {err}"
+    );
+    assert!(err.to_string().contains("json, raw_bytes"));
+}
+
+#[test]
+fn config_validation_catches_invalid_compression() {
+    let mut config = full_config(None);
+    config.sink.compression = "brotli".into();
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("sink.compression"),
+        "expected compression validation error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_catches_invalid_auto_offset_reset() {
+    let mut config = full_config(None);
+    config.source.auto_offset_reset = "earliest".into(); // Kafka term, not Vector term
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("auto_offset_reset"),
+        "expected auto_offset_reset validation error, got: {err}"
+    );
+    assert!(err.to_string().contains("largest, smallest"));
+}
+
+#[test]
+fn config_validation_catches_drain_timeout_exceeds_session() {
+    let mut config = full_config(None);
+    config.source.session_timeout_ms = 30000;
+    config.source.drain_timeout_ms = Some(30000); // Equal = invalid (must be less)
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("drain_timeout_ms"),
+        "expected drain_timeout validation error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_catches_drain_timeout_greater_than_session() {
+    let mut config = full_config(None);
+    config.source.session_timeout_ms = 10000;
+    config.source.drain_timeout_ms = Some(20000);
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("drain_timeout_ms (20000) must be less than session_timeout_ms (10000)"),
+        "expected specific drain/session error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_accepts_drain_timeout_less_than_session() {
+    let mut config = full_config(None);
+    config.source.session_timeout_ms = 30000;
+    config.source.drain_timeout_ms = Some(15000);
+    config
+        .validate()
+        .expect("drain_timeout < session_timeout should be valid");
+}
+
+#[test]
+fn config_validation_accepts_no_drain_timeout() {
+    let mut config = full_config(None);
+    config.source.drain_timeout_ms = None;
+    config
+        .validate()
+        .expect("absent drain_timeout should be valid (default derivation)");
+}
+
+#[test]
+fn config_validation_catches_pressure_threshold_above_one() {
+    let mut config = full_config(None);
+    config.scaling.pressure_threshold = 1.5;
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("pressure_threshold"),
+        "expected pressure_threshold validation error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_catches_pressure_threshold_negative() {
+    let mut config = full_config(None);
+    config.scaling.pressure_threshold = -0.1;
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("pressure_threshold"),
+        "expected pressure_threshold validation error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_accepts_pressure_threshold_boundaries() {
+    let mut config = full_config(None);
+
+    config.scaling.pressure_threshold = 0.0;
+    config
+        .validate()
+        .expect("pressure_threshold=0.0 should be valid");
+
+    config.scaling.pressure_threshold = 1.0;
+    config
+        .validate()
+        .expect("pressure_threshold=1.0 should be valid");
+
+    config.scaling.pressure_threshold = 0.5;
+    config
+        .validate()
+        .expect("pressure_threshold=0.5 should be valid");
+}
+
+#[test]
+fn config_validation_catches_sasl_enabled_without_username() {
+    let mut config = full_config(None);
+    config.source.sasl.enabled = true;
+    config.source.sasl.username = String::new();
+    config.source.sasl.password = "some-password".into();
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("username must not be empty"),
+        "expected SASL username validation error, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_accepts_all_valid_codecs() {
+    for codec in &["json", "raw_bytes", "protobuf"] {
+        let mut config = full_config(None);
+        config.source.decoding.codec = (*codec).into();
+        config
+            .validate()
+            .unwrap_or_else(|e| panic!("codec '{codec}' should be valid, got: {e}"));
+    }
+}
+
+#[test]
+fn config_validation_accepts_all_valid_compressions() {
+    for comp in &["none", "gzip", "lz4", "snappy", "zstd"] {
+        let mut config = full_config(None);
+        config.sink.compression = (*comp).into();
+        config
+            .validate()
+            .unwrap_or_else(|e| panic!("compression '{comp}' should be valid, got: {e}"));
+    }
+}
+
+#[test]
+fn config_validation_accepts_all_valid_sasl_mechanisms() {
+    for mech in &["plain", "scram_sha_256", "scram_sha_512"] {
+        let mut config = full_config(None);
+        config.source.sasl.mechanism = (*mech).into();
+        config.source.sasl.enabled = true;
+        config.source.sasl.username = "user".into();
+        config
+            .validate()
+            .unwrap_or_else(|e| panic!("SASL mechanism '{mech}' should be valid, got: {e}"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Complex config combinations and realistic edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_minimal_valid_passes_validation() {
+    // The absolute minimum config that should validate
+    let config = Config {
+        pipeline: PipelineConfig { name: "x".into() },
+        source: SourceConfig {
+            brokers: vec!["b:9092".into()],
+            topics: vec!["t".into()],
+            group_id: "g".into(),
+            ..Default::default()
+        },
+        sink: SinkConfig {
+            brokers: vec!["b:9092".into()],
+            topic: "out".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    config.validate().expect("minimal config should validate");
+}
+
+#[test]
+fn config_with_all_fields_populated_validates() {
+    // Everything set to non-default values — tests that maximal configs pass
+    let config = Config {
+        dfe_source: Some("syslog".into()),
+        pipeline: PipelineConfig {
+            name: "syslog-enriched".into(),
+        },
+        source: SourceConfig {
+            brokers: vec![
+                "kafka-1:9092".into(),
+                "kafka-2:9092".into(),
+                "kafka-3:9092".into(),
+            ],
+            topics: vec!["raw_land".into(), "backup_land".into()],
+            group_id: "dfe-transform-vector-syslog".into(),
+            decoding: DecodingConfig {
+                codec: "protobuf".into(),
+            },
+            sasl: SaslConfig {
+                enabled: true,
+                mechanism: "scram_sha_256".into(),
+                username: "${KAFKA_SASL_USERNAME}".into(),
+                password: "${KAFKA_SASL_PASSWORD}".into(),
+            },
+            tls: TlsConfig {
+                enabled: true,
+                ca_cert_file: Some("/etc/ssl/ca.pem".into()),
+                cert_file: Some("/etc/ssl/client.pem".into()),
+                key_file: Some("/etc/ssl/client.key".into()),
+                skip_verify: false,
+            },
+            auto_offset_reset: "smallest".into(),
+            session_timeout_ms: 45000,
+            commit_interval_ms: 10000,
+            drain_timeout_ms: Some(20000),
+            topic_lag_metric: false,
+            librdkafka_options: [("debug".into(), "consumer".into())].into(),
+        },
+        sink: SinkConfig {
+            brokers: vec!["kafka-1:9092".into()],
+            topic: "enriched_load".into(),
+            key_field: ".org_id".into(),
+            encoding: "raw_bytes".into(),
+            compression: "lz4".into(),
+            sasl: SaslConfig {
+                enabled: true,
+                mechanism: "plain".into(),
+                username: "producer".into(),
+                password: "secret".into(),
+            },
+            tls: TlsConfig {
+                enabled: true,
+                skip_verify: true,
+                ..Default::default()
+            },
+            buffer: BufferConfig {
+                buffer_type: "disk".into(),
+                max_events: None,
+                max_size: Some(536_870_912), // 512 MiB
+                when_full: "drop_newest".into(),
+            },
+            batch: BatchConfig {
+                max_events: 5000,
+                max_bytes: Some(5_000_000),
+                timeout_secs: 2,
+            },
+            message_timeout_ms: 120_000,
+            socket_timeout_ms: 30_000,
+            librdkafka_options: [("queue.buffering.max.kbytes".into(), "1048576".into())].into(),
+        },
+        transforms: TransformConfig {
+            dir: Some("/etc/dfe/transforms".into()),
+            files: None,
+        },
+        vector: VectorConfig {
+            binary: "/opt/vector/bin/vector".into(),
+            data_dir: "/var/data/vector".into(),
+            api_address: "127.0.0.1:8686".into(),
+            log_level: "debug".into(),
+            version: "0.53.0".into(),
+            version_check: "warn".into(),
+        },
+        health: HealthConfig {
+            address: "0.0.0.0:8080".into(),
+        },
+        metrics: MetricsConfig {
+            address: "0.0.0.0:9090".into(),
+            vector_metrics_address: "127.0.0.1:9598".into(),
+        },
+        logging: LoggingConfig {
+            level: "debug".into(),
+            format: "text".into(),
+        },
+        scaling: ScalingConfig {
+            pressure_threshold: 0.7,
+        },
+        reload: ReloadConfig {
+            enabled: true,
+            poll_interval_secs: 15,
+        },
+    };
+    config
+        .validate()
+        .expect("fully-populated config should validate");
+}
+
+#[test]
+fn config_multiple_validation_errors_reports_first() {
+    // Multiple invalid fields — verify we get a clear first error, not a confusing cascade
+    let config = Config {
+        pipeline: PipelineConfig {
+            name: String::new(), // Invalid: empty
+        },
+        source: SourceConfig {
+            brokers: vec![],                 // Invalid: empty
+            topics: vec![],                  // Invalid: empty
+            group_id: String::new(),         // Invalid: empty
+            auto_offset_reset: "bad".into(), // Invalid
+            ..Default::default()
+        },
+        sink: SinkConfig {
+            brokers: vec![],
+            topic: String::new(),
+            encoding: "avro".into(),     // Invalid
+            compression: "bzip2".into(), // Invalid
+            ..Default::default()
+        },
+        scaling: ScalingConfig {
+            pressure_threshold: 5.0, // Invalid
+        },
+        ..Default::default()
+    };
+    let err = config.validate().unwrap_err();
+    // First validation is pipeline.name
+    assert!(
+        err.to_string().contains("pipeline.name"),
+        "first validation error should be pipeline.name, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Edge cases and boundary values (AI trap: happy-path overfitting)
 // ---------------------------------------------------------------------------
 
