@@ -1,3 +1,10 @@
+## [1.0.7](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.6...v1.0.7) (2026-04-16)
+
+
+### Bug Fixes
+
+* bump rustlib to v2.5.4, add breaking rule to releaserc ([05454e0](https://github.com/hyperi-io/dfe-transform-vector/commit/05454e046e46f708779a0854ca85f7ab3eb07419))
+
 ## [1.0.6](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.5...v1.0.6) (2026-04-02)
 
 
