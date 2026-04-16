@@ -1,3 +1,10 @@
+## [1.0.9](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.8...v1.0.9) (2026-04-16)
+
+
+### Bug Fixes
+
+* add e2e tests with live-first testcontainers fallback ([df2f728](https://github.com/hyperi-io/dfe-transform-vector/commit/df2f728ec1689b209cd9e603ad26ad5e613c6287))
+
 ## [1.0.8](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.7...v1.0.8) (2026-04-16)
 
 
