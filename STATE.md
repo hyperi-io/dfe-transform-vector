@@ -231,3 +231,14 @@ cost may exceed the benefit. Evaluate per realistic workload before opting
 in.
 
 See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
+
+---
+
+## POLICY UPDATE 2026-04-17 — jemalloc-only
+
+DFE allocator policy standardised on jemalloc. Source:
+`hyperi-ai/standards/languages/RUST.md` → *Allocator Policy*.
+
+Project still needs Tier 1 allocator wiring (pre-existing TODO). When
+adding it, use **jemalloc only** — do not add mimalloc feature or
+fallback wiring. See TODO.md → *POLICY UPDATE 2026-04-17*.

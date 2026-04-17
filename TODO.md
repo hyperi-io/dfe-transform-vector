@@ -495,3 +495,36 @@ Current state: **⚠️ NOT CONFIGURED — opt-in required.**
 Note: this project orchestrates the Vector sidecar. PGO optimises the Rust
 orchestrator only — Vector itself is a separate binary. Weigh whether PGO on
 the thin orchestration layer is worth the build time cost (probably not).
+
+---
+
+## POLICY UPDATE 2026-04-17 — Jemalloc at every channel
+
+**Allocator policy:** DFE binaries standardise on jemalloc at **every**
+channel (spike/alpha/beta/release). No mimalloc. See
+`hyperi-ai/standards/languages/RUST.md` → *Allocator Policy* and
+`hyperi-ci/docs/RUST-RELEASE-TRACK-OPTIMISATION.md`.
+
+### Action items
+
+This project has no allocator wired yet (Tier 1 setup is already listed
+as TODO above). When setting up allocator wiring:
+
+- [ ] Add ONLY jemalloc: `jemalloc = ["dep:tikv-jemallocator"]`
+- [ ] Do NOT add a `mimalloc` feature or dep — policy forbids it
+- [ ] Do NOT add a `mimalloc` fallback `#[cfg]` block in `main.rs`
+- [ ] Single allocator wiring only:
+      ```rust
+      #[cfg(feature = "jemalloc")]
+      #[global_allocator]
+      static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+      ```
+
+This supersedes the earlier Tier 1 setup guidance above which may have
+mentioned mimalloc as an option.
+
+### Verification on next release (once wired)
+
+```bash
+strings target/<target>/release/<binary> | grep -ciE 'jemalloc|je_mallctl'
+```
