@@ -11,6 +11,10 @@
 //! Uses hyperi-rustlib CLI module for standard arguments and subcommands.
 //! Implements the [`DfeApp`] trait for the standard DFE service lifecycle.
 
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
