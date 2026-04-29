@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "dfe-transform-vector"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "anyhow",
  "clap",
