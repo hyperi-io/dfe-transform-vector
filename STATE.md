@@ -184,53 +184,27 @@ When in doubt, ask: "Will this be true next week?" If no, it doesn't belong here
 
 ## Rust Release-Track Optimisation Readiness
 
-**Tier 1 (allocator + fat LTO on beta+):** ⚠️ **NEEDS FULL SETUP**
+**Tier 1 (jemalloc allocator at every channel + fat LTO on beta+):**
+✅ **WIRED**
 
-This project has no `[features]` section in `Cargo.toml` and no
-`#[global_allocator]` wiring in `src/main.rs`. Without setup, only fat LTO
-applies automatically — no jemalloc/mimalloc benefit.
+`Cargo.toml` declares `jemalloc = ["dep:tikv-jemallocator"]` (default
+features empty) and `src/main.rs` wires `#[global_allocator]` under
+`#[cfg(feature = "jemalloc")]`. Release build verified:
+`strings target/release/dfe-transform-vector | grep -ciE
+'jemalloc|je_mallctl'` returns 39. CI opts in per channel via
+`--features jemalloc` and overrides `lto = "fat"` at beta+.
 
-Required:
-- Add `[features]` section with `jemalloc` + `mimalloc`
-- Add `tikv-jemallocator` + `mimalloc` as optional deps
-- Wire `#[global_allocator]` in `src/main.rs`
-- Keep `default = []`
+Coverage scope: the wrapper hot path (lifecycle, metrics endpoint,
+config reload). Vector's own throughput loop is unaffected — Vector
+is a separate binary with its own build pipeline.
 
-Expected gain: +15-25% throughput on release builds (jemalloc on the
-wrapper/lifecycle/metrics code — the Vector binary itself has its own build).
+**Tier 2 (PGO + BOLT on release):** ⚠️ **NOT RECOMMENDED**
 
-**Tier 2 (PGO + BOLT on release):** ⚠️ **LIKELY NOT WORTH IT**
-
-This is a supervisor/lifecycle wrapper around Vector — the data-plane hot
-path lives inside Vector itself, not this code. PGO here would profile the
-wrapper, not the ingest loop. Skip unless there's a specific reason.
-
-See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
-
----
-
-## Rust Release-Track Optimisation Readiness
-
-**Tier 1 (allocator + fat LTO on beta+):** ⚠️ **NEEDS FULL SETUP**
-
-Project has no `[features]` section and no `#[global_allocator]`. Required:
-
-1. Add `[features]` section to `Cargo.toml` (with `default = []`)
-2. Add `tikv-jemallocator` + `mimalloc` optional deps
-3. Wire `#[global_allocator]` in `src/main.rs` under feature flags
-4. Keep `[profile.release] lto = "thin"` — CI overrides to `fat`
-
-Without Tier 1 setup, hyperi-ci warns and uses system allocator on
-`beta`/`release` (release build still succeeds).
-
-**Tier 2 (PGO + BOLT on release):** ⚠️ **LIKELY NOT WORTH IT**
-
-This project is a thin orchestration layer over the Vector sidecar. PGO
-optimises the Rust orchestrator, not Vector itself. The +30-60 min build
-cost may exceed the benefit. Evaluate per realistic workload before opting
-in.
-
-See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
+This is a supervisor/lifecycle wrapper around Vector — the data-plane
+hot path lives inside the Vector subprocess, not in this code. PGO
+would profile rarely-hit wrapper code (metrics scrapes, hot-reload
+events, lifecycle state transitions) and provide near-zero runtime
+benefit on a 30-60 min build penalty. Stick with Tier 1.
 
 ---
 
@@ -239,6 +213,28 @@ See TODO.md → *Rust Release-Track Optimisation* for detailed action items.
 DFE allocator policy standardised on jemalloc. Source:
 `hyperi-ai/standards/languages/RUST.md` → *Allocator Policy*.
 
-Project still needs Tier 1 allocator wiring (pre-existing TODO). When
-adding it, use **jemalloc only** — do not add mimalloc feature or
-fallback wiring. See TODO.md → *POLICY UPDATE 2026-04-17*.
+Tier 1 allocator wiring landed 2026-04-29 — jemalloc only, no mimalloc
+feature, no fallback `#[cfg]`. See `Cargo.toml` `[features]` and
+`src/main.rs` for the canonical wiring.
+
+---
+
+## CI workflow contract (post dfe-loader Canary 2)
+
+`.github/workflows/ci.yml` MUST satisfy these for release-channel
+publishing (and for Tier 2 PGO/BOLT to run if ever enabled). Loader
+v1.17.4 publish *succeeded* but silently shipped spike-channel
+(Tier 1 thin LTO instead of fat) because of these:
+
+| Setting | Required | Current | Why |
+|---|---|---|---|
+| `uses: hyperi-io/hyperi-ci/.github/workflows/rust-ci.yml@<ref>` | `ba03ff0` (v1.12.1+) or `@main` | ✅ `@main` | Older pins predate `HYPERCI_CHANNEL` resolver — tagged dispatch falls back to `channel=spike` |
+| `with: publish-target` | `both` | ✅ `both` | `internal` resolves to spike channel (thin LTO). `both` = release channel (fat LTO) |
+
+**Action:** flipped `publish-target` to `both` 2026-04-29 — single-line
+otherwise even Tier 1 fat LTO doesn't apply to the wrapper binary.
+
+Reference implementation: dfe-loader v1.17.5 — full Tier 2 verified
+live on R2, build log signature
+`channel=release, allocator=jemalloc, lto=fat, pgo=on, bolt=on`.
+This wrapper would target `pgo=off, bolt=off` but otherwise the same.
