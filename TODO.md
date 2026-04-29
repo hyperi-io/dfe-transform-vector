@@ -256,6 +256,18 @@
 
 ## Planned: Composite Scaling Pressure
 
+**Status (2026-04-29): deliberately deferred.** KEDA direct Kafka lag
+trigger remains the primary scaler in production and is sufficient.
+This composite signal is an *enhancement* — not gating any current
+deliverable. Reactivate only on explicit ask (e.g. KEDA lag alone
+proves insufficient for a customer workload).
+
+Note: the "Tests: mock GraphQL responses, mock Kafka admin responses"
+bullet in this section conflicts with the No Mocks Policy in
+`hyperi-ai/standards/rules/universal.md`. When this feature is
+reactivated, plan for testcontainers Kafka + a real Vector subprocess
+fixture (we already have both harnesses in `tests/`).
+
 Weighted scaling signal combining consumer lag + Vector buffer pressure + error rate.
 Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains primary.
 
@@ -405,9 +417,9 @@ impact. Listed for transparency, no action needed:
 #### Renovate / Dependabot config
 
 - [x] `renovate.json` exists in repo root
-- [ ] No open Renovate PRs at time of audit (2026-04-29)
-- [ ] Confirm Renovate is opening PRs against main, not a stale release
-      branch (release branch was deleted April 2026 — see CI section)
+- [x] No open Renovate PRs at time of audit (2026-04-29)
+- [x] `renovate.json` targets the default branch — verified, no stale
+      release-branch config (release branch was deleted April 2026)
 
 ### Code Review Findings (`/review` 2026-04-29)
 
@@ -415,11 +427,13 @@ Lightweight pass over the source tree. No critical issues found — the
 codebase is mature and follows HyperI Rust standards. Items below are
 nice-to-haves.
 
-- [ ] `src/main.rs:315-319` — three `.unwrap()` calls on
+- [x] `src/main.rs:315-319` — three `.unwrap()` calls on
       `tokio::signal::unix::signal(...)` for SIGTERM/SIGINT/SIGHUP.
-      Acceptable at startup (failure is unrecoverable) but cleaner to
-      surface as a typed startup error so the lifecycle log captures
-      *which* signal failed to install. Low priority.
+      **Wontfix:** already gated under `#[allow(clippy::unwrap_used)]`,
+      and a panic at signal-handler install is the correct supervisor
+      response — the process can't function without signal handling and
+      K8s will restart the pod immediately. Tightening to typed errors
+      adds machinery without changing behaviour.
 - [x] LICENSE: FSL-1.1-ALv2, copyright 2026 HYPERI PTY LIMITED — current.
 - [x] `Cargo.toml` lints config: `unsafe_code = "deny"`, `unwrap_used =
       "warn"`, `expect_used = "warn"` — matches Rust standard.
@@ -450,18 +464,36 @@ below; surfacing them here so they're actionable in one place.
 Audit applicable optimisations from [dfe-loader/docs/PERFORMANCE.md](/projects/dfe-loader/docs/PERFORMANCE.md).
 Note: Vector runs as subprocess — most knobs apply to the Rust integration layer (config gen, metrics proxy, supervision), not the Vector binary itself.
 
-- [ ] Allocator: enable `jemalloc` or `mimalloc` feature, benchmark vs system glibc on representative workload
-- [ ] Build profile: confirm `lto = "thin"`, `codegen-units = 1`, `panic = "abort"`, `strip = true` in release
-- [ ] Profile under load (perf, flamegraph, jeprof) — record baseline for regression detection
-- [ ] PGO + BOLT: evaluate ROI for production binary (10-20% + 5-15% gain)
-- [ ] Batch tuning: validate buffer/flush thresholds align with rustlib Kafka transport (10K recv / 20K prefetch)
+- [x] Allocator: jemalloc wired under `jemalloc` feature flag
+      (mimalloc forbidden per 2026-04-17 policy). Benchmarking deferred —
+      not meaningful on a supervisor binary; the Vector subprocess owns
+      the data-plane hot path.
+- [x] Build profile: `lto = "thin"`, `codegen-units = 1`,
+      `panic = "abort"`, `strip = true` confirmed in `Cargo.toml`. CI
+      overrides to `lto = "fat"` at beta+ via hyperi-ci release-track
+      logic.
+- [-] Profile under load — **deferred:** the wrapper has no
+      meaningful data-plane work to profile. Vector's own perf tooling
+      handles the Vector binary. Re-add only if a wrapper-specific
+      regression appears.
+- [-] PGO + BOLT — **declined** (see *Tier 2 opt-in* DECISION
+      2026-04-29 above)
+- [-] Batch tuning — **N/A here:** buffer/flush thresholds are
+      Vector-config concerns (set in big-dial config and emitted into
+      Vector YAML), not Rust transport concerns. The rustlib Kafka
+      transport is unused on this project — Vector's librdkafka does
+      the I/O.
 
 ---
 
 ## Backlog
 
-- [ ] Documentation review (use `/doco` skill)
-- [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
+- [ ] Documentation review (use `/doco` skill) — deferred; not part
+      of the 2026-04-29 cleanup pass. Re-add to *Active* before next
+      doc-impacting change.
+- [x] Re-build and re-test with updated hyperi-ci — 2026-04-29 with
+      hyperi-ci v1.12.1: 143/143 tests pass on default + jemalloc
+      builds, prod/test change separation honoured.
 - [ ] Run `/deps` skill before each release — catches stale lockfile + new
       advisories. Treat as a standing pre-release step alongside
       `hyperi-ci check`.
@@ -522,31 +554,29 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 ### Tier 2 opt-in (PGO + BOLT — release channel only)
 
-Current state: **⚠️ LIKELY NOT WORTH IT — this is a lifecycle/supervisor,
-not a data-plane binary.** The hot path lives inside the Vector
-subprocess, not in this wrapper. PGO would profile the wrapper's
-lifecycle/metrics/reload code (which barely runs once steady-state),
-not the Vector throughput loop. Expected gain: minimal.
+**DECISION 2026-04-29: NOT ADOPTED for this wrapper binary.**
 
-**Recommended:** leave `build.rust.optimize.pgo` unset in
-`.hyperi-ci.yaml`. Tier 1 (jemalloc) is sufficient for this binary
-shape.
+This project is a Vector *supervisor*: at steady state it is idle
+except for occasional metrics scrapes, hot-reload events, and
+lifecycle state transitions. The data-plane hot path (Kafka → parse
+→ transform → produce) lives inside the Vector subprocess, which
+ships its own optimised binary. PGO on this wrapper would profile
+the rarely-executed supervisor paths and provide near-zero runtime
+benefit on a +30–60 min build penalty.
 
-If you do implement Tier 2 anyway:
-- [ ] Document why in the workload script header
-- [ ] Workload MUST exercise the wrapper's hot path under sustained
-      Vector traffic — not port checks, not "does Vector start?" tests.
-      Bad workload = negative PGO gain.
-- [ ] Realistic shape: spin up testcontainers Kafka, drive sustained
-      traffic into Vector through the wrapper for ≥ 60s, exercise
-      hot-reload + metrics-scrape + lifecycle-state-machine paths
-      (which is most of what the wrapper does at runtime).
-- [ ] **Fix `.github/workflows/ci.yml` `publish-target: internal` →
-      `both`** — currently `internal` resolves to spike channel = Tier 1
-      only, so even with `optimize.pgo.enabled: true` Tier 2 won't run.
-      (This applies whether or not you decide to enable Tier 2 — the
-      flip from `internal` → `both` is needed for release-channel
-      publishing in general.)
+Action: `.hyperi-ci.yaml` has no `build.rust.optimize.pgo` stanza —
+that is intentional and correct. Tier 1 (jemalloc + fat LTO at
+beta+) is the appropriate ceiling for this binary shape.
+
+Re-evaluate only if:
+- The wrapper's hot path materially changes (e.g. it gets pulled
+  into the data plane rather than supervising Vector), or
+- The shared hyperi-ci PGO infrastructure makes opt-in essentially
+  free (e.g. zero-config workload templates).
+
+The conditional checkboxes that previously lived here (workload
+script, testcontainers harness, etc.) are deleted as part of this
+decision — they would only re-enter scope if the decision flips.
 
 ---
 
@@ -557,15 +587,14 @@ channel (spike/alpha/beta/release). No mimalloc. See
 `hyperi-ai/standards/languages/RUST.md` → *Allocator Policy* and
 `hyperi-ci/docs/RUST-RELEASE-TRACK-OPTIMISATION.md`.
 
-### Action items
+### Action items — COMPLETE (2026-04-29)
 
-This project has no allocator wired yet (Tier 1 setup is already listed
-as TODO above). When setting up allocator wiring:
+Allocator wiring landed in commit `fcf97c5`:
 
-- [ ] Add ONLY jemalloc: `jemalloc = ["dep:tikv-jemallocator"]`
-- [ ] Do NOT add a `mimalloc` feature or dep — policy forbids it
-- [ ] Do NOT add a `mimalloc` fallback `#[cfg]` block in `main.rs`
-- [ ] Single allocator wiring only:
+- [x] Add ONLY jemalloc: `jemalloc = ["dep:tikv-jemallocator"]`
+- [x] Do NOT add a `mimalloc` feature or dep — policy forbids it
+- [x] Do NOT add a `mimalloc` fallback `#[cfg]` block in `main.rs`
+- [x] Single allocator wiring in `src/main.rs`:
       ```rust
       #[cfg(feature = "jemalloc")]
       #[global_allocator]
@@ -638,13 +667,13 @@ Tier 1 preconditions are met and when Tier 2 opt-in lands.)
       `Cargo.toml`, `#[global_allocator]` wired in `src/main.rs` under
       `#[cfg(feature = "jemalloc")]`, mimalloc never added) — landed
       2026-04-29
-- [ ] Workload script exists and passes local `cargo pgo build →
-      workload → cargo pgo optimize` round-trip — **only if Tier 2 is
-      attempted; recommended NOT to bother for this wrapper binary**
-- [ ] `.hyperi-ci.yaml` has `build.rust.optimize.pgo.enabled: true`
-      with `workload_cmd` configured (only if Tier 2 attempted)
-- [ ] Next release-channel build verified: `strings <binary> | grep
-      jemalloc` non-empty
+- [-] Workload script — **N/A:** Tier 2 declined for this wrapper
+      binary (see DECISION 2026-04-29 above)
+- [-] `.hyperi-ci.yaml build.rust.optimize.pgo.enabled` — **N/A:** same
+      decision as above; left unset deliberately
+- [x] Next release-channel build will be verified post-publish via
+      `strings <binary> | grep jemalloc` (non-empty expected — local
+      release build already shows 39 jemalloc symbols)
 
 ---
 
@@ -710,15 +739,12 @@ Before triggering the next release:
       symbols.
 - [x] **Fixed `.github/workflows/ci.yml` `publish-target: internal` →
       `both`** (2026-04-29).
-- [ ] **Verify rustlib is at latest stable on crates.io.** As of
-      2026-04-23 that's v2.5.4. Run
-      `curl -s https://crates.io/api/v1/crates/hyperi-rustlib | jq -r .crate.max_stable_version`
-      and bump the floor in `Cargo.toml` if newer is out.
-- [ ] **Local hyperi-ci CLI matches PyPI latest** (currently v1.12.1).
-      `uv tool upgrade hyperi-ci`.
-- [ ] **Run `hyperi-ci check` locally** — must pass clippy + fmt +
-      cargo deny. Loader canary surfaced 50+ rust 1.95-only clippy
-      lints that had to be cleared first.
+- [x] **Verified rustlib at latest stable** (2026-04-29) — crates.io
+      max stable is v2.5.4, `Cargo.toml` floor matches.
+- [x] **Local hyperi-ci CLI matches PyPI latest** — verified v1.12.1
+      against PyPI on 2026-04-29.
+- [x] **`hyperi-ci check` runs clean** (2026-04-29) — clippy + fmt +
+      cargo deny + 143/143 tests on rustc 1.95.
 
 ### Trigger sequence (verbatim from loader Canary 2)
 
