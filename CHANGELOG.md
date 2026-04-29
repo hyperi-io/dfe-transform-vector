@@ -1,3 +1,11 @@
+## [1.0.10](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.9...v1.0.10) (2026-04-29)
+
+
+### Bug Fixes
+
+* **deps:** clear 9 security advisories via cargo update ([1185a86](https://github.com/hyperi-io/dfe-transform-vector/commit/1185a862958d6b468d7a011362e59fa93c515152))
+* wire Tier 1 jemalloc allocator under feature flag ([fcf97c5](https://github.com/hyperi-io/dfe-transform-vector/commit/fcf97c53c3003c92d24092d710a665ea14584652))
+
 ## [1.0.9](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.8...v1.0.9) (2026-04-16)
 
 
