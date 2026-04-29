@@ -435,10 +435,9 @@ nice-to-haves.
 These were already noted in *Lessons from dfe-loader Tier 2 canary*
 below; surfacing them here so they're actionable in one place.
 
-- [ ] `.github/workflows/ci.yml:39` — flip `publish-target: internal` →
-      `both`. Currently shipping spike-channel binaries (Tier 1 thin LTO)
-      instead of release-channel (Tier 1 jemalloc + fat LTO). Loader
-      v1.17.4 hit this exact bug. Single-line change.
+- [x] `.github/workflows/ci.yml:39` — flipped `publish-target: internal`
+      → `both` (2026-04-29). Release builds will now ship release-channel
+      binaries (jemalloc + fat LTO) once Tier 1 wiring is in.
 - [x] hyperi-ci CLI matches PyPI latest (1.12.1 confirmed local +
       remote)
 - [x] hyperi-rustlib at latest stable (2.5.4) — manifest floor matches
