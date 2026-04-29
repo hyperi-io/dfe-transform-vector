@@ -15,6 +15,7 @@ build/
 out/
 test-results/
 coverage/
+target
 target/
 .tmp/
 **/*.rs.bk
