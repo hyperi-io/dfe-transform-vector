@@ -357,6 +357,43 @@ Feature-gated under `scaling` — opt-in, KEDA direct Kafka lag trigger remains 
 
 ## Active
 
+### Release v1.0.10 — shipped 2026-04-29
+
+PATCH bump from three `fix:` commits (`fix(deps): clear advisories`,
+`fix: wire Tier 1 jemalloc allocator`, plus the `ci:` and `docs:`
+commits which don't bump). Pushed via `hyperi-ci push`, semantic-
+release tagged `v1.0.10`, `hyperi-ci release v1.0.10` dispatched the
+publish workflow.
+
+| Destination | Status | Evidence |
+|---|---|---|
+| R2 (`https://downloads.hyperi.io/dfe-transform-vector/v1.0.10/`) | ✅ shipped | both binaries + checksums.sha256, content-type `application/x-elf`, HTTP 200 |
+| GitHub Release `v1.0.10` | ✅ shipped | 3 assets (amd64 6,347,472 bytes, arm64 5,653,960 bytes, checksums) |
+| **Tier 1 jemalloc verified live** | ✅ | downloaded R2 amd64 → `strings ... \| grep jemalloc` → 39 hits, sha256 matches checksum file |
+| Container image (ghcr.io/hyperi-io/dfe-transform-vector) | ⏭ skipped | hyperi-ci `Container` job runs but build/push steps marked `skipped` — config-schema mismatch in `.hyperi-ci.yaml`. Same on dfe-loader v1.17.5. |
+| Helm chart push | ⏭ skipped | same root cause as Container |
+| JFrog (`hyperi.jfrog.io`) | 🚫 dead | subscription redirects to `landing.jfrog.com/reactivate-server` — hyperi-ci has already rerouted binaries to R2 + GH Releases |
+
+#### Platform-level follow-ups (NOT this project — file under hyperi-ci)
+
+The container/helm "skipped silently" pattern affects every DFE Rust
+service. **Do not patch our `.hyperi-ci.yaml`** — the schema we have
+(`publish.container.enabled`) matches the canonical dfe-loader/
+dfe-receiver layout. The skip lives inside hyperi-ci's reusable
+workflow (the `Check container enabled` step looks at the wrong key).
+
+- [ ] **(hyperi-ci issue)** `Container` job's `Check container
+      enabled` step reads top-level `container.enabled` but consumer
+      configs put it under `publish.container.enabled`. Either fix
+      the lookup path or migrate every consumer config in lockstep.
+- [ ] **(hyperi-ci issue)** Same for `helm.enabled`. When fixed,
+      decide replacement registry (JFrog is dead — likely
+      `ghcr.io/hyperi-io/charts/...` for OCI helm).
+- [ ] **(hyperi-ci issue)** `JFROG_TOKEN` is still passed in the
+      publish env even though the binary publisher already routes
+      around JFrog. Cosmetic — drop when hyperi-ci's publish secrets
+      are tidied.
+
 ### Dependency + Security Refresh (2026-04-29)
 
 **Source:** `/deps` skill (Phase 1 analysis-only) + `cargo deny check
@@ -387,8 +424,8 @@ All resolvable by `cargo update` — no `Cargo.toml` floor bumps needed.
       post-update)
 - [x] `hyperi-ci check` — clippy + fmt + 143 tests pass on rustc 1.95
       after cargo update (2026-04-29, 9 skipped are environment-gated).
-- [ ] Close GitHub Dependabot alerts #6, #7, #8, #9, #10, #11 as fixed
-      after the version commit lands on main
+- [x] GitHub Dependabot alerts #6–#11 auto-closed when v1.0.10 landed
+      on main (2026-04-29). `gh api .../dependabot/alerts` open count: 0.
 
 #### Other lockfile bumps in the same `cargo update` run (informational)
 
