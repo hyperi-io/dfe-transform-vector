@@ -8,7 +8,7 @@
 
 [package]
 name = "dfe-transform-vector"
-version = "1.0.10"
+version = "1.0.11"
 edition = "2024"
 authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Rust wrapper for Vector.dev subprocess — Kafka-to-Kafka transform pipelines"
