@@ -441,9 +441,9 @@ below; surfacing them here so they're actionable in one place.
 - [x] hyperi-ci CLI matches PyPI latest (1.12.1 confirmed local +
       remote)
 - [x] hyperi-rustlib at latest stable (2.5.4) — manifest floor matches
-- [ ] Tier 1 allocator wiring still pending — see *Rust Release-Track
-      Optimisation* section below. Without it, hyperi-ci falls back to
-      system allocator on every channel.
+- [x] Tier 1 allocator wiring complete (2026-04-29) — `jemalloc` feature
+      declared, `#[global_allocator]` in `src/main.rs`. Release build
+      verified with 39 jemalloc symbols.
 
 ### Performance Review
 
@@ -510,13 +510,15 @@ Wire in `src/main.rs`:
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 ```
 
-- [ ] Add `tikv-jemallocator` optional dep
-- [ ] Add `[features]` section with `default = []`, `jemalloc`
+- [x] Add `tikv-jemallocator` optional dep (`Cargo.toml`)
+- [x] Add `[features]` section with `default = []`, `jemalloc`
       (NO mimalloc per 2026-04-17 policy)
-- [ ] Wire `#[global_allocator]` in `src/main.rs`
-- [ ] Verify `[profile.release] lto = "thin"` (CI overrides to `fat` at beta+)
-- [ ] `cargo build --features jemalloc` compiles clean
-- [ ] `cargo test` still passes
+- [x] Wire `#[global_allocator]` in `src/main.rs`
+- [x] Verify `[profile.release] lto = "thin"` (CI overrides to `fat` at beta+)
+- [x] `cargo build --release --features jemalloc` compiles clean (2026-04-29)
+- [x] `hyperi-ci check` passes (143/143) on both default and jemalloc builds
+- [x] Verified: `strings target/release/dfe-transform-vector | grep -ciE
+      'jemalloc|je_mallctl'` → 39 (matches dfe-receiver canary)
 
 ### Tier 2 opt-in (PGO + BOLT — release channel only)
 
@@ -632,9 +634,10 @@ signal to apply the same pattern here.
 (Each consumer project owns the per-project status below — update as
 Tier 1 preconditions are met and when Tier 2 opt-in lands.)
 
-- [ ] Tier 1 preconditions met (`jemalloc` feature declared in
+- [x] Tier 1 preconditions met (`jemalloc` feature declared in
       `Cargo.toml`, `#[global_allocator]` wired in `src/main.rs` under
-      `#[cfg(feature = "jemalloc")]`, mimalloc never added)
+      `#[cfg(feature = "jemalloc")]`, mimalloc never added) — landed
+      2026-04-29
 - [ ] Workload script exists and passes local `cargo pgo build →
       workload → cargo pgo optimize` round-trip — **only if Tier 2 is
       attempted; recommended NOT to bother for this wrapper binary**
@@ -702,11 +705,11 @@ For comparison after this wrapper's next release-channel build:
 
 Before triggering the next release:
 
-- [ ] **Complete Tier 1 setup** (jemalloc feature + `#[global_allocator]`
-      wiring) — see Tier 1 prep above. Without this, hyperi-ci falls back
-      to system allocator on every channel.
-- [ ] **Fix `.github/workflows/ci.yml` `publish-target: internal` → `both`**
-      — single-line change.
+- [x] **Tier 1 setup complete** (jemalloc feature + `#[global_allocator]`
+      wiring) — landed 2026-04-29. Release build shows 39 jemalloc
+      symbols.
+- [x] **Fixed `.github/workflows/ci.yml` `publish-target: internal` →
+      `both`** (2026-04-29).
 - [ ] **Verify rustlib is at latest stable on crates.io.** As of
       2026-04-23 that's v2.5.4. Run
       `curl -s https://crates.io/api/v1/crates/hyperi-rustlib | jq -r .crate.max_stable_version`
