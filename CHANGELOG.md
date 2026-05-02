@@ -1,3 +1,11 @@
+## [1.0.12](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.11...v1.0.12) (2026-05-02)
+
+
+### Bug Fixes
+
+* **deployment:** wire DfeApp::deployment_contract trait hook + bump rustlib to >=2.7.0 ([c240a1b](https://github.com/hyperi-io/dfe-transform-vector/commit/c240a1b460a1674cbb50ec27bbda9e95c4d53476))
+* **deps:** pin rustlib to >=2.6.1 ([b92dc51](https://github.com/hyperi-io/dfe-transform-vector/commit/b92dc51efba53c1e1ae11ab970a2617623631a99))
+
 ## [1.0.11](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.10...v1.0.11) (2026-04-29)
 
 
