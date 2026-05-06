@@ -58,20 +58,14 @@ struct App {
 
 /// Application subcommands.
 ///
-/// Standard commands (`run`, `version`, `config-check`) delegate to the
-/// rustlib CLI lifecycle. Deployment commands generate artefacts from the
-/// [`DeploymentContract`](dfe_transform_vector::deployment::contract).
+/// Standard commands (`run`, `version`, `config-check`, `generate-artefacts`,
+/// `metrics-manifest`) are flattened from rustlib's [`StandardCommand`].
+/// Local extensions cover Vector-specific assembly and the legacy emit-* shortcuts.
 #[derive(Subcommand, Clone, Debug)]
 enum AppCommand {
-    /// Start the service (default if no subcommand given).
-    Run,
-
-    /// Print version information and exit.
-    Version,
-
-    /// Validate configuration and exit.
-    #[command(name = "config-check")]
-    ConfigCheck,
+    /// Standard rustlib commands (run, version, config-check, generate-artefacts, metrics-manifest).
+    #[command(flatten)]
+    Standard(StandardCommand),
 
     /// Assemble Vector config directory and exit.
     #[command(name = "assemble")]
@@ -81,22 +75,22 @@ enum AppCommand {
         dir: Option<String>,
     },
 
-    /// Generate Dockerfile to stdout.
+    /// Generate Dockerfile to stdout (legacy shortcut; prefer `generate-artefacts`).
     #[command(name = "emit-dockerfile")]
     EmitDockerfile,
 
-    /// Generate Helm chart to the given directory.
+    /// Generate Helm chart to the given directory (legacy shortcut; prefer `generate-artefacts`).
     #[command(name = "emit-chart")]
     EmitChart {
         /// Output directory for the chart.
         dir: String,
     },
 
-    /// Generate Docker Compose fragment to stdout.
+    /// Generate Docker Compose fragment to stdout (legacy shortcut; prefer `generate-artefacts`).
     #[command(name = "emit-compose")]
     EmitCompose,
 
-    /// Print deployment contract as JSON to stdout.
+    /// Print deployment contract as JSON to stdout (legacy shortcut; prefer `generate-artefacts`).
     #[command(name = "emit-contract")]
     EmitContract,
 }
@@ -124,15 +118,7 @@ impl DfeApp for App {
 
     fn command(&self) -> Option<&StandardCommand> {
         match &self.command {
-            Some(AppCommand::Version) => {
-                static VERSION: StandardCommand = StandardCommand::Version;
-                Some(&VERSION)
-            }
-            Some(AppCommand::ConfigCheck) => {
-                static CONFIG_CHECK: StandardCommand = StandardCommand::ConfigCheck;
-                Some(&CONFIG_CHECK)
-            }
-            // Run (explicit or default), Assemble, and deployment commands
+            Some(AppCommand::Standard(cmd)) => Some(cmd),
             _ => None,
         }
     }
@@ -213,7 +199,9 @@ async fn main() {
                 eprintln!("Vector config assembled in {}", config_dir.display());
                 return;
             }
-            _ => {}
+            AppCommand::Standard(_) => {
+                // fall through to run_app
+            }
         }
     }
 
