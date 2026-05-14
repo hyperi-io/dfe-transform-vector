@@ -77,10 +77,24 @@ fn emit_dockerfile_produces_valid_output() {
         "missing base image in Dockerfile"
     );
 
-    // Must contain Vector binary COPY
+    // Must download Vector binary inside the build (multi-arch, latest-or-pinned).
+    // Replaces the old `COPY vector /usr/local/bin/vector` which required CI-side
+    // staging — now the image is self-contained.
     assert!(
-        dockerfile.contains("COPY vector /usr/local/bin/vector"),
-        "missing Vector binary COPY"
+        dockerfile.contains("ARG VECTOR_VERSION"),
+        "missing VECTOR_VERSION build arg"
+    );
+    assert!(
+        dockerfile.contains("ARG TARGETARCH"),
+        "missing TARGETARCH build arg (multi-arch support)"
+    );
+    assert!(
+        dockerfile.contains("packages.timber.io/vector"),
+        "missing Vector tarball download from packages.timber.io"
+    );
+    assert!(
+        dockerfile.contains("/usr/local/bin/vector"),
+        "missing /usr/local/bin/vector install path"
     );
 
     // Must contain wrapper binary COPY
