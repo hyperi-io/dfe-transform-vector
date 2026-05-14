@@ -238,3 +238,110 @@ Reference implementation: dfe-loader v1.17.5 — full Tier 2 verified
 live on R2, build log signature
 `channel=release, allocator=jemalloc, lto=fat, pgo=on, bolt=on`.
 This wrapper would target `pgo=off, bolt=off` but otherwise the same.
+
+
+---
+
+## DFE Pipeline Context
+
+**This app:** dfe-transform-vector — Rust wrapper around the Vector.dev subprocess — Kafka → Kafka. Anomaly: routing config is owned by Vector itself, not by rustlib.
+**Criticality:** 6/6 (1 = highest)
+**Rustlib rebuild wave:** 2
+
+### Data flow
+
+```text
+                 ┌────────────────────────────────────────────┐
+                 │                INGRESS                      │
+                 │  ┌──────────────┐    ┌──────────────┐      │
+                 │  │ dfe-receiver │    │ dfe-fetcher  │      │
+                 │  │ (push: HTTP/ │    │ (pull: AWS / │      │
+                 │  │  syslog/gRPC)│    │ Azure / M365)│      │
+                 │  └──────┬───────┘    └──────┬───────┘      │
+                 └─────────┼───────────────────┼──────────────┘
+                           │                   │
+                           └─────────┬─────────┘
+                                     ▼
+                         ┌─────────────────────┐
+                         │  Kafka — ingress    │
+                         └──────────┬──────────┘
+                                    ▼
+                         ┌──────────────────────┐
+                         │      dfe-loader      │
+                         │ (route, enrich,      │
+                         │  parse, fan-out)     │
+                         └──────────┬──────────┘
+                                    ▼
+                         ┌─────────────────────┐
+                         │ Kafka — transform   │
+                         └──────────┬──────────┘
+                           │                  │
+                           ▼                  ▼
+                  ┌────────────────┐ ┌──────────────────────┐
+                  │ dfe-transform- │ │ dfe-transform-vector │
+                  │      vrl       │ │ (Vector.dev wrapper) │
+                  └────────┬───────┘ └──────────┬──────────┘
+                           │                    │
+                           └─────────┬──────────┘
+                                     ▼
+                         ┌─────────────────────┐
+                         │  Kafka — archive    │
+                         └──────────┬──────────┘
+                                    ▼
+                         ┌─────────────────────┐
+                         │    dfe-archiver     │
+                         │ (S3 / Azure / GCS / │
+                         │      MinIO)         │
+                         └─────────────────────┘
+```
+
+### Siblings — the core six DFE Rust apps
+
+| # | App | Role | Wave |
+|---|-----|------|------|
+| 1 | dfe-loader | Mid-tier routing, enrichment, parsing — most complex, best canary | 1 |
+| 2 | dfe-receiver | Push ingress (HTTP / syslog / gRPC) — pipeline entry point | 1 |
+| 3 | dfe-fetcher | Pull ingress (AWS / Azure / M365 / GCP) | 2 |
+| 4 | dfe-archiver | Sink to object store — bookend of the pipeline | 1 |
+| 5 | dfe-transform-vrl | Embedded VRL transform engine | 2 |
+| 6 | dfe-transform-vector | Vector.dev subprocess wrapper (owns its own routing config) | 2 |
+
+### Rustlib rebuild waves (ARC = 3 concurrent Rust CI builds)
+
+- **Wave 1 — bookends + ingress:** dfe-loader, dfe-receiver, dfe-archiver.
+  Covers the full data path (ingress → mid-tier → sink). If wave 1 is green,
+  the pipeline structure is sound.
+- **Wave 2 — remaining:** dfe-fetcher, dfe-transform-vrl, dfe-transform-vector.
+  Pull ingress + transform layer.
+
+Waves run sequentially; consumers within a wave run in parallel, capped at
+the ARC runner's concurrent Rust CI capacity (3).
+
+### Automation — `/rebuild-consumers` (driven from rustlib)
+
+When `hyperi-rustlib` changes and the change needs to flow downstream,
+**drive the rebuild from the `hyperi-rustlib` repo, not from this app**.
+The rebuild-consumers skill in rustlib owns the wave plan, target version,
+ARC capacity, and consumer scope:
+
+```bash
+# from the rustlib repo (sibling of this app):
+python3 scripts/rebuild_consumers.py check        # surface breakage
+python3 scripts/rebuild_consumers.py apply --wave 1
+python3 scripts/rebuild_consumers.py apply --wave 2
+```
+
+Reference (relative to this app — adjust if your workspace layout differs):
+
+- `../hyperi-rustlib/.claude/skills/rebuild-consumers/SKILL.md`
+- `../hyperi-rustlib/.claude/consumers.toml`
+- `../hyperi-rustlib/scripts/rebuild_consumers.py`
+- `../hyperi-rustlib/STATE.md` → *Core DFE Apps*
+
+### Backburner — not auto-rebuilt
+
+`dfe-transform-elastic` and `dfe-transform-splack` have drifted significantly
+against accumulated rustlib changes and need manual remediation before
+re-joining the lockstep set. The automation **excludes** them by design.
+Promotion requires a deliberate `tier = "core"` flip in
+`../hyperi-rustlib/.claude/consumers.toml`.
