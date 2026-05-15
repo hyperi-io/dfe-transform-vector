@@ -40,6 +40,49 @@ publish:
     platforms:
       - linux/amd64
       - linux/arm64
+    # Overlay framework: dfe-transform-vector ships an additional
+    # native binary (Vector.dev) alongside its own Rust binary. The
+    # contract-generated Dockerfile is single-binary; this overlay
+    # adds an in-build Vector download at the `before-user` anchor.
+    # See: hyperi-ci/docs/superpowers/specs/2026-05-15-deployment-overlay-framework-spec.md
+    binary_name: dfe-transform-vector
+    overlays:
+      - anchor: before-user
+        content: |
+          # Vector binary — downloaded inside the build for portability.
+          # By default fetches the LATEST Vector release; pin via
+          # `--build-arg VECTOR_VERSION=X.Y.Z` for reproducible builds.
+          # Multi-arch via $TARGETARCH (amd64/arm64 → x86_64/aarch64).
+          ARG VECTOR_VERSION=
+          ARG TARGETARCH
+          RUN set -eu \
+           && case "${TARGETARCH}" in \
+                  amd64) ARCH=x86_64 ;; \
+                  arm64) ARCH=aarch64 ;; \
+                  *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+              esac \
+           && if [ -z "${VECTOR_VERSION}" ]; then \
+                  VECTOR_VERSION=$(curl -fsSL https://api.github.com/repos/vectordotdev/vector/releases/latest \
+                      | grep '"tag_name"' \
+                      | head -1 \
+                      | sed 's/.*"v\([^"]*\)".*/\1/'); \
+                  if [ -z "${VECTOR_VERSION}" ]; then \
+                      echo "failed to resolve latest Vector version from GitHub API" >&2; \
+                      exit 1; \
+                  fi; \
+                  echo "Resolved latest Vector version: ${VECTOR_VERSION}"; \
+              fi \
+           && curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
+                  -o /tmp/vector.tar.gz \
+           && tar xz -C /tmp -f /tmp/vector.tar.gz \
+           && mv "/tmp/vector-${ARCH}-unknown-linux-gnu/bin/vector" /usr/local/bin/vector \
+           && chmod +x /usr/local/bin/vector \
+           && rm -rf /tmp/vector.tar.gz "/tmp/vector-${ARCH}-unknown-linux-gnu"
+      - anchor: before-user
+        content: |
+          # Vector data and config directories
+          RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe/transforms \
+              && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe
   helm:
     enabled: true
     registry: jfrog

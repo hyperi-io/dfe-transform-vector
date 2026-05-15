@@ -525,6 +525,21 @@ Note: Vector runs as subprocess — most knobs apply to the Rust integration lay
 
 ## Backlog
 
+- [ ] **Drop the `emit_dockerfile()` override once rustlib + hyperi-ci
+      ship the anchor+overlay machinery.** Full execution plan:
+      [`docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`](docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md).
+      The current `src/deployment.rs::emit_dockerfile()` +
+      `VECTOR_VERSION` const is a per-consumer stop-gap (added
+      2026-05-14 to unblock the v2.7.1 DLQ-migration release after the
+      rustlib v2.x deployment-contract refactor eroded commit 2345818's
+      pattern). Blocked on upstream work in `hyperi-rustlib` (anchor
+      emission) and `hyperi-ci` (overlay processor) — see spec section 3.
+      Once those release, this repo's work is section 4 of the spec: declare
+      the overlay in `.hyperi-ci.yaml`, delete the override, regenerate
+      `Dockerfile`, update the deployment test. Tracked upstream in
+      `hyperi-rustlib/TODO.md` (anchor+overlay machinery) and in the
+      memory entry `dockerfile-overlay-design`.
+
 - [ ] Documentation review (use `/doco` skill) — deferred; not part
       of the 2026-04-29 cleanup pass. Re-add to *Active* before next
       doc-impacting change.
