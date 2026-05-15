@@ -86,3 +86,5 @@ publish:
   helm:
     enabled: true
     registry: jfrog
+
+# canary trigger touch — 2026-05-15T03:17:09Z
