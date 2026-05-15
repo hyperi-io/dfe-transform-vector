@@ -1,3 +1,20 @@
+## [1.0.13](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.12...v1.0.13) (2026-05-15)
+
+
+### Bug Fixes
+
+* adopt hyperi-ci 2.3 overlay framework — drop emit_dockerfile() override ([7a405ba](https://github.com/hyperi-io/dfe-transform-vector/commit/7a405ba7b8bace67a854af1f7f239eddb8e85251))
+* **cli:** flatten StandardCommand for generate-artefacts + metrics-manifest ([59c0610](https://github.com/hyperi-io/dfe-transform-vector/commit/59c0610e198ea6dd6f6a97c1c06db952336ba536))
+* **deploy:** regenerate Dockerfile with Ubuntu 24.04 userdel fix ([bd8b698](https://github.com/hyperi-io/dfe-transform-vector/commit/bd8b698aedfe95f35624a10618dceadcafcde5f1))
+* **deps:** bump hyperi-rustlib to >=2.7.1 ([68c6ed1](https://github.com/hyperi-io/dfe-transform-vector/commit/68c6ed1606a3c10346d4e0aba9ee7a6a17234bd0))
+* download Vector binary inside image build instead of expecting CI to stage it ([7a76fe5](https://github.com/hyperi-io/dfe-transform-vector/commit/7a76fe5114d5b2ac2f3177a39eeacb6f6c45a329))
+* **release:** force patch bump v1.0.13 ([05b89fc](https://github.com/hyperi-io/dfe-transform-vector/commit/05b89fc35f81f8c80b44badd9c9e47033071dbc1))
+* **release:** force patch bump v1.0.13 ([b26eef1](https://github.com/hyperi-io/dfe-transform-vector/commit/b26eef197957e73ac8dcaba6f4fbef66e17ef92c))
+* **release:** force patch bump v1.0.13 ([ba184fb](https://github.com/hyperi-io/dfe-transform-vector/commit/ba184fb459ad003aa282c73ea40b4fde2bc63a83))
+* **release:** retrigger publish under hyperi-ci v2.1.5 ([83235a0](https://github.com/hyperi-io/dfe-transform-vector/commit/83235a0c326dbcc2ea2ce4d0fe7afb66e61f1d03))
+* **release:** retrigger publish under hyperi-ci v2.1.6 ([415f696](https://github.com/hyperi-io/dfe-transform-vector/commit/415f696acfbe6bf1c55faf411c6dcf15650427d4))
+* **test:** assert new Dockerfile shape (in-build Vector download) ([dcbc243](https://github.com/hyperi-io/dfe-transform-vector/commit/dcbc24392afb98beca7feecdda647b7e7c8c60a3))
+
 ## [1.0.12](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.11...v1.0.12) (2026-05-02)
 
 
