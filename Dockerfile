@@ -24,44 +24,6 @@ RUN chmod +x /usr/local/bin/dfe-transform-vector
 
 # Ubuntu 24.04 ships with ubuntu user at UID 1000 — remove before creating appuser
 RUN userdel -r ubuntu && useradd --create-home --uid 1000 appuser
-
-# Vector binary — downloaded inside the build for portability.
-#
-# By default, fetch the LATEST Vector release at build time. Override with
-# `--build-arg VECTOR_VERSION=X.Y.Z` to pin a specific version (reproducible).
-#
-# Multi-arch: $TARGETARCH is amd64/arm64 (set by buildx); we map to
-# Vector's tarball arch (x86_64/aarch64).
-ARG VECTOR_VERSION=
-ARG TARGETARCH
-RUN set -eu \
- && case "${TARGETARCH}" in \
-        amd64) ARCH=x86_64 ;; \
-        arm64) ARCH=aarch64 ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
- && if [ -z "${VECTOR_VERSION}" ]; then \
-        VECTOR_VERSION=$(curl -fsSL https://api.github.com/repos/vectordotdev/vector/releases/latest \
-            | grep '"tag_name"' \
-            | head -1 \
-            | sed 's/.*"v\([^"]*\)".*/\1/'); \
-        if [ -z "${VECTOR_VERSION}" ]; then \
-            echo "failed to resolve latest Vector version from GitHub API" >&2; \
-            exit 1; \
-        fi; \
-        echo "Resolved latest Vector version: ${VECTOR_VERSION}"; \
-    fi \
- && curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
-        -o /tmp/vector.tar.gz \
- && tar xz -C /tmp -f /tmp/vector.tar.gz \
- && mv "/tmp/vector-${ARCH}-unknown-linux-gnu/bin/vector" /usr/local/bin/vector \
- && chmod +x /usr/local/bin/vector \
- && rm -rf /tmp/vector.tar.gz "/tmp/vector-${ARCH}-unknown-linux-gnu"
-
-# Vector data and config directories
-RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe/transforms \
-    && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe
-
 USER appuser
 
 EXPOSE 9090 9000 8686

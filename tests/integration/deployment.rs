@@ -77,24 +77,20 @@ fn emit_dockerfile_produces_valid_output() {
         "missing base image in Dockerfile"
     );
 
-    // Must download Vector binary inside the build (multi-arch, latest-or-pinned).
-    // Replaces the old `COPY vector /usr/local/bin/vector` which required CI-side
-    // staging — now the image is self-contained.
+    // emit_dockerfile() is now a thin pass-through to rustlib's
+    // generate_dockerfile() — the Vector binary download and Vector
+    // data directories are declared as `publish.container.overlays`
+    // in `.hyperi-ci.yaml` and spliced by hyperi-ci's overlay
+    // framework at build time. This test asserts the BASE contract
+    // shape only; the overlay test below confirms the overlay is
+    // wired up in yaml.
     assert!(
-        dockerfile.contains("ARG VECTOR_VERSION"),
-        "missing VECTOR_VERSION build arg"
+        !dockerfile.contains("ARG VECTOR_VERSION"),
+        "Dockerfile should NOT contain VECTOR_VERSION at this layer — it lives in .hyperi-ci.yaml overlays now"
     );
     assert!(
-        dockerfile.contains("ARG TARGETARCH"),
-        "missing TARGETARCH build arg (multi-arch support)"
-    );
-    assert!(
-        dockerfile.contains("packages.timber.io/vector"),
-        "missing Vector tarball download from packages.timber.io"
-    );
-    assert!(
-        dockerfile.contains("/usr/local/bin/vector"),
-        "missing /usr/local/bin/vector install path"
+        !dockerfile.contains("packages.timber.io"),
+        "Dockerfile should NOT reference packages.timber.io at this layer"
     );
 
     // Must contain wrapper binary COPY
@@ -109,14 +105,34 @@ fn emit_dockerfile_produces_valid_output() {
         "missing USER directive in Dockerfile"
     );
 
-    // Must contain data directories
+    // Vector data directories are declared in `.hyperi-ci.yaml`
+    // overlays; not in the contract output.
     assert!(
-        dockerfile.contains("/var/lib/vector"),
-        "missing Vector data directory"
+        !dockerfile.contains("/var/lib/vector"),
+        "Dockerfile should NOT contain /var/lib/vector at this layer — it's declared in .hyperi-ci.yaml overlays"
+    );
+}
+
+#[test]
+fn hyperi_ci_yaml_declares_vector_overlay() {
+    // Sanity check — make sure the overlay-framework wiring is in
+    // place. If someone deletes the `publish.container.overlays`
+    // block from `.hyperi-ci.yaml` without realising what it's for,
+    // this test fires before the publish run does.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".hyperi-ci.yaml");
+    let yaml = std::fs::read_to_string(&path).expect("read .hyperi-ci.yaml");
+    assert!(
+        yaml.contains("publish.container.overlays:".replace(":", ":\n").as_str())
+            || yaml.contains("overlays:"),
+        "overlays: block missing from .hyperi-ci.yaml"
     );
     assert!(
-        dockerfile.contains("/var/run/vector/config"),
-        "missing Vector config directory"
+        yaml.contains("anchor: before-user"),
+        "before-user anchor missing — Vector overlay is the only one we ship"
+    );
+    assert!(
+        yaml.contains("packages.timber.io/vector"),
+        "Vector tarball download missing from .hyperi-ci.yaml overlay"
     );
 }
 
