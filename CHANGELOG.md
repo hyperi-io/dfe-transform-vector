@@ -1,3 +1,10 @@
+## [1.0.14](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.13...v1.0.14) (2026-05-20)
+
+
+### Bug Fixes
+
+* restore Vector binary install, error on missing --config, standardise mount path ([eb59c70](https://github.com/hyperi-io/dfe-transform-vector/commit/eb59c70a8d73b788f90507f816a2e413664cb34d))
+
 ## [1.0.13](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.12...v1.0.13) (2026-05-15)
 
 
