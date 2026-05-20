@@ -61,7 +61,7 @@ extraVolumeMounts: []
 # -- Topology spread constraints
 topologySpreadConstraints: []
 
-# -- Application configuration (mounted as /etc/dfe/config.yaml)
+# -- Application configuration (mounted as /etc/dfe-transform-vector/config.yaml)
 config:
   health:
     address: 0.0.0.0:9000
@@ -118,7 +118,7 @@ config:
     # librdkafka_options:
     #   fetch.max.bytes: "10485760"
   transforms:
-    dir: /etc/dfe/transforms
+    dir: /etc/dfe-transform-vector/transforms
   vector:
     api_address: 0.0.0.0:8686
     binary: /usr/local/bin/vector

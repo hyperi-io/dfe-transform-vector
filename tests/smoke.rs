@@ -15,6 +15,7 @@ use dfe_transform_vector::config::Config;
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
+use hyperi_rustlib::metrics::MetricsManager;
 
 // ---------------------------------------------------------------------------
 // Startup smoke tests — catch init panics
@@ -22,10 +23,12 @@ use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
 
 #[test]
 fn smoke_metrics_initialisation_does_not_panic() {
-    // WrapperMetrics::new() installs a global recorder and registers all
-    // metrics. If any metric name/description is invalid or the recorder
-    // setup panics, this test catches it.
-    let _metrics = WrapperMetrics::new("smoke-test-commit");
+    // WrapperMetrics::register() registers metrics against a shared
+    // MetricsManager (in production, that's the one owned by
+    // rustlib's ServiceRuntime). If any metric name/description is
+    // invalid the registration panics; this test catches that.
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let _metrics = WrapperMetrics::register(&manager, "smoke-test-commit");
 }
 
 #[test]
@@ -70,7 +73,8 @@ fn smoke_backoff_config_defaults_are_sane() {
 
 #[test]
 fn smoke_metrics_render_after_state_transitions() {
-    let metrics = WrapperMetrics::new("smoke-render");
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "smoke-render");
 
     // Simulate a full lifecycle
     metrics.crashes_total.increment(1);
@@ -81,8 +85,8 @@ fn smoke_metrics_render_after_state_transitions() {
     metrics.set_lifecycle_state(State::Running);
     metrics.uptime_seconds.set(123.456);
 
-    // Render must not panic
-    let output = metrics.render();
+    // Render via the shared manager (the runtime renders the same way in prod)
+    let output = manager.render();
 
     // Must produce non-empty output
     assert!(
@@ -96,10 +100,38 @@ fn smoke_metrics_render_after_state_transitions() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_load_missing_file_returns_defaults() {
-    // Config::load silently falls back to defaults when file doesn't exist
-    let config = Config::load(Some("/nonexistent/config.yaml"));
-    assert!(config.is_ok(), "missing file should fall back to defaults");
+fn config_load_missing_explicit_path_errors_clearly() {
+    // Explicit --config <path> with a missing file must error loudly with
+    // the actual path. Silent fallback to defaults sends users on a wild
+    // goose chase debugging the wrong validation error downstream.
+    // Issue #12.
+    let err = Config::load(Some("/nonexistent/config.yaml"))
+        .expect_err("missing explicit --config path must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("config file not found"),
+        "error should say 'config file not found', got: {msg}"
+    );
+    assert!(
+        msg.contains("/nonexistent/config.yaml"),
+        "error must include the missing path, got: {msg}"
+    );
+}
+
+#[test]
+fn config_load_no_explicit_path_is_lenient() {
+    // Implicit search (config.yaml / config.yml in CWD) is optional by
+    // design — missing is fine, defaults take over. Only --config <path>
+    // is strict. Issue #12.
+    let tmpdir = tempfile::tempdir().unwrap();
+    let original = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmpdir.path()).unwrap();
+    let result = Config::load(None);
+    std::env::set_current_dir(original).unwrap();
+    assert!(
+        result.is_ok(),
+        "implicit search with no files present should fall back to defaults"
+    );
 }
 
 #[test]

@@ -525,8 +525,8 @@ Note: Vector runs as subprocess — most knobs apply to the Rust integration lay
 
 ## Backlog
 
-- [ ] **Drop the `emit_dockerfile()` override once rustlib + hyperi-ci
-      ship the anchor+overlay machinery.** Full execution plan:
+- [ ] **Drop the `emit_dockerfile()` override** once rustlib + hyperi-ci
+      ship the anchor+overlay machinery. Full execution plan:
       [`docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`](docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md).
       The current `src/deployment.rs::emit_dockerfile()` +
       `VECTOR_VERSION` const is a per-consumer stop-gap (added

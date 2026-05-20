@@ -52,7 +52,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - "--config"
-            - "/etc/dfe/config.yaml"
+            - "/etc/dfe-transform-vector/config.yaml"
           ports:
             - name: metrics
               containerPort: {{ .Values.service.port }}
@@ -96,7 +96,7 @@ spec:
             periodSeconds: 5
           volumeMounts:
             - name: config
-              mountPath: /etc/dfe
+              mountPath: /etc/dfe-transform-vector
               readOnly: true
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}

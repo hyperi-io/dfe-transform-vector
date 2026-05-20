@@ -32,7 +32,9 @@ use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
 use dfe_transform_vector::config::validate::{check_vector_version, vector_validate};
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health::serve_health;
-use dfe_transform_vector::metrics::{WrapperMetrics, serve_metrics};
+use dfe_transform_vector::metrics::{
+    WrapperMetrics, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
+};
 
 /// Git commit hash for build info metric.
 const COMMIT: &str = match option_env!("GIT_COMMIT") {
@@ -135,9 +137,9 @@ impl DfeApp for App {
     async fn run_service(
         &self,
         config: Config,
-        _runtime: hyperi_rustlib::cli::ServiceRuntime,
+        runtime: hyperi_rustlib::cli::ServiceRuntime,
     ) -> Result<(), CliError> {
-        run_transform_service(&self.common, config)
+        run_transform_service(&self.common, config, runtime)
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
@@ -213,7 +215,11 @@ async fn main() {
 }
 
 /// Main service loop — called by the DfeApp lifecycle after logging and config.
-async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::Result<()> {
+async fn run_transform_service(
+    common: &CommonArgs,
+    config: Config,
+    runtime: hyperi_rustlib::cli::ServiceRuntime,
+) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
         version = env!("CARGO_PKG_VERSION"),
@@ -261,9 +267,25 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
 
-    // Wrapper metrics (installs global recorder, registers DfeMetrics + AppMetrics)
-    let metrics = Arc::new(WrapperMetrics::new(COMMIT));
+    // Wrapper metrics register on the runtime's MetricsManager — the
+    // runtime already owns the global recorder and the /metrics HTTP
+    // server. We do NOT create a second MetricsManager or HTTP server
+    // here (previous double-init bound the same port twice and split
+    // metrics across two registries).
+    let metrics = Arc::new(WrapperMetrics::register(&runtime.metrics, COMMIT));
     let started_at = Instant::now();
+
+    // Drive the lifecycle-state gauge from lifecycle transitions
+    // (previously updated on every /metrics scrape; the runtime's
+    // server doesn't give us a pre-scrape hook, so we push instead).
+    spawn_lifecycle_gauge_task(metrics.clone(), &lifecycle);
+
+    // Keep uptime_seconds fresh between scrapes.
+    spawn_uptime_tick_task(
+        metrics.clone(),
+        started_at,
+        std::time::Duration::from_secs(5),
+    );
 
     // Shutdown signal channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -274,25 +296,6 @@ async fn run_transform_service(common: &CommonArgs, config: Config) -> anyhow::R
     tokio::spawn(async move {
         if let Err(e) = serve_health(&health_address, health_lifecycle).await {
             error!(error = %e, "health server failed");
-        }
-    });
-
-    // Spawn metrics server
-    let metrics_lifecycle = lifecycle.clone();
-    let metrics_address = config.metrics.address.clone();
-    let vector_metrics_address = config.metrics.vector_metrics_address.clone();
-    let metrics_clone = metrics.clone();
-    tokio::spawn(async move {
-        if let Err(e) = serve_metrics(
-            &metrics_address,
-            metrics_clone,
-            metrics_lifecycle,
-            started_at,
-            vector_metrics_address,
-        )
-        .await
-        {
-            error!(error = %e, "metrics server failed");
         }
     });
 
