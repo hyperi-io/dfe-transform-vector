@@ -766,7 +766,7 @@ fn config_with_all_fields_populated_validates() {
             librdkafka_options: [("queue.buffering.max.kbytes".into(), "1048576".into())].into(),
         },
         transforms: TransformConfig {
-            dir: Some("/etc/dfe/transforms".into()),
+            dir: Some("/etc/dfe-transform-vector/transforms".into()),
             files: None,
         },
         vector: VectorConfig {

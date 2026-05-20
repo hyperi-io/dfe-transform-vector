@@ -24,6 +24,31 @@ RUN chmod +x /usr/local/bin/dfe-transform-vector
 
 # Ubuntu 24.04 ships with ubuntu user at UID 1000 — remove before creating appuser
 RUN userdel -r ubuntu && useradd --create-home --uid 1000 appuser
+# Vector binary — downloaded inside the build for portability.
+# Pinned to 0.48.0; bump deliberately (CLI flags + config
+# schema can shift between minor versions). Multi-arch via $TARGETARCH.
+ARG VECTOR_VERSION=0.48.0
+ARG TARGETARCH
+RUN set -eu \
+ && case "${TARGETARCH:-amd64}" in \
+     amd64) ARCH=x86_64 ;; \
+     arm64) ARCH=aarch64 ;; \
+     *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+ esac \
+ && curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
+         -o /tmp/vector.tar.gz \
+ && tar xz -C /tmp -f /tmp/vector.tar.gz \
+ && mv "/tmp/vector-${ARCH}-unknown-linux-gnu/bin/vector" /usr/local/bin/vector \
+ && chmod +x /usr/local/bin/vector \
+ && rm -rf /tmp/vector.tar.gz "/tmp/vector-${ARCH}-unknown-linux-gnu" \
+ && /usr/local/bin/vector --version
+
+# Vector data and config directories
+RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \
+     && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector
+
+LABEL io.hyperi.vector.version="0.48.0"
+
 USER appuser
 
 EXPOSE 9090 9000 8686
@@ -32,5 +57,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:9090/health/live > /dev/null || exit 1
 
 ENTRYPOINT ["dfe-transform-vector"]
-CMD ["--config", "/etc/dfe/config.yaml"]
+CMD ["--config", "/etc/dfe-transform-vector/config.yaml"]
 

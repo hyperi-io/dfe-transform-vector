@@ -1,45 +1,49 @@
 // Project:   dfe-transform-vector
 // File:      src/metrics.rs
-// Purpose:   Prometheus metrics endpoint (/metrics)
+// Purpose:   Wrapper-specific Prometheus metrics (registered on the runtime's MetricsManager)
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Prometheus metrics endpoint (`/metrics`).
+//! Wrapper-specific Prometheus metrics.
 //!
-//! Uses rustlib `HttpServer` (axum) for the HTTP transport with a custom
-//! `/metrics` route that renders wrapper metrics AND proxies Vector's
-//! internal prometheus_exporter output from `:9598`.
+//! All metrics are registered on the `MetricsManager` owned by
+//! `hyperi_rustlib::cli::ServiceRuntime`. The runtime serves `/metrics`,
+//! `/healthz`, and `/readyz` on `args.metrics_addr` — this module no
+//! longer runs its own HTTP server, eliminating the previous double-bind
+//! against the same port.
 //!
-//! Wrapper metrics use `dfe_transform_vector_` prefix for service-specific
-//! counters. The `dfe_pipeline_ready` gauge follows the DFE platform
-//! standard. Transport-level metrics (`dfe_transport_*`, `dfe_records_*`)
-//! come from Vector's internal prometheus_exporter via the metrics proxy.
+//! Vector's own metrics (transport, records, internal counters) are
+//! exposed by Vector's `prometheus_exporter` sink on
+//! `config.metrics.vector_metrics_address` (default `127.0.0.1:9598`).
+//! Prometheus scrapes that endpoint directly as a separate target — the
+//! wrapper does NOT proxy-merge it any more. The chart's `extraPorts`
+//! plus a PodMonitor selector handles the second target.
 
-use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use hyperi_rustlib::http_server::{
-    HttpServer, HttpServerConfig, IntoResponse, Response, Router, State as AxumState, get,
-};
 use hyperi_rustlib::metrics::MetricsManager;
 use hyperi_rustlib::metrics::dfe::DfeMetrics;
 use hyperi_rustlib::metrics::dfe_groups::AppMetrics;
 use metrics::{Counter, Gauge};
-use tracing::{debug, info, trace};
+use tokio::sync::watch;
+use tracing::debug;
 
-use crate::Result;
 use crate::vector::Lifecycle;
 use crate::vector::lifecycle::State;
 
-/// Wrapper metrics registered via `MetricsManager`.
+/// Wrapper-specific metrics, registered on a shared `MetricsManager`.
 ///
-/// Service-specific metrics use `dfe_transform_vector_` prefix (applied by
-/// MetricsManager namespace). The `dfe_pipeline_ready` gauge follows the
-/// DFE platform standard via `DfeMetrics`.
+/// Service-specific metrics use the `dfe_transform_vector_` prefix
+/// (applied by the manager's namespace). The `dfe_pipeline_ready` gauge
+/// follows the DFE platform standard via `DfeMetrics`.
+///
+/// This struct does NOT own a `MetricsManager` — it borrows the one
+/// created by `hyperi_rustlib::cli::ServiceRuntime` and registers its
+/// counters/gauges against it. The runtime owns the `/metrics` HTTP
+/// server; this module only feeds metric values into it.
 pub struct WrapperMetrics {
-    pub manager: MetricsManager,
     pub crashes_total: Counter,
     pub restarts_total: Counter,
     pub config_validation_errors_total: Counter,
@@ -49,13 +53,14 @@ pub struct WrapperMetrics {
 }
 
 impl WrapperMetrics {
-    /// Create and register all wrapper metrics.
+    /// Register wrapper metrics against the runtime's `MetricsManager`.
     ///
-    /// Installs the global `metrics` recorder via `MetricsManager::new()`.
-    /// Must be called once, before any `metrics::counter!` / `metrics::gauge!` usage.
-    pub fn new(commit: &str) -> Self {
-        let manager = MetricsManager::new("dfe_transform_vector");
-
+    /// The runtime has already installed the global `metrics` recorder
+    /// and registered platform metrics (`DfeMetrics`, `AppMetrics`).
+    /// This call adds wrapper-specific counters/gauges on the SAME
+    /// manager so all metrics appear under a single `/metrics` endpoint
+    /// served by the runtime.
+    pub fn register(manager: &MetricsManager, commit: &str) -> Self {
         let crashes_total =
             manager.counter("crashes_total", "Total number of Vector subprocess crashes");
         let restarts_total = manager.counter(
@@ -68,7 +73,8 @@ impl WrapperMetrics {
         );
         let uptime_seconds = manager.gauge("uptime_seconds", "Vector subprocess uptime in seconds");
 
-        // Describe the labelled metrics (recorded via macros in set_lifecycle_state / reload)
+        // Describe the labelled metrics (recorded via macros in
+        // set_lifecycle_state / record_config_reload).
         metrics::describe_gauge!(
             "dfe_transform_vector_lifecycle_state",
             "Current lifecycle state (1=active)"
@@ -78,11 +84,10 @@ impl WrapperMetrics {
             "Total config reloads by result"
         );
 
-        let app = AppMetrics::new(&manager, env!("CARGO_PKG_VERSION"), commit);
-        let dfe = DfeMetrics::register(&manager);
+        let app = AppMetrics::new(manager, env!("CARGO_PKG_VERSION"), commit);
+        let dfe = DfeMetrics::register(manager);
 
         Self {
-            manager,
             crashes_total,
             restarts_total,
             config_validation_errors_total,
@@ -131,188 +136,50 @@ impl WrapperMetrics {
     pub fn record_config_validation_error(&self) {
         self.config_validation_errors_total.increment(1);
     }
-
-    /// Render all metrics in Prometheus text format.
-    pub fn render(&self) -> String {
-        self.manager.render()
-    }
 }
 
-/// Shared state for the metrics axum handler.
-#[derive(Clone)]
-struct MetricsState {
-    metrics: Arc<WrapperMetrics>,
-    lifecycle: Lifecycle,
+/// Drive the lifecycle-state gauge from lifecycle transitions.
+///
+/// Subscribes to the lifecycle watch channel and pushes a gauge update
+/// every time the state changes. Replaces the previous per-scrape update
+/// that ran inside the (now-deleted) metrics HTTP handler.
+///
+/// Spawns a background task and returns immediately. The task exits when
+/// the lifecycle drops all senders.
+pub fn spawn_lifecycle_gauge_task(
+    metrics: std::sync::Arc<WrapperMetrics>,
+    lifecycle: &Lifecycle,
+) -> tokio::task::JoinHandle<()> {
+    let mut rx: watch::Receiver<State> = lifecycle.subscribe();
+    tokio::spawn(async move {
+        // Emit the initial state immediately
+        metrics.set_lifecycle_state(*rx.borrow());
+        while rx.changed().await.is_ok() {
+            let state = *rx.borrow();
+            debug!(?state, "lifecycle state changed");
+            metrics.set_lifecycle_state(state);
+        }
+    })
+}
+
+/// Drive the uptime gauge from a periodic tick.
+///
+/// The runtime's `/metrics` endpoint exposes the gauge value at scrape
+/// time. We tick every `interval` to keep the value fresh between
+/// scrapes (Prometheus default scrape is 15-30s, ticking at 5s is fine).
+pub fn spawn_uptime_tick_task(
+    metrics: std::sync::Arc<WrapperMetrics>,
     started_at: Instant,
-    vector_metrics_address: String,
-}
-
-/// Start the metrics HTTP server.
-///
-/// Serves `/metrics` with wrapper metrics in Prometheus text format,
-/// plus proxied Vector internal metrics from its prometheus_exporter sink.
-pub async fn serve_metrics(
-    address: &str,
-    metrics: Arc<WrapperMetrics>,
-    lifecycle: Lifecycle,
-    started_at: Instant,
-    vector_metrics_address: String,
-) -> Result<()> {
-    let state = MetricsState {
-        metrics,
-        lifecycle,
-        started_at,
-        vector_metrics_address,
-    };
-
-    let app = Router::new()
-        .route("/metrics", get(metrics_handler))
-        .with_state(state);
-
-    let config = HttpServerConfig {
-        bind_address: address.to_string(),
-        enable_health_endpoints: false,
-        enable_metrics_endpoint: false,
-        enable_config_endpoint: false,
-        ..Default::default()
-    };
-
-    info!(address, "metrics server listening");
-
-    let server = HttpServer::new(config);
-    server
-        .serve(app)
-        .await
-        .map_err(|e| crate::Error::Config(format!("metrics server error: {e}")))
-}
-
-/// Handle GET /metrics — render wrapper metrics + proxy Vector metrics.
-async fn metrics_handler(AxumState(state): AxumState<MetricsState>) -> impl IntoResponse {
-    let scrape_start = std::time::Instant::now();
-
-    // Update dynamic metrics before rendering
-    let lifecycle_state = state.lifecycle.state();
-    state.metrics.set_lifecycle_state(lifecycle_state);
-    let uptime = state.started_at.elapsed().as_secs_f64();
-    state.metrics.uptime_seconds.set(uptime);
-
-    // Render wrapper metrics via MetricsManager
-    let mut output = state.metrics.render();
-    let wrapper_render_ms = scrape_start.elapsed().as_millis();
-
-    // Proxy Vector's prometheus_exporter metrics (best-effort)
-    let proxy_start = std::time::Instant::now();
-    let proxied = if lifecycle_state.is_ready() {
-        fetch_vector_metrics(&state.vector_metrics_address).await
-    } else {
-        None
-    };
-    let proxy_ms = proxy_start.elapsed().as_millis();
-
-    if let Some(vector_metrics) = proxied {
-        trace!(
-            wrapper_render_ms,
-            proxy_fetch_ms = proxy_ms,
-            vector_metrics_address = %state.vector_metrics_address,
-            "metric scrape timing"
-        );
-        output.push('\n');
-        output.push_str(&vector_metrics);
-    } else {
-        trace!(
-            wrapper_render_ms,
-            proxy_skipped = !lifecycle_state.is_ready(),
-            lifecycle_state = %lifecycle_state,
-            "metric scrape timing (no Vector proxy)"
-        );
-    }
-
-    Response::builder()
-        .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(output)
-        .unwrap_or_else(|_| Response::new("internal error".to_string()))
-}
-
-/// Maximum size for proxied Vector metrics response (10 MiB).
-///
-/// Prevents OOM if Vector's prometheus_exporter returns an unexpectedly
-/// large response (misconfigured labels, high cardinality, etc.).
-const MAX_METRICS_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Fetch metrics from Vector's prometheus_exporter sink (best-effort).
-///
-/// Returns `None` if Vector isn't running or the fetch fails.
-/// Uses a short timeout and bounded read to avoid blocking or OOM.
-async fn fetch_vector_metrics(address: &str) -> Option<String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-
-    let stream = match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        TcpStream::connect(address),
-    )
-    .await
-    {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            trace!(address, error = %e, "Vector metrics proxy: connect failed");
-            return None;
+    interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            metrics
+                .uptime_seconds
+                .set(started_at.elapsed().as_secs_f64());
         }
-        Err(_) => {
-            trace!(address, "Vector metrics proxy: connect timeout");
-            return None;
-        }
-    };
-
-    let request = format!("GET /metrics HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
-
-    let mut stream = stream;
-    if let Err(e) = stream.write_all(request.as_bytes()).await {
-        trace!(address, error = %e, "Vector metrics proxy: write failed");
-        return None;
-    }
-
-    // Bounded read: cap at MAX_METRICS_RESPONSE_BYTES to prevent OOM
-    let mut response_bytes = Vec::with_capacity(64 * 1024);
-    let mut limited = stream.take(MAX_METRICS_RESPONSE_BYTES);
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        limited.read_to_end(&mut response_bytes),
-    )
-    .await
-    {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => {
-            trace!(address, error = %e, "Vector metrics proxy: read failed");
-            return None;
-        }
-        Err(_) => {
-            trace!(address, "Vector metrics proxy: read timeout");
-            return None;
-        }
-    }
-
-    let response = match String::from_utf8(response_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            trace!(address, error = %e, "Vector metrics proxy: invalid UTF-8");
-            return None;
-        }
-    };
-
-    // Extract body from HTTP response
-    let body = response.split("\r\n\r\n").nth(1)?;
-
-    // Verify we got a 200 response by parsing the status code
-    let status_line = response.lines().next()?;
-    let status_code = status_line.split_whitespace().nth(1).unwrap_or("");
-    if status_code != "200" {
-        debug!(
-            status = status_line,
-            "Vector metrics proxy got non-200 response"
-        );
-        return None;
-    }
-
-    Some(body.to_string())
+    })
 }

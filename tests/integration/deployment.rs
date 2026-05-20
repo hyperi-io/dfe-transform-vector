@@ -71,68 +71,112 @@ fn contract_produces_valid_structure() {
 fn emit_dockerfile_produces_valid_output() {
     let dockerfile = deployment::emit_dockerfile();
 
-    // Must contain base image
+    // Base image
     assert!(
         dockerfile.contains("FROM ubuntu:24.04"),
         "missing base image in Dockerfile"
     );
 
-    // emit_dockerfile() is now a thin pass-through to rustlib's
-    // generate_dockerfile() — the Vector binary download and Vector
-    // data directories are declared as `publish.container.overlays`
-    // in `.hyperi-ci.yaml` and spliced by hyperi-ci's overlay
-    // framework at build time. This test asserts the BASE contract
-    // shape only; the overlay test below confirms the overlay is
-    // wired up in yaml.
+    // Wrapper binary COPY
     assert!(
-        !dockerfile.contains("ARG VECTOR_VERSION"),
-        "Dockerfile should NOT contain VECTOR_VERSION at this layer — it lives in .hyperi-ci.yaml overlays now"
-    );
-    assert!(
-        !dockerfile.contains("packages.timber.io"),
-        "Dockerfile should NOT reference packages.timber.io at this layer"
+        dockerfile.contains("COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector"),
+        "missing wrapper binary COPY in Dockerfile"
     );
 
-    // Must contain wrapper binary COPY
+    // Vector binary install (Issue #13 — published image was missing this).
     assert!(
-        dockerfile.contains("dfe-transform-vector"),
-        "missing wrapper binary in Dockerfile"
+        dockerfile.contains("ARG VECTOR_VERSION"),
+        "Dockerfile missing Vector version ARG — Vector binary install absent"
+    );
+    assert!(
+        dockerfile.contains("packages.timber.io/vector"),
+        "Dockerfile missing Vector tarball download from packages.timber.io"
+    );
+    assert!(
+        dockerfile.contains("/usr/local/bin/vector --version"),
+        "Dockerfile missing build-time `vector --version` smoke check — \
+         a broken/missing binary would not be caught at image build time"
+    );
+    assert!(
+        dockerfile.contains(&format!(
+            "ARG VECTOR_VERSION={}",
+            deployment::VECTOR_VERSION
+        )),
+        "Vector version must be pinned to deployment::VECTOR_VERSION, not 'latest'"
+    );
+    assert!(
+        dockerfile.contains(&format!(
+            "io.hyperi.vector.version=\"{}\"",
+            deployment::VECTOR_VERSION
+        )),
+        "Dockerfile missing OCI label io.hyperi.vector.version for audit"
     );
 
-    // Must contain USER directive (non-root)
+    // Vector data directories created before USER switch.
     assert!(
-        dockerfile.contains("USER "),
-        "missing USER directive in Dockerfile"
+        dockerfile.contains("/var/lib/vector"),
+        "Dockerfile missing /var/lib/vector data dir"
+    );
+    assert!(
+        dockerfile.contains("/etc/dfe-transform-vector/transforms"),
+        "Dockerfile missing /etc/dfe-transform-vector/transforms transform dir"
     );
 
-    // Vector data directories are declared in `.hyperi-ci.yaml`
-    // overlays; not in the contract output.
+    // Splice order: Vector install must land BEFORE `USER appuser` so
+    // root can chown the directories.
+    let vector_idx = dockerfile
+        .find("ARG VECTOR_VERSION")
+        .expect("vector install present");
+    let user_idx = dockerfile.find("USER ").expect("USER directive present");
     assert!(
-        !dockerfile.contains("/var/lib/vector"),
-        "Dockerfile should NOT contain /var/lib/vector at this layer — it's declared in .hyperi-ci.yaml overlays"
+        vector_idx < user_idx,
+        "Vector install must be spliced BEFORE USER directive"
+    );
+
+    // Config mount path matches sibling DFE components (Issue #11).
+    assert!(
+        dockerfile.contains("/etc/dfe-transform-vector/config.yaml"),
+        "Dockerfile CMD must reference /etc/dfe-transform-vector/config.yaml \
+         (matches sibling DFE components like dfe-loader)"
+    );
+    assert!(
+        !dockerfile.contains("/etc/dfe/config.yaml"),
+        "Dockerfile must NOT reference legacy /etc/dfe/config.yaml — \
+         that path is inconsistent with sibling components"
     );
 }
 
 #[test]
-fn hyperi_ci_yaml_declares_vector_overlay() {
-    // Sanity check — make sure the overlay-framework wiring is in
-    // place. If someone deletes the `publish.container.overlays`
-    // block from `.hyperi-ci.yaml` without realising what it's for,
-    // this test fires before the publish run does.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".hyperi-ci.yaml");
-    let yaml = std::fs::read_to_string(&path).expect("read .hyperi-ci.yaml");
-    assert!(
-        yaml.contains("publish.container.overlays:".replace(":", ":\n").as_str())
-            || yaml.contains("overlays:"),
-        "overlays: block missing from .hyperi-ci.yaml"
+fn checked_in_dockerfile_matches_emit_dockerfile() {
+    // The checked-in Dockerfile is autogenerated from emit_dockerfile().
+    // If they drift, CI publishes from a stale Dockerfile and bugs like
+    // issue #13 (missing Vector binary) sneak through.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Dockerfile");
+    let on_disk = std::fs::read_to_string(&path).expect("read Dockerfile");
+    let emitted = deployment::emit_dockerfile();
+    assert_eq!(
+        on_disk.trim(),
+        emitted.trim(),
+        "Dockerfile on disk does not match emit_dockerfile() output — \
+         regenerate with: `cargo run -- emit-dockerfile > Dockerfile`"
+    );
+}
+
+#[test]
+fn contract_uses_standard_mount_path() {
+    // Sibling DFE components (loader, receiver, fetcher, archiver) all
+    // mount config at /etc/<component-name>/config.yaml. Don't be the
+    // outlier that forces compose authors to special-case this service.
+    // Issue #11.
+    let c = deployment::contract();
+    assert_eq!(
+        c.config_mount_path, "/etc/dfe-transform-vector/config.yaml",
+        "config_mount_path must follow /etc/<component-name>/ convention"
     );
     assert!(
-        yaml.contains("anchor: before-user"),
-        "before-user anchor missing — Vector overlay is the only one we ship"
-    );
-    assert!(
-        yaml.contains("packages.timber.io/vector"),
-        "Vector tarball download missing from .hyperi-ci.yaml overlay"
+        c.entrypoint_args
+            .contains(&"/etc/dfe-transform-vector/config.yaml".to_string()),
+        "entrypoint --config arg must match config_mount_path"
     );
 }
 

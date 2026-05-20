@@ -1,19 +1,23 @@
 // Project:   dfe-transform-vector
 // File:      tests/integration/lifecycle.rs
-// Purpose:   Integration tests for lifecycle and health/metrics servers
+// Purpose:   Integration tests for lifecycle state machine + health server
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Integration tests for lifecycle state machine and observability.
-
-use std::sync::Arc;
-use std::time::Instant;
+//! Integration tests for the lifecycle state machine and the health
+//! HTTP server.
+//!
+//! Metrics endpoint tests live in `tests/integration/metrics.rs` and
+//! exercise `WrapperMetrics::register()` against a local
+//! `MetricsManager`. The wrapper no longer runs its own metrics HTTP
+//! server — the rustlib `ServiceRuntime` owns `/metrics`.
 
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
+use hyperi_rustlib::metrics::MetricsManager;
 
 use crate::common::{free_port, reqwest_lite};
 
@@ -57,7 +61,8 @@ fn lifecycle_subscriber_gets_updates() {
 
 #[test]
 fn wrapper_metrics_register_and_render() {
-    let metrics = WrapperMetrics::new("test-commit");
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "test-commit");
 
     // Increment some counters
     metrics.crashes_total.increment(2);
@@ -65,8 +70,9 @@ fn wrapper_metrics_register_and_render() {
     metrics.record_config_reload("success");
     metrics.record_config_validation_error();
 
-    // Render to Prometheus text format via MetricsManager
-    let output = metrics.render();
+    // Render via the shared MetricsManager (the runtime would render via
+    // the same path in production).
+    let output = manager.render();
 
     // Verify metric names appear in output
     assert!(
@@ -89,11 +95,12 @@ fn wrapper_metrics_register_and_render() {
 
 #[test]
 fn wrapper_metrics_lifecycle_state_gauge() {
-    let metrics = WrapperMetrics::new("test-commit");
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "test-commit");
 
     metrics.set_lifecycle_state(State::Running);
 
-    let output = metrics.render();
+    let output = manager.render();
 
     // Running should be 1, others should be 0
     assert!(
@@ -150,45 +157,4 @@ async fn health_server_reports_not_ready_when_initialising() {
     let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
     assert_eq!(resp.0, 503);
     assert!(resp.1.contains("NOT READY"), "not-ready body: {}", resp.1);
-}
-
-#[tokio::test]
-async fn metrics_server_responds() {
-    let lc = Lifecycle::new();
-    lc.set(State::Running);
-
-    let metrics = Arc::new(WrapperMetrics::new("test-commit"));
-    metrics.crashes_total.increment(1);
-
-    let metrics_lc = lc.clone();
-    let metrics_clone = metrics.clone();
-    let started_at = Instant::now();
-
-    let addr = free_port().await;
-    let addr_str = addr.clone();
-    tokio::spawn(async move {
-        use dfe_transform_vector::metrics::serve_metrics;
-        // Use a non-routable address for Vector metrics proxy (no Vector running in tests)
-        let _ = serve_metrics(
-            &addr_str,
-            metrics_clone,
-            metrics_lc,
-            started_at,
-            "127.0.0.1:0".to_string(),
-        )
-        .await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let resp = reqwest_lite(&format!("http://{addr}/metrics")).await;
-    assert_eq!(resp.0, 200);
-    assert!(
-        resp.1.contains("dfe_transform_vector_crashes_total"),
-        "missing crashes_total in metrics response"
-    );
-    assert!(
-        resp.1.contains("dfe_transform_vector_uptime_seconds"),
-        "missing uptime_seconds in metrics response"
-    );
 }

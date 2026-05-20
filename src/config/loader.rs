@@ -600,14 +600,25 @@ impl Config {
         // Start with defaults
         let mut config = Config::default();
 
-        // Load YAML config file (overrides defaults)
+        // Load YAML config file (overrides defaults).
+        //
+        // Explicit `--config <path>` is STRICT: missing file is a hard
+        // error, not a silent fallback. Otherwise a typo in the mount
+        // path produces a downstream "sink.topic must not be empty"
+        // validation error and the user has no clue why.
+        //
+        // Implicit `config.yaml` / `config.yml` search is LENIENT —
+        // those names are optional by design.
         if let Some(path) = config_path {
-            if Path::new(path).exists() {
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-                config = serde_yaml_ng::from_str(&content)?;
-                debug!(path, "loaded configuration file");
+            if !Path::new(path).exists() {
+                return Err(crate::Error::Config(format!(
+                    "config file not found: {path}"
+                )));
             }
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
+            config = serde_yaml_ng::from_str(&content)?;
+            debug!(path, "loaded configuration file");
         } else {
             for path in &["config.yaml", "config.yml"] {
                 if Path::new(path).exists() {

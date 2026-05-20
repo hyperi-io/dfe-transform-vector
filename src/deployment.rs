@@ -37,7 +37,7 @@ pub fn contract() -> DeploymentContract {
         },
         env_prefix: "DFE_TRANSFORM".into(),
         metric_prefix: "transform_vector".into(),
-        config_mount_path: "/etc/dfe/config.yaml".into(),
+        config_mount_path: "/etc/dfe-transform-vector/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         extra_ports: vec![
             PortContract {
@@ -51,7 +51,10 @@ pub fn contract() -> DeploymentContract {
                 protocol: "TCP".into(),
             },
         ],
-        entrypoint_args: vec!["--config".into(), "/etc/dfe/config.yaml".into()],
+        entrypoint_args: vec![
+            "--config".into(),
+            "/etc/dfe-transform-vector/config.yaml".into(),
+        ],
         secrets: vec![SecretGroupContract {
             group_name: "kafka".into(),
             env_vars: vec![
@@ -89,7 +92,7 @@ pub fn contract() -> DeploymentContract {
                 "tls": { "enabled": false }
             },
             "transforms": {
-                "dir": "/etc/dfe/transforms"
+                "dir": "/etc/dfe-transform-vector/transforms"
             },
             "vector": {
                 "binary": "/usr/local/bin/vector",
@@ -130,25 +133,72 @@ pub fn contract() -> DeploymentContract {
     }
 }
 
+/// Vector.dev version bundled into the published image.
+///
+/// Pinned. Update deliberately — Vector minor versions can change CLI
+/// flags and config schema. Keep in sync with the `vector.version`
+/// default in [`crate::config::loader::VectorConfig`].
+pub const VECTOR_VERSION: &str = "0.48.0";
+
 /// Generate the Dockerfile from the contract.
 ///
-/// Thin pass-through to `hyperi_rustlib::deployment::generate_dockerfile`.
-/// The Vector-binary download + Vector data directories are NO LONGER
-/// inserted here; they're declared as `publish.container.overlays` in
-/// `.hyperi-ci.yaml` and spliced at the `before-user` anchor by
-/// hyperi-ci's overlay framework at build time.
+/// Wraps `hyperi_rustlib::deployment::generate_dockerfile` and inserts
+/// the Vector binary download + data-directory setup before `USER appuser`.
 ///
-/// See:
-/// - `.hyperi-ci.yaml` `publish.container.overlays`
-/// - `hyperi-ci/docs/superpowers/specs/2026-05-15-deployment-overlay-framework-spec.md`
+/// dfe-transform-vector ships TWO binaries in its runtime image — its own
+/// Rust wrapper (autobuilt by cargo, handled by rustlib's contract) AND
+/// the upstream `vector` binary (downloaded inside the build at the
+/// version pinned by [`VECTOR_VERSION`]). The other five DFE Rust apps
+/// are single-binary images; this consumer-side override exists because
+/// rustlib's deployment contract has no slot for an add-on native binary.
 ///
-/// Local container builds (post-overlay-framework adoption):
-///
-/// ```bash
-/// hyperi-ci overlay-render --kind dockerfile -o /tmp/Dockerfile.final
-/// docker buildx build -f /tmp/Dockerfile.final .
-/// ```
+/// When `hyperi-ci`'s overlay framework lands (see
+/// `docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`)
+/// this override moves into `.hyperi-ci.yaml`.
 #[must_use]
 pub fn emit_dockerfile() -> String {
-    hyperi_rustlib::deployment::generate_dockerfile(&contract())
+    let base = hyperi_rustlib::deployment::generate_dockerfile(&contract());
+
+    // Vector install + data dirs go BEFORE the `USER` directive so root
+    // can still chown the directories it creates.
+    let vector_layer = format!(
+        "# Vector binary — downloaded inside the build for portability.\n\
+         # Pinned to {VECTOR_VERSION}; bump deliberately (CLI flags + config\n\
+         # schema can shift between minor versions). Multi-arch via $TARGETARCH.\n\
+         ARG VECTOR_VERSION={VECTOR_VERSION}\n\
+         ARG TARGETARCH\n\
+         RUN set -eu \\\n \
+         && case \"${{TARGETARCH:-amd64}}\" in \\\n     \
+                 amd64) ARCH=x86_64 ;; \\\n     \
+                 arm64) ARCH=aarch64 ;; \\\n     \
+                 *) echo \"unsupported TARGETARCH: ${{TARGETARCH}}\" >&2; exit 1 ;; \\\n \
+            esac \\\n \
+         && curl -fsSL \"https://packages.timber.io/vector/${{VECTOR_VERSION}}/vector-${{VECTOR_VERSION}}-${{ARCH}}-unknown-linux-gnu.tar.gz\" \\\n         \
+                 -o /tmp/vector.tar.gz \\\n \
+         && tar xz -C /tmp -f /tmp/vector.tar.gz \\\n \
+         && mv \"/tmp/vector-${{ARCH}}-unknown-linux-gnu/bin/vector\" /usr/local/bin/vector \\\n \
+         && chmod +x /usr/local/bin/vector \\\n \
+         && rm -rf /tmp/vector.tar.gz \"/tmp/vector-${{ARCH}}-unknown-linux-gnu\" \\\n \
+         && /usr/local/bin/vector --version\n\
+         \n\
+         # Vector data and config directories\n\
+         RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \\\n     \
+             && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector\n\
+         \n\
+         LABEL io.hyperi.vector.version=\"{VECTOR_VERSION}\"\n\
+         \n"
+    );
+
+    // Splice in before the `USER ` line. Fail loudly if the anchor isn't
+    // found — that means rustlib's generator changed shape and this
+    // override needs reviewing.
+    if let Some(idx) = base.find("USER ") {
+        let (before, after) = base.split_at(idx);
+        format!("{before}{vector_layer}{after}")
+    } else {
+        panic!(
+            "rustlib generate_dockerfile() output missing `USER ` directive — \
+             cannot splice Vector binary install. Review rustlib output shape."
+        );
+    }
 }

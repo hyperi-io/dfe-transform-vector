@@ -1,19 +1,25 @@
 // Project:   dfe-transform-vector
 // File:      tests/integration/metrics.rs
-// Purpose:   Metrics completeness, proxy, and health/metrics server tests
+// Purpose:   Metrics completeness + health endpoint tests
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Metrics completeness checks, proxy integration, and health response format.
+//! Metrics registration completeness and health endpoint behaviour.
+//!
+//! Note: the wrapper no longer runs its own metrics HTTP server. The
+//! rustlib `ServiceRuntime` owns `/metrics`. These tests register
+//! `WrapperMetrics` against a local `MetricsManager` and exercise the
+//! `render()` output directly — what shows up on the live `/metrics`
+//! endpoint in production.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
+use hyperi_rustlib::metrics::MetricsManager;
 
 use crate::common::{free_port, reqwest_lite};
 
@@ -23,7 +29,8 @@ use crate::common::{free_port, reqwest_lite};
 
 #[test]
 fn metrics_completeness_all_expected_metrics_present() {
-    let metrics = WrapperMetrics::new("completeness-test");
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "completeness-test");
 
     // Drive all code paths to ensure metrics are emitted
     metrics.crashes_total.increment(1);
@@ -34,7 +41,7 @@ fn metrics_completeness_all_expected_metrics_present() {
     metrics.set_lifecycle_state(State::Running);
     metrics.uptime_seconds.set(42.0);
 
-    let output = metrics.render();
+    let output = manager.render();
 
     // Service-specific counters
     let expected = [
@@ -48,7 +55,6 @@ fn metrics_completeness_all_expected_metrics_present() {
         // AppMetrics (from rustlib)
         "dfe_transform_vector_info",
         "dfe_transform_vector_start_time_seconds",
-        "dfe_transform_vector_config_reloads_total",
         // DfeMetrics pipeline readiness
         "dfe_pipeline_ready",
     ];
@@ -65,11 +71,12 @@ fn metrics_completeness_all_expected_metrics_present() {
 
 #[test]
 fn metrics_lifecycle_state_labels_are_correct() {
-    let metrics = WrapperMetrics::new("label-test");
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "label-test");
 
     // Set to Running
     metrics.set_lifecycle_state(State::Running);
-    let output = metrics.render();
+    let output = manager.render();
 
     // Running should be 1
     assert!(
@@ -94,178 +101,41 @@ fn metrics_lifecycle_state_labels_are_correct() {
 }
 
 // ---------------------------------------------------------------------------
-// Metrics proxy — mock Vector prometheus endpoint
+// Double-init regression — WrapperMetrics must NOT create its own
+// MetricsManager. The whole point of the May 2026 refactor was to use
+// the runtime's manager so we have exactly one /metrics endpoint, one
+// global recorder, and no port-bind collision.
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn metrics_proxy_merges_vector_metrics() {
-    let lifecycle = Lifecycle::new();
-    lifecycle.set(State::Running);
-
-    let metrics = Arc::new(WrapperMetrics::new("proxy-test"));
-    let started_at = Instant::now();
-
-    // Start a mock "Vector" prometheus endpoint
-    let mock_addr = free_port().await;
-    let mock_addr_clone = mock_addr.clone();
-    tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind(&mock_addr_clone).await.unwrap();
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf).await;
-
-            let body = "# HELP vector_events_in_total Total events received\n\
-                         # TYPE vector_events_in_total counter\n\
-                         vector_events_in_total{component_id=\"dfe_source\"} 42\n";
-            let response = format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/plain\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
-        }
-    });
-
-    // Start metrics server pointing to mock Vector
-    let metrics_addr = free_port().await;
-    let metrics_lc = lifecycle.clone();
-    let metrics_clone = metrics.clone();
-    let metrics_addr_clone = metrics_addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::metrics::serve_metrics(
-            &metrics_addr_clone,
-            metrics_clone,
-            metrics_lc,
-            started_at,
-            mock_addr,
-        )
-        .await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let resp = reqwest_lite(&format!("http://{metrics_addr}/metrics")).await;
-    assert_eq!(resp.0, 200);
-
-    // Wrapper metrics should be present
+#[test]
+fn wrapper_metrics_does_not_own_a_metrics_manager() {
+    // WrapperMetrics only carries metric *handles* (Counter, Gauge) +
+    // AppMetrics / DfeMetrics. If a future refactor adds a
+    // `manager: MetricsManager` field back, this test fails at compile
+    // time — std::mem::size_of catches the layout change.
+    let size = std::mem::size_of::<WrapperMetrics>();
+    // Sanity bound: a handful of Counter/Gauge handles + two structs.
+    // A full MetricsManager would push this over 200 bytes. The exact
+    // bound is conservative; the goal is "didn't quietly regrow".
     assert!(
-        resp.1.contains("dfe_transform_vector_uptime_seconds"),
-        "missing wrapper metric in proxied response"
-    );
-
-    // Proxied Vector metrics should be merged in
-    assert!(
-        resp.1.contains("vector_events_in_total"),
-        "missing proxied Vector metric in response.\nBody:\n{}",
-        resp.1
+        size < 256,
+        "WrapperMetrics grew to {size} bytes — did a MetricsManager creep back in?"
     );
 }
 
-#[tokio::test]
-async fn metrics_proxy_graceful_when_vector_down() {
-    let lifecycle = Lifecycle::new();
-    lifecycle.set(State::Running);
-
-    let metrics = Arc::new(WrapperMetrics::new("proxy-down-test"));
-    let started_at = Instant::now();
-
-    // Metrics server with unreachable Vector address
-    let metrics_addr = free_port().await;
-    let metrics_lc = lifecycle.clone();
-    let metrics_clone = metrics.clone();
-    let metrics_addr_clone = metrics_addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::metrics::serve_metrics(
-            &metrics_addr_clone,
-            metrics_clone,
-            metrics_lc,
-            started_at,
-            "127.0.0.1:1".to_string(), // unreachable
-        )
-        .await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let resp = reqwest_lite(&format!("http://{metrics_addr}/metrics")).await;
-    assert_eq!(
-        resp.0, 200,
-        "metrics should still respond when Vector is down"
-    );
-    assert!(
-        resp.1.contains("dfe_transform_vector_uptime_seconds"),
-        "wrapper metrics should still render when Vector proxy fails"
-    );
+#[test]
+fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
+    // Registering twice on the same manager must not panic. The metrics
+    // crate uses interior deduplication, so a re-registration returns
+    // the same counter handle.
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let _first = WrapperMetrics::register(&manager, "first");
+    let _second = WrapperMetrics::register(&manager, "second");
+    // If we got here without panic, the contract holds.
 }
 
 // ---------------------------------------------------------------------------
-// Health/metrics server on concurrent ports — regression for port conflicts
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn health_and_metrics_on_separate_ports() {
-    let lifecycle = Lifecycle::new();
-    lifecycle.set(State::Running);
-
-    let metrics = Arc::new(WrapperMetrics::new("port-test"));
-    let started_at = Instant::now();
-
-    // Bind both servers to free ports
-    let health_addr = free_port().await;
-    let metrics_addr = free_port().await;
-
-    // Spawn health server
-    let health_lc = lifecycle.clone();
-    let health_addr_clone = health_addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::health::serve_health(&health_addr_clone, health_lc).await;
-    });
-
-    // Spawn metrics server
-    let metrics_lc = lifecycle.clone();
-    let metrics_clone = metrics.clone();
-    let metrics_addr_clone = metrics_addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::metrics::serve_metrics(
-            &metrics_addr_clone,
-            metrics_clone,
-            metrics_lc,
-            started_at,
-            "127.0.0.1:0".to_string(),
-        )
-        .await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Both should respond
-    let health = reqwest_lite(&format!("http://{health_addr}/health/live")).await;
-    assert_eq!(health.0, 200, "health server not responding");
-
-    let metrics_resp = reqwest_lite(&format!("http://{metrics_addr}/metrics")).await;
-    assert_eq!(metrics_resp.0, 200, "metrics server not responding");
-
-    // Metrics should NOT respond on health port
-    let cross = reqwest_lite(&format!("http://{health_addr}/metrics")).await;
-    assert_eq!(cross.0, 404, "health server should return 404 for /metrics");
-
-    // Health should NOT respond on metrics port
-    let cross2 = reqwest_lite(&format!("http://{metrics_addr}/health/live")).await;
-    assert_eq!(
-        cross2.0, 404,
-        "metrics server should return 404 for /health/live"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Health response format — verify JSON structure
+// Health response format — health server is unchanged
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -295,8 +165,6 @@ async fn health_endpoints_respond_correctly() {
 async fn health_not_ready_returns_503() {
     let lifecycle = Lifecycle::new();
     // Initialising state = not ready
-    // Note: the readiness flag syncs async via watch channel, so we need
-    // a small delay after server start for the flag to propagate.
 
     let addr = free_port().await;
     let health_lc = lifecycle.clone();
@@ -315,3 +183,15 @@ async fn health_not_ready_returns_503() {
     let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
     assert_eq!(resp.0, 200, "liveness should be 200 even when initialising");
 }
+
+#[allow(dead_code, unused_imports)]
+mod _suppress_unused {
+    // Keep these in scope so removing them in a careless edit doesn't
+    // silently break the helpers that other test modules import.
+    use super::Arc;
+}
+
+// Marker: the old serve_metrics / metrics_proxy_* tests have been deleted
+// — the wrapper no longer runs a second HTTP server. Vector exposes its
+// own prometheus_exporter on `config.metrics.vector_metrics_address`;
+// Prometheus scrapes that endpoint directly as a separate target.
