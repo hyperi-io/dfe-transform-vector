@@ -14,14 +14,10 @@ target/
 
 .git/
 .gitignore
-.gitmodules
 .github/
 
 .vscode/
 .idea/
-
-ai/
-ci/
 
 docs/
 *.md
@@ -31,7 +27,6 @@ docs/
 .env.*
 *.log
 .tmp/
-.claude/
 
 coverage/
 coverage-html/
