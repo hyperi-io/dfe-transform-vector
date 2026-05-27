@@ -157,7 +157,7 @@ pub const VECTOR_VERSION: &str = "0.48.0";
 /// this override moves into `.hyperi-ci.yaml`.
 #[must_use]
 pub fn emit_dockerfile() -> String {
-    let base = hyperi_rustlib::deployment::generate_dockerfile(&contract());
+    let base = hyperi_rustlib::deployment::generate_dockerfile(&contract(), None);
 
     // Vector install + data dirs go BEFORE the `USER` directive so root
     // can still chown the directories it creates.
