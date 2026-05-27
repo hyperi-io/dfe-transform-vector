@@ -1,3 +1,26 @@
+## [1.0.13](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.12...v1.0.13) (2026-05-27)
+
+
+### Bug Fixes
+
+* adopt hyperi-ci 2.3 overlay framework — drop emit_dockerfile() override ([98605bb](https://github.com/hyperi-io/dfe-transform-vector/commit/98605bbc9b4f43934f27a304d17d2d93d9c338ab))
+* **cli:** flatten StandardCommand for generate-artefacts + metrics-manifest ([c61d6f2](https://github.com/hyperi-io/dfe-transform-vector/commit/c61d6f2036246853fe34349211a7b548da9b5333))
+* **deploy:** regenerate Dockerfile with Ubuntu 24.04 userdel fix ([16f1dbc](https://github.com/hyperi-io/dfe-transform-vector/commit/16f1dbcf134aaa87ef45e7c9a821847c6ef38912))
+* **deps:** adopt rustlib v2.8.0 — remaining call sites ([e295d71](https://github.com/hyperi-io/dfe-transform-vector/commit/e295d718ab96cd64d36f2e825a8876235c57917f))
+* **deps:** adopt rustlib v2.8.0 — typed metric label enums + generate_*() extra arg ([c15a905](https://github.com/hyperi-io/dfe-transform-vector/commit/c15a90531b44cfa46cab3ac3dfccd82777597e58))
+* **deps:** bump hyperi-rustlib to >=2.7.1 ([7cd9b6a](https://github.com/hyperi-io/dfe-transform-vector/commit/7cd9b6ac8f55a5e2b1d8eec26b70d8185fba0f3f))
+* **deps:** bump hyperi-rustlib to >=2.8.0 ([98f872b](https://github.com/hyperi-io/dfe-transform-vector/commit/98f872b783860ad933913c31e91961c38f4d3e89))
+* **deps:** regenerate Dockerfile for rustlib v2.8.0 generator (em-dash to ASCII --) ([cd65dd2](https://github.com/hyperi-io/dfe-transform-vector/commit/cd65dd25374e035c62eef22bc624f3a424ac6465))
+* download Vector binary inside image build instead of expecting CI to stage it ([e1eca41](https://github.com/hyperi-io/dfe-transform-vector/commit/e1eca41eebebc881888ae990655544264d18debd))
+* **release:** force patch bump v1.0.13 ([a6f6264](https://github.com/hyperi-io/dfe-transform-vector/commit/a6f62644f57b7102bda9d6f1ee60be7f33fd6f0d))
+* **release:** force patch bump v1.0.13 ([639662d](https://github.com/hyperi-io/dfe-transform-vector/commit/639662d88a658c4a1a29e2b637d7bf23bad7eae1))
+* **release:** force patch bump v1.0.13 ([160bd31](https://github.com/hyperi-io/dfe-transform-vector/commit/160bd31009863b984496b9dcbb7c39ba7820cc9c))
+* **release:** force patch bump v1.0.15 ([37b144c](https://github.com/hyperi-io/dfe-transform-vector/commit/37b144c982828742644ced840f78e2133a5b3c3b))
+* **release:** retrigger publish under hyperi-ci v2.1.5 ([83e556b](https://github.com/hyperi-io/dfe-transform-vector/commit/83e556b406a67d299d172415c6f7d5d524cbfc11))
+* **release:** retrigger publish under hyperi-ci v2.1.6 ([f6acfbf](https://github.com/hyperi-io/dfe-transform-vector/commit/f6acfbf8867712377ef1a8476bfa2766f4685899))
+* restore Vector binary install, error on missing --config, standardise mount path ([8e3779a](https://github.com/hyperi-io/dfe-transform-vector/commit/8e3779a867c003c9f3549ded0f36114ceec45840))
+* **test:** assert new Dockerfile shape (in-build Vector download) ([891a95c](https://github.com/hyperi-io/dfe-transform-vector/commit/891a95c7a90e0389a430dac67843913e0b76ed86))
+
 ## [1.0.13](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.12...v1.0.13) (2026-05-15)
 
 
