@@ -186,7 +186,7 @@ fn emit_chart_generates_without_panic() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let dir_path = dir.path().to_str().unwrap();
 
-    let result = hyperi_rustlib::deployment::generate_chart(&contract, dir_path);
+    let result = hyperi_rustlib::deployment::generate_chart(&contract, dir_path, None);
     assert!(
         result.is_ok(),
         "chart generation failed: {:?}",

@@ -163,7 +163,7 @@ async fn main() {
             }
             AppCommand::EmitChart { dir } => {
                 let contract = deployment::contract();
-                if let Err(e) = generate_chart(&contract, dir) {
+                if let Err(e) = generate_chart(&contract, dir, None) {
                     eprintln!("error: failed to generate Helm chart: {e}");
                     std::process::exit(1);
                 }
