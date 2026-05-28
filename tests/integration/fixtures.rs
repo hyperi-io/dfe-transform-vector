@@ -3,7 +3,7 @@
 // Purpose:   Tests that exercise the fixture config and transform library
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Fixture library tests.

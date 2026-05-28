@@ -4,7 +4,7 @@
 // Purpose:   Startup smoke tests and CLI binary tests — fast, no servers
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Smoke tests that catch init panics and CLI regressions before they
