@@ -6,7 +6,7 @@ ignore = []
 
 [licenses]
 allow = [
-    "FSL-1.1-ALv2",
+    "BUSL-1.1",
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -21,6 +21,10 @@ allow = [
     "CC0-1.0",
     "Unlicense",
     "OpenSSL",
+    # webpki-root-certs/webpki-roots (via reqwest -> rustls-platform-verifier)
+    # relicensed MPL-2.0 -> CDLA-Permissive-2.0; the CCADB cert data is a
+    # permissive data licence. Matches rustlib's own deny.toml allowance.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

@@ -73,6 +73,25 @@ config:
     vector_metrics_address: 127.0.0.1:9598
   pipeline:
     name: default
+  # -- Horizontal scaling-pressure engine (rustlib ScalingEngine, read from
+  # this same file via rustlib's config cascade). This is a Vector
+  # SUPERVISOR: Vector owns the Kafka consumer, not this process, so the
+  # inbound transport is `other` (compound inbound = 0) and the smart
+  # default reduces to CPU-driven (max(cpu/cpu_target, 0)) gated by the
+  # Vector-subprocess circuit. A dead/crashed Vector subprocess opens the
+  # circuit and pins scaling_pressure to 0 (more pods cannot help a down
+  # subprocess). Vector-internal backlog/throughput as a domain signal is a
+  # follow-up (the supervisor does not currently relay Vector's Prometheus
+  # metrics). Kafka consumer-group lag is still seen EXTERNALLY by the KEDA
+  # kafka trigger below.
+  scaling:
+    enabled: true
+    interval_secs: 15
+    transport:
+      inbound: other
+      outbound: other
+    params:
+      cpu_target: 0.70
   sink:
     brokers:
     - kafka:9092
@@ -156,6 +175,17 @@ keda:
     enabled: true
     # -- CPU utilisation percentage threshold
     threshold: "80"
+  # -- Optional Prometheus trigger on the rustlib scaling-pressure gauge.
+  # OFF by default (the kafka lag + cpu triggers above are the primary
+  # signal). When enabled, KEDA scales on the correlated composite the
+  # supervisor emits: dfe_transform_vector_scaling_pressure (CPU-driven,
+  # circuit-gated on Vector subprocess health). It is a 0-100 ratio, so
+  # average it (avg + Value) -- NEVER sum a ratio. `serverAddress` is
+  # CLUSTER-SPECIFIC: set it to your in-cluster Prometheus query endpoint.
+  prometheus:
+    enabled: false
+    serverAddress: ""   # e.g. http://prometheus.monitoring.svc:9090
+    threshold: "70"     # scale when avg pressure exceeds this (0-100)
 
 # -- Standard HPA fallback (when KEDA is not installed)
 # Mutually exclusive with keda.enabled

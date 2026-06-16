@@ -3,7 +3,7 @@
 // Purpose:   Deployment contract — Dockerfile, Helm chart, Compose generation
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Deployment contract for dfe-transform-vector.
@@ -13,7 +13,7 @@
 //! health paths, ports, secrets, KEDA scaling, and default config.
 
 use hyperi_rustlib::deployment::{
-    DeploymentContract, HealthContract, ImageProfile, KedaContract, NativeDepsContract,
+    DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
     PortContract, SecretEnvContract, SecretGroupContract,
 };
 
@@ -115,7 +115,12 @@ pub fn contract() -> DeploymentContract {
             }
         })),
         depends_on: vec!["kafka".into()],
-        keda: Some(KedaContract {
+        // `KedaContract` is `#[non_exhaustive]` (rustlib 2.8.13) so it can no
+        // longer be built via a struct literal. Build the app's real KEDA
+        // values into a `KedaConfig` and convert; the new `scaling_pressure_*`
+        // trigger fields stay at their defaults (OFF -- the Prometheus
+        // serverAddress is cluster-specific and must be set before enabling).
+        keda: Some(KedaContract::from_config(&KedaConfig {
             min_replicas: 1,
             max_replicas: 10,
             polling_interval: 15,
@@ -124,7 +129,8 @@ pub fn contract() -> DeploymentContract {
             activation_lag_threshold: 0,
             cpu_enabled: true,
             cpu_threshold: 80,
-        }),
+            ..Default::default()
+        })),
         base_image: "ubuntu:24.04".into(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),

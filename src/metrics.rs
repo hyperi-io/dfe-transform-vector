@@ -3,7 +3,7 @@
 // Purpose:   Wrapper-specific Prometheus metrics (registered on the runtime's MetricsManager)
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Wrapper-specific Prometheus metrics.
@@ -158,6 +158,44 @@ pub fn spawn_lifecycle_gauge_task(
             let state = *rx.borrow();
             debug!(?state, "lifecycle state changed");
             metrics.set_lifecycle_state(state);
+        }
+    })
+}
+
+/// Drive the rustlib scaling-engine circuit gate from Vector subprocess
+/// lifecycle transitions.
+///
+/// This is a Vector SUPERVISOR -- Vector owns the Kafka consumer, not this
+/// process -- so the rustlib `ScalingEngine` inbound transport is `other`
+/// and the smart default is CPU-driven. The one local scale signal the
+/// supervisor genuinely owns is Vector subprocess health: when the
+/// subprocess is NOT serving traffic (crashed / starting / shutting down)
+/// the circuit is OPENED, which pins `scaling_pressure` to 0 -- more pods
+/// cannot help a down subprocess. Healthy (running / reloading) closes the
+/// circuit and lets CPU drive scale-out.
+///
+/// Circuit state is idempotent (only the latest lifecycle state matters),
+/// so the watch channel's value-coalescing is harmless here. The
+/// authoritative crash/restart COUNTS are incremented at the source inside
+/// [`crate::vector::run_lifecycle`], not inferred from this channel (which
+/// would miss a fast Crashed->Starting->Running transition).
+///
+/// Spawns a background task and returns immediately. The task exits when
+/// the lifecycle drops all senders.
+pub fn spawn_circuit_gate_task(
+    lifecycle: &Lifecycle,
+    scaling_signals: std::sync::Arc<hyperi_rustlib::scaling::ScalingSignalsCell>,
+) -> tokio::task::JoinHandle<()> {
+    let mut rx: watch::Receiver<State> = lifecycle.subscribe();
+    tokio::spawn(async move {
+        // Seed the circuit from the initial state (not ready at startup).
+        scaling_signals.set_circuit_open(!rx.borrow().is_ready());
+
+        while rx.changed().await.is_ok() {
+            let state = *rx.borrow();
+            let open = !state.is_ready();
+            scaling_signals.set_circuit_open(open);
+            debug!(?state, circuit_open = open, "scaling circuit gate updated");
         }
     })
 }

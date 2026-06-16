@@ -3,7 +3,7 @@
 // Purpose:   CLI entry point and orchestrator
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! CLI entry point for dfe-transform-vector.
@@ -33,7 +33,7 @@ use dfe_transform_vector::config::validate::{check_vector_version, vector_valida
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health::serve_health;
 use dfe_transform_vector::metrics::{
-    WrapperMetrics, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
+    WrapperMetrics, spawn_circuit_gate_task, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
 };
 
 /// Git commit hash for build info metric.
@@ -280,6 +280,16 @@ async fn run_transform_service(
     // server doesn't give us a pre-scrape hook, so we push instead).
     spawn_lifecycle_gauge_task(metrics.clone(), &lifecycle);
 
+    // Drive the rustlib scaling engine's circuit gate from lifecycle
+    // transitions. A dead Vector subprocess opens the circuit so
+    // scaling_pressure pins to 0 -- more pods cannot help a down subprocess.
+    // This is the one local scale signal a Vector supervisor genuinely owns;
+    // Vector itself owns the Kafka consumer, so the engine's inbound
+    // transport is `other` (CPU-driven default). See `scaling:` in config.
+    // (crashes_total / restarts_total are counted at the source inside
+    // run_lifecycle, not here -- the watch channel coalesces fast restarts.)
+    spawn_circuit_gate_task(&lifecycle, runtime.scaling_signals.clone());
+
     // Keep uptime_seconds fresh between scrapes.
     spawn_uptime_tick_task(
         metrics.clone(),
@@ -378,6 +388,8 @@ async fn run_transform_service(
         &lifecycle,
         &backoff,
         vector_pid.clone(),
+        metrics.crashes_total.clone(),
+        metrics.restarts_total.clone(),
         shutdown_rx,
     )
     .await;

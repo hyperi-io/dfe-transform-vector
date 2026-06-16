@@ -30,4 +30,16 @@ spec:
       metadata:
         value: {{ .Values.keda.cpu.threshold | quote }}
     {{- end }}
+    {{- if .Values.keda.prometheus.enabled }}
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: {{ required "keda.prometheus.serverAddress is required when keda.prometheus.enabled" .Values.keda.prometheus.serverAddress | quote }}
+        metricName: dfe_transform_vector_scaling_pressure
+        # Composite scaling pressure emitted by the rustlib ScalingEngine
+        # (CPU-driven, gated on Vector subprocess health). Averaged across
+        # pods -- it is a ratio, never summed.
+        query: avg(dfe_transform_vector_scaling_pressure{name="default"})
+        threshold: {{ .Values.keda.prometheus.threshold | quote }}
+    {{- end }}
 {{- end }}

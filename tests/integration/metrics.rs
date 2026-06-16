@@ -3,7 +3,7 @@
 // Purpose:   Metrics completeness + health endpoint tests
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Metrics registration completeness and health endpoint behaviour.
@@ -132,6 +132,131 @@ fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
     let _first = WrapperMetrics::register(&manager, "first");
     let _second = WrapperMetrics::register(&manager, "second");
     // If we got here without panic, the contract holds.
+}
+
+// ---------------------------------------------------------------------------
+// Scaling circuit gate — driven by Vector lifecycle. A down subprocess
+// opens the circuit (scaling_pressure pins to 0); healthy closes it.
+// Circuit state is idempotent, so the watch channel is the right source.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn circuit_gate_tracks_vector_health() {
+    use hyperi_rustlib::scaling::ScalingSignalsCell;
+
+    let lifecycle = Lifecycle::new(); // starts Initialising -> not ready
+    let signals = Arc::new(ScalingSignalsCell::new());
+
+    let handle =
+        dfe_transform_vector::metrics::spawn_circuit_gate_task(&lifecycle, signals.clone());
+
+    // Seed: Initialising is not ready, so the circuit starts OPEN.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        signals.snapshot().circuit_open,
+        "circuit should be open at startup (Vector not yet running)"
+    );
+
+    // Vector running -> circuit closes (CPU can drive scale-out).
+    lifecycle.set(State::Running);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !signals.snapshot().circuit_open,
+        "circuit should close once Vector is Running"
+    );
+
+    // Reloading is still ready -> circuit stays closed.
+    lifecycle.set(State::Reloading);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !signals.snapshot().circuit_open,
+        "circuit should stay closed while Reloading (still serving)"
+    );
+
+    // Crash -> circuit opens (more pods cannot help a down subprocess).
+    lifecycle.set(State::Crashed);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        signals.snapshot().circuit_open,
+        "circuit should open when Vector crashes"
+    );
+
+    handle.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Crash / restart counters — incremented at the source in run_lifecycle.
+// Driving a non-existent binary forces the spawn-failure crash path, which
+// loops crash -> backoff -> restart deterministically until shutdown.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_lifecycle_increments_crash_and_restart_counters() {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use dfe_transform_vector::config::VectorConfig;
+    use dfe_transform_vector::vector::{BackoffConfig, run_lifecycle};
+
+    let manager = MetricsManager::new("dfe_transform_vector");
+    let metrics = WrapperMetrics::register(&manager, "counter-test");
+
+    let vector_config = VectorConfig {
+        binary: "/nonexistent/vector-binary-for-test".to_string(),
+        ..VectorConfig::default()
+    };
+    // Tight backoff so the crash -> restart loop cycles a few times fast.
+    let backoff = BackoffConfig {
+        initial: Duration::from_millis(15),
+        max: Duration::from_millis(15),
+        multiplier: 1.0,
+        reset_after: Duration::from_secs(300),
+    };
+    let lifecycle = Lifecycle::new();
+    let pid = Arc::new(Mutex::new(None));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let crashes = metrics.crashes_total.clone();
+    let restarts = metrics.restarts_total.clone();
+    let dir = std::path::PathBuf::from("/tmp");
+    let lc = lifecycle.clone();
+    let task = tokio::spawn(async move {
+        let _ = run_lifecycle(
+            &vector_config,
+            &dir,
+            &lc,
+            &backoff,
+            pid,
+            crashes,
+            restarts,
+            shutdown_rx,
+        )
+        .await;
+    });
+
+    // Let it cycle through several crash -> restart iterations.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+
+    // Process-shared global recorder: assert non-zero, not an exact value.
+    let output = manager.render();
+    let counter_value = |name: &str| -> f64 {
+        output
+            .lines()
+            .find(|l| l.starts_with(name) && !l.starts_with("# "))
+            .and_then(|l| l.rsplit(' ').next())
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    assert!(
+        counter_value("dfe_transform_vector_crashes_total") >= 1.0,
+        "crashes_total should be >= 1 after spawn failures, got:\n{output}"
+    );
+    assert!(
+        counter_value("dfe_transform_vector_restarts_total") >= 1.0,
+        "restarts_total should be >= 1 after re-spawns, got:\n{output}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -116,7 +116,27 @@ logging:
   format: "json"                       # json, text
 
 # -----------------------------------------------------------------------------
-# Scaling pressure (KEDA-compatible)
+# Scaling pressure
 # -----------------------------------------------------------------------------
+# The `scaling:` block is shared by TWO readers on the same key:
+#   - rustlib's horizontal ScalingEngine (enabled / interval_secs /
+#     transport / params) -- read from the cascade at startup.
+#   - this wrapper's legacy KEDA knob (pressure_threshold).
+# Each ignores the other's fields.
+#
+# This is a Vector SUPERVISOR: Vector owns the Kafka consumer, not this
+# process, so inbound transport is `other` and the smart default reduces
+# to CPU-driven, gated by Vector subprocess health (circuit opens when
+# Vector is down). Kafka consumer-group lag is still seen externally by
+# the KEDA kafka trigger. Relaying Vector-internal backlog as a domain
+# scaling signal is a follow-up.
 # scaling:
+#   enabled: true
+#   interval_secs: 15
+#   transport:
+#     inbound: other
+#     outbound: other
+#   params:
+#     cpu_target: 0.70
+#   # legacy KEDA knob (this wrapper only):
 #   pressure_threshold: 0.8

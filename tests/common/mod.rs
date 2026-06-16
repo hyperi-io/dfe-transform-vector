@@ -4,7 +4,7 @@
 // Purpose:   Shared test infrastructure — live-first Kafka with testcontainers fallback
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Shared test helpers for integration and e2e tests.

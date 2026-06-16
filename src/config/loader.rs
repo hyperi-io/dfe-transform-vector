@@ -3,7 +3,7 @@
 // Purpose:   Configuration structures and loading
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Configuration structures and loading.
@@ -103,7 +103,11 @@ impl Default for DecodingConfig {
 /// - `health.address` — HTTP server binds at startup
 /// - `metrics.*` — HTTP server binds at startup
 /// - `logging.*` — tracing subscriber configured at startup
-/// - `scaling.*` — not consumed at runtime
+/// - `scaling.*` — the rustlib `ScalingEngine` reads the `scaling:` block
+///   from the cascade at startup (via run_app's `config::setup()`); the
+///   app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.
+///   Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are
+///   honoured by rustlib and ignored by this struct (and vice-versa).
 /// - `reload.poll_interval_secs` — captured at reload loop start
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

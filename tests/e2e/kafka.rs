@@ -3,7 +3,7 @@
 // Purpose:   E2E Kafka pipeline test (dual-mode: docker or remote)
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! End-to-end Kafka pipeline test.
@@ -277,7 +277,10 @@ async fn run_pipeline_assertions(
 
     let test_payload = format!(r#"{{"id":"{suffix}","value":"hello"}}"#);
     let send_result = producer
-        .send(&format!("k-{suffix}"), test_payload.as_bytes())
+        .send(
+            &format!("k-{suffix}"),
+            bytes::Bytes::from(test_payload.into_bytes()),
+        )
         .await;
     let send_ok = matches!(
         send_result,
@@ -301,23 +304,23 @@ async fn run_pipeline_assertions(
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut seen_payload: Option<String> = None;
     while Instant::now() < deadline {
-        let msgs = match consumer.recv(10).await {
-            Ok(m) => m,
+        let batch = match consumer.recv(10).await {
+            Ok(b) => b,
             Err(_) => {
                 sleep(Duration::from_millis(500)).await;
                 continue;
             }
         };
-        for m in &msgs {
-            let body = String::from_utf8_lossy(&m.payload).to_string();
+        for record in &batch.records {
+            let body = String::from_utf8_lossy(&record.payload).to_string();
             if body.contains(suffix) {
                 seen_payload = Some(body);
                 break;
             }
         }
         if seen_payload.is_some() {
-            let tokens: Vec<_> = msgs.iter().map(|m| m.token.clone()).collect();
-            let _ = consumer.commit(&tokens).await;
+            // Commit tokens live on the batch, not per-record (WorkBatch spine).
+            let _ = consumer.commit(&batch.commit_tokens).await;
             break;
         }
         sleep(Duration::from_millis(500)).await;

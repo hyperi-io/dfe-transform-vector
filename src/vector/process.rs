@@ -3,7 +3,7 @@
 // Purpose:   Vector subprocess spawning and management
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Vector subprocess spawning and management.
@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use hyperi_rustlib::logger::security::{SecurityEvent, SecurityOutcome};
 use hyperi_rustlib::logger::{log_debounced, log_state_change};
+use metrics::Counter;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use tokio::process::{Child, Command};
@@ -132,19 +133,33 @@ pub fn reload_vector(child: &Child) -> Result<()> {
 /// a new child is spawned, and cleared when the child exits. The reload
 /// loop uses this to send SIGHUP for config hot-reload.
 ///
+/// `crashes_total` / `restarts_total` are the authoritative Prometheus
+/// counters for Vector subprocess health: incremented HERE, at the source,
+/// every time the subprocess crashes and every time it is re-spawned. They
+/// are counted here rather than off the lifecycle watch channel because a
+/// fast Crashed->Starting->Running transition would be coalesced and lose a
+/// restart. (The scaling circuit gate, which only cares about the LATEST
+/// state, drives off the watch channel -- see `spawn_circuit_gate_task`.)
+///
 /// Uses `std::sync::Mutex` intentionally — the lock is held for sub-microsecond
 /// reads/writes of a `u32` and is never held across an `.await` point.
 /// `tokio::sync::Mutex` is unnecessary overhead for this pattern.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_lifecycle(
     vector_config: &VectorConfig,
     config_dir: &Path,
     lifecycle: &Lifecycle,
     backoff: &BackoffConfig,
     vector_pid: Arc<Mutex<Option<u32>>>,
+    crashes_total: Counter,
+    restarts_total: Counter,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let mut current_backoff = backoff.initial;
     let mut crash_count: u64 = 0;
+    // True once Vector has been spawned at least once, so the FIRST spawn is
+    // the initial launch and each subsequent spawn is a restart.
+    let mut spawned_once = false;
 
     loop {
         // Check for shutdown before (re)starting
@@ -154,12 +169,19 @@ pub async fn run_lifecycle(
             return Ok(());
         }
 
+        // A (re)spawn after the first launch is a restart.
+        if spawned_once {
+            restarts_total.increment(1);
+        }
+        spawned_once = true;
+
         lifecycle.set(State::Starting);
         let mut child = match spawn_vector(vector_config, config_dir) {
             Ok(c) => c,
             Err(e) => {
                 error!(error = %e, "failed to spawn Vector");
                 lifecycle.set(State::Crashed);
+                crashes_total.increment(1);
                 tokio::time::sleep(current_backoff).await;
                 current_backoff = next_backoff(current_backoff, backoff);
                 crash_count += 1;
@@ -185,6 +207,7 @@ pub async fn run_lifecycle(
                     Err(e) => {
                         error!(error = %e, "error waiting for Vector process");
                         lifecycle.set(State::Crashed);
+                        crashes_total.increment(1);
                         crash_count += 1;
                         tokio::time::sleep(current_backoff).await;
                         current_backoff = next_backoff(current_backoff, backoff);
@@ -225,6 +248,7 @@ pub async fn run_lifecycle(
         // Vector exited unexpectedly
         let uptime = started_at.elapsed();
         let exit_code = exit_status.code().unwrap_or(-1);
+        crashes_total.increment(1);
         crash_count += 1;
 
         // Log spam protection: debounce crash logs in tight restart loops

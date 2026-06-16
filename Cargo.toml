@@ -3,7 +3,7 @@
 # Purpose:   Rust project manifest
 # Language:  TOML
 #
-# License:   FSL-1.1-ALv2
+# License:   BUSL-1.1
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 
 [package]
@@ -12,9 +12,9 @@ version = "1.0.13"
 edition = "2024"
 authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Rust wrapper for Vector.dev subprocess — Kafka-to-Kafka transform pipelines"
-license = "FSL-1.1-ALv2"
+license = "BUSL-1.1"
 repository = "https://github.com/hyperi-io/dfe-transform-vector"
-rust-version = "1.94"
+rust-version = "1.95"
 exclude = [".github/", "chart/", "docs/"]
 
 [lib]
@@ -31,10 +31,17 @@ tokio = { version = ">=1.50", features = ["full"] }
 tokio-util = { version = ">=0.7", features = ["rt"] }
 
 # Shared library (CLI framework, deployment artefact generation, logging)
-hyperi-rustlib = { version = ">=2.8.0", features = [
+#
+# `expression` is REQUIRED for the horizontal scaling engine: the
+# ScalingEngine is `#[cfg(all(feature="scaling", feature="expression"))]`
+# and `cli-service` pulls `scaling` but NOT `expression`. Without it the
+# engine silently compiles out -- no scaling_pressure gauge, signals
+# pushed to a cell nobody reads.
+hyperi-rustlib = { version = ">=2.8.13, <3", features = [
     "cli-service",
     "config-reload",
     "deployment",
+    "expression",
     "http-server",
     "logger",
     "metrics",
@@ -81,9 +88,10 @@ jemalloc = ["dep:tikv-jemallocator"]
 [dev-dependencies]
 tempfile = ">=3.10"
 tokio-test = ">=0.4"
+bytes = ">=1.11"
 testcontainers = ">=0.25"
 testcontainers-modules = { version = ">=0.15", features = ["kafka"] }
-hyperi-rustlib = { version = ">=2.5.4", features = [
+hyperi-rustlib = { version = ">=2.8.13, <3", features = [
     "transport-kafka",
 ] }
 
