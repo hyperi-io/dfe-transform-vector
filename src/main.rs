@@ -8,8 +8,8 @@
 
 //! CLI entry point for dfe-transform-vector.
 //!
-//! Uses hyperi-rustlib CLI module for standard arguments and subcommands.
-//! Implements the [`DfeApp`] trait for the standard DFE service lifecycle.
+//! Uses scalo CLI module for standard arguments and subcommands.
+//! Implements the [`ServiceApp`] trait for the standard DFE service lifecycle.
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
-use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment};
-use hyperi_rustlib::logger::security::{self, SecurityEvent, SecurityOutcome};
-use hyperi_rustlib::version_check::{VersionCheck, VersionCheckConfig};
+use scalo::cli::{CliError, CommonArgs, ServiceApp, StandardCommand, VersionInfo};
+use scalo::deployment::{generate_chart, generate_compose_fragment};
+use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
+use scalo::version_check::{VersionCheck, VersionCheckConfig};
 use tracing::{debug, error, info};
 
 use dfe_transform_vector::config::Config;
@@ -61,11 +61,11 @@ struct App {
 /// Application subcommands.
 ///
 /// Standard commands (`run`, `version`, `config-check`, `generate-artefacts`,
-/// `metrics-manifest`) are flattened from rustlib's [`StandardCommand`].
+/// `metrics-manifest`) are flattened from scalo's [`StandardCommand`].
 /// Local extensions cover Vector-specific assembly and the legacy emit-* shortcuts.
 #[derive(Subcommand, Clone, Debug)]
 enum AppCommand {
-    /// Standard rustlib commands (run, version, config-check, generate-artefacts, metrics-manifest).
+    /// Standard scalo commands (run, version, config-check, generate-artefacts, metrics-manifest).
     #[command(flatten)]
     Standard(StandardCommand),
 
@@ -97,7 +97,7 @@ enum AppCommand {
     EmitContract,
 }
 
-impl DfeApp for App {
+impl ServiceApp for App {
     type Config = Config;
 
     #[allow(clippy::unnecessary_literal_bound)]
@@ -137,14 +137,14 @@ impl DfeApp for App {
     async fn run_service(
         &self,
         config: Config,
-        runtime: hyperi_rustlib::cli::ServiceRuntime,
+        runtime: scalo::cli::ServiceRuntime,
     ) -> Result<(), CliError> {
         run_transform_service(&self.common, config, runtime)
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
 
-    fn deployment_contract(&self) -> Option<hyperi_rustlib::deployment::DeploymentContract> {
+    fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }
 }
@@ -154,7 +154,7 @@ async fn main() {
     let app = App::parse();
 
     // Handle deployment artefact and assemble commands before entering the
-    // DfeApp lifecycle (these don't need the full logging/config/run pipeline)
+    // ServiceApp lifecycle (these don't need the full logging/config/run pipeline)
     if let Some(ref cmd) = app.command {
         match cmd {
             AppCommand::EmitDockerfile => {
@@ -207,18 +207,18 @@ async fn main() {
         }
     }
 
-    // Delegate to standard DfeApp lifecycle (logging → config → run_service)
-    if let Err(e) = hyperi_rustlib::cli::run_app(app).await {
+    // Delegate to standard ServiceApp lifecycle (logging → config → run_service)
+    if let Err(e) = scalo::cli::run_app(app).await {
         eprintln!("fatal: {e}");
         std::process::exit(1);
     }
 }
 
-/// Main service loop — called by the DfeApp lifecycle after logging and config.
+/// Main service loop — called by the ServiceApp lifecycle after logging and config.
 async fn run_transform_service(
     common: &CommonArgs,
     config: Config,
-    runtime: hyperi_rustlib::cli::ServiceRuntime,
+    runtime: scalo::cli::ServiceRuntime,
 ) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
@@ -280,7 +280,7 @@ async fn run_transform_service(
     // server doesn't give us a pre-scrape hook, so we push instead).
     spawn_lifecycle_gauge_task(metrics.clone(), &lifecycle);
 
-    // Drive the rustlib scaling engine's circuit gate from lifecycle
+    // Drive scalo's ScalingPressure circuit gate from lifecycle
     // transitions. A dead Vector subprocess opens the circuit so
     // scaling_pressure pins to 0 -- more pods cannot help a down subprocess.
     // This is the one local scale signal a Vector supervisor genuinely owns;
@@ -288,7 +288,9 @@ async fn run_transform_service(
     // transport is `other` (CPU-driven default). See `scaling:` in config.
     // (crashes_total / restarts_total are counted at the source inside
     // run_lifecycle, not here -- the watch channel coalesces fast restarts.)
-    spawn_circuit_gate_task(&lifecycle, runtime.scaling_signals.clone());
+    // `runtime.scaling` is `None` when the scaling engine is disabled/absent;
+    // the gate task skips itself in that case.
+    spawn_circuit_gate_task(&lifecycle, runtime.scaling.clone());
 
     // Keep uptime_seconds fresh between scrapes.
     spawn_uptime_tick_task(

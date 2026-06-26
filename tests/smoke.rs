@@ -15,7 +15,7 @@ use dfe_transform_vector::config::Config;
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
-use hyperi_rustlib::metrics::MetricsManager;
+use scalo::metrics::MetricsManager;
 
 // ---------------------------------------------------------------------------
 // Startup smoke tests — catch init panics
@@ -25,9 +25,9 @@ use hyperi_rustlib::metrics::MetricsManager;
 fn smoke_metrics_initialisation_does_not_panic() {
     // WrapperMetrics::register() registers metrics against a shared
     // MetricsManager (in production, that's the one owned by
-    // rustlib's ServiceRuntime). If any metric name/description is
+    // scalo's ServiceRuntime). If any metric name/description is
     // invalid the registration panics; this test catches that.
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let _metrics = WrapperMetrics::register(&manager, "smoke-test-commit");
 }
 
@@ -73,7 +73,7 @@ fn smoke_backoff_config_defaults_are_sane() {
 
 #[test]
 fn smoke_metrics_render_after_state_transitions() {
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "smoke-render");
 
     // Simulate a full lifecycle
@@ -236,9 +236,14 @@ fn cli_emit_dockerfile_produces_output() {
 
     assert!(output.status.success(), "emit-dockerfile failed");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Don't pin a distro -- the base image is cascade-resolved
+    // (debian:trixie-slim by default). Assert a tagged FROM line exists.
+    let has_tagged_from = stdout
+        .lines()
+        .any(|l| l.starts_with("FROM ") && l.contains(':'));
     assert!(
-        stdout.contains("FROM ubuntu:24.04"),
-        "emit-dockerfile should produce a Dockerfile"
+        has_tagged_from,
+        "emit-dockerfile should produce a Dockerfile with a tagged FROM line"
     );
 }
 

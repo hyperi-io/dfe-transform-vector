@@ -28,8 +28,8 @@ use std::env;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
-use hyperi_rustlib::SensitiveString;
-use hyperi_rustlib::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile};
+use scalo::SensitiveString;
+use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile};
 
 /// Which backend the current test fixture resolved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,7 +226,7 @@ async fn try_testcontainer() -> Result<KafkaFixture, String> {
 // `KafkaFixture::acquire()` instead.
 // =============================================================================
 
-/// Build a rustlib `KafkaConfig` from env (sync — for tests that only
+/// Build a scalo `KafkaConfig` from env (sync — for tests that only
 /// construct YAML and don't connect). Does NOT verify authentication.
 pub fn kafka_test_config() -> KafkaConfig {
     load_dotenv();

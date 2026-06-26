@@ -12,9 +12,9 @@
 //! Dockerfile, Helm chart, and Docker Compose fragment. The contract captures
 //! health paths, ports, secrets, KEDA scaling, and default config.
 
-use hyperi_rustlib::deployment::{
+use scalo::deployment::{
     DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
-    PortContract, SecretEnvContract, SecretGroupContract,
+    PortContract, SecretEnvContract, SecretGroupContract, base_image_from_cascade,
 };
 
 /// Build the deployment contract for dfe-transform-vector.
@@ -115,7 +115,7 @@ pub fn contract() -> DeploymentContract {
             }
         })),
         depends_on: vec!["kafka".into()],
-        // `KedaContract` is `#[non_exhaustive]` (rustlib 2.8.13) so it can no
+        // `KedaContract` is `#[non_exhaustive]` (scalo 2.8.13) so it can no
         // longer be built via a struct literal. Build the app's real KEDA
         // values into a `KedaConfig` and convert; the new `scaling_pressure_*`
         // trigger fields stay at their defaults (OFF -- the Prometheus
@@ -131,11 +131,17 @@ pub fn contract() -> DeploymentContract {
             cpu_threshold: 80,
             ..Default::default()
         })),
-        base_image: "ubuntu:24.04".into(),
+        // Org-wide base image via the scalo cascade (deployment.base_image),
+        // defaulting to debian:trixie-slim. NOT pinned per-app -- the ubuntu
+        // pin was a stale pre-trixie-cutover leftover.
+        base_image: base_image_from_cascade(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
         schema_version: 2,
-        oci_labels: hyperi_rustlib::deployment::OciLabels::default(),
+        oci_labels: scalo::deployment::OciLabels {
+            licenses: "BUSL-1.1".into(),
+            ..Default::default()
+        },
     }
 }
 
@@ -148,22 +154,22 @@ pub const VECTOR_VERSION: &str = "0.48.0";
 
 /// Generate the Dockerfile from the contract.
 ///
-/// Wraps `hyperi_rustlib::deployment::generate_dockerfile` and inserts
+/// Wraps `scalo::deployment::generate_dockerfile` and inserts
 /// the Vector binary download + data-directory setup before `USER appuser`.
 ///
 /// dfe-transform-vector ships TWO binaries in its runtime image — its own
-/// Rust wrapper (autobuilt by cargo, handled by rustlib's contract) AND
+/// Rust wrapper (autobuilt by cargo, handled by scalo's contract) AND
 /// the upstream `vector` binary (downloaded inside the build at the
 /// version pinned by [`VECTOR_VERSION`]). The other five DFE Rust apps
 /// are single-binary images; this consumer-side override exists because
-/// rustlib's deployment contract has no slot for an add-on native binary.
+/// scalo's deployment contract has no slot for an add-on native binary.
 ///
 /// When `hyperi-ci`'s overlay framework lands (see
 /// `docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`)
 /// this override moves into `.hyperi-ci.yaml`.
 #[must_use]
 pub fn emit_dockerfile() -> String {
-    let base = hyperi_rustlib::deployment::generate_dockerfile(&contract(), None);
+    let base = scalo::deployment::generate_dockerfile(&contract(), None);
 
     // Vector install + data dirs go BEFORE the `USER` directive so root
     // can still chown the directories it creates.
@@ -196,15 +202,15 @@ pub fn emit_dockerfile() -> String {
     );
 
     // Splice in before the `USER ` line. Fail loudly if the anchor isn't
-    // found — that means rustlib's generator changed shape and this
+    // found — that means scalo's generator changed shape and this
     // override needs reviewing.
     if let Some(idx) = base.find("USER ") {
         let (before, after) = base.split_at(idx);
         format!("{before}{vector_layer}{after}")
     } else {
         panic!(
-            "rustlib generate_dockerfile() output missing `USER ` directive — \
-             cannot splice Vector binary install. Review rustlib output shape."
+            "scalo generate_dockerfile() output missing `USER ` directive — \
+             cannot splice Vector binary install. Review scalo output shape."
         );
     }
 }

@@ -8,14 +8,14 @@
 
 //! Health endpoints (`/health/live`, `/health/ready`).
 //!
-//! Uses rustlib `HttpServer` (axum) for the HTTP transport. The readiness
+//! Uses scalo `HttpServer` (axum) for the HTTP transport. The readiness
 //! state is driven by the Vector subprocess lifecycle — ready only when
 //! Vector is running and healthy.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use hyperi_rustlib::http_server::{HttpServer, HttpServerConfig};
+use scalo::http_server::{HttpServer, HttpServerConfig};
 use tracing::{info, trace, warn};
 
 use crate::Result;
@@ -24,7 +24,7 @@ use crate::vector::Lifecycle;
 /// Start the health HTTP server.
 ///
 /// Serves:
-/// - `/health/live` — 200 if wrapper process is alive (always, handled by rustlib)
+/// - `/health/live` — 200 if wrapper process is alive (always, handled by scalo)
 /// - `/health/ready` — 200 if Vector is running and healthy, 503 otherwise
 pub async fn serve_health(address: &str, lifecycle: Lifecycle) -> Result<()> {
     let config = HttpServerConfig {
@@ -50,7 +50,7 @@ pub async fn serve_health(address: &str, lifecycle: Lifecycle) -> Result<()> {
     info!(address, "health server listening");
 
     server
-        .serve(hyperi_rustlib::http_server::Router::new())
+        .serve(scalo::http_server::Router::new())
         .await
         .map_err(|e| crate::Error::Health(e.to_string()))
 }

@@ -9,7 +9,7 @@
 //! Wrapper-specific Prometheus metrics.
 //!
 //! All metrics are registered on the `MetricsManager` owned by
-//! `hyperi_rustlib::cli::ServiceRuntime`. The runtime serves `/metrics`,
+//! `scalo::cli::ServiceRuntime`. The runtime serves `/metrics`,
 //! `/healthz`, and `/readyz` on `args.metrics_addr` — this module no
 //! longer runs its own HTTP server, eliminating the previous double-bind
 //! against the same port.
@@ -23,10 +23,10 @@
 
 use std::time::{Duration, Instant};
 
-use hyperi_rustlib::metrics::MetricsManager;
-use hyperi_rustlib::metrics::dfe::DfeMetrics;
-use hyperi_rustlib::metrics::dfe_groups::AppMetrics;
 use metrics::{Counter, Gauge};
+use scalo::metrics::MetricsManager;
+use scalo::metrics::groups::AppMetrics;
+use scalo::metrics::service::ServiceMetrics;
 use tokio::sync::watch;
 use tracing::debug;
 
@@ -35,12 +35,14 @@ use crate::vector::lifecycle::State;
 
 /// Wrapper-specific metrics, registered on a shared `MetricsManager`.
 ///
-/// Service-specific metrics use the `dfe_transform_vector_` prefix
-/// (applied by the manager's namespace). The `dfe_pipeline_ready` gauge
-/// follows the DFE platform standard via `DfeMetrics`.
+/// Metric names are emitted BARE here; the manager's namespace prepends
+/// the app prefix once (so `transform_vector_lifecycle_state` is exported
+/// as `<namespace>_transform_vector_lifecycle_state`). The
+/// `pipeline_ready` gauge follows the DFE platform standard via
+/// `ServiceMetrics`.
 ///
 /// This struct does NOT own a `MetricsManager` — it borrows the one
-/// created by `hyperi_rustlib::cli::ServiceRuntime` and registers its
+/// created by `scalo::cli::ServiceRuntime` and registers its
 /// counters/gauges against it. The runtime owns the `/metrics` HTTP
 /// server; this module only feeds metric values into it.
 pub struct WrapperMetrics {
@@ -49,14 +51,14 @@ pub struct WrapperMetrics {
     pub config_validation_errors_total: Counter,
     pub uptime_seconds: Gauge,
     pub app: AppMetrics,
-    pub dfe: DfeMetrics,
+    pub service: ServiceMetrics,
 }
 
 impl WrapperMetrics {
     /// Register wrapper metrics against the runtime's `MetricsManager`.
     ///
     /// The runtime has already installed the global `metrics` recorder
-    /// and registered platform metrics (`DfeMetrics`, `AppMetrics`).
+    /// and registered platform metrics (`ServiceMetrics`, `AppMetrics`).
     /// This call adds wrapper-specific counters/gauges on the SAME
     /// manager so all metrics appear under a single `/metrics` endpoint
     /// served by the runtime.
@@ -74,18 +76,19 @@ impl WrapperMetrics {
         let uptime_seconds = manager.gauge("uptime_seconds", "Vector subprocess uptime in seconds");
 
         // Describe the labelled metrics (recorded via macros in
-        // set_lifecycle_state / record_config_reload).
+        // set_lifecycle_state / record_config_reload). Names are BARE --
+        // the manager's namespace adds the app prefix once.
         metrics::describe_gauge!(
-            "dfe_transform_vector_lifecycle_state",
+            "transform_vector_lifecycle_state",
             "Current lifecycle state (1=active)"
         );
         metrics::describe_counter!(
-            "dfe_transform_vector_config_reloads_total",
+            "transform_vector_config_reloads_total",
             "Total config reloads by result"
         );
 
         let app = AppMetrics::new(manager, env!("CARGO_PKG_VERSION"), commit);
-        let dfe = DfeMetrics::register(manager);
+        let service = ServiceMetrics::register(manager);
 
         Self {
             crashes_total,
@@ -93,14 +96,14 @@ impl WrapperMetrics {
             config_validation_errors_total,
             uptime_seconds,
             app,
-            dfe,
+            service,
         }
     }
 
     /// Update lifecycle state gauge (set current state to 1, all others to 0).
     ///
-    /// Emits `dfe_pipeline_ready` via `DfeMetrics` and sets the labelled
-    /// `dfe_transform_vector_lifecycle_state` gauge.
+    /// Emits `pipeline_ready` via `ServiceMetrics` and sets the labelled
+    /// `transform_vector_lifecycle_state` gauge (namespace-prefixed on emit).
     pub fn set_lifecycle_state(&self, state: State) {
         let all_states = [
             "initialising",
@@ -113,17 +116,16 @@ impl WrapperMetrics {
         ];
         for s in &all_states {
             let val = if *s == state.as_str() { 1.0 } else { 0.0 };
-            metrics::gauge!("dfe_transform_vector_lifecycle_state", "state" => s.to_string())
-                .set(val);
+            metrics::gauge!("transform_vector_lifecycle_state", "state" => s.to_string()).set(val);
         }
 
-        self.dfe.pipeline_ready(state.is_ready());
+        self.service.pipeline_ready(state.is_ready());
     }
 
     /// Record a config reload result.
     pub fn record_config_reload(&self, result: &str) {
         metrics::counter!(
-            "dfe_transform_vector_config_reloads_total",
+            "transform_vector_config_reloads_total",
             "result" => result.to_string()
         )
         .increment(1);
@@ -162,11 +164,11 @@ pub fn spawn_lifecycle_gauge_task(
     })
 }
 
-/// Drive the rustlib scaling-engine circuit gate from Vector subprocess
+/// Drive scalo's `ScalingPressure` circuit gate from Vector subprocess
 /// lifecycle transitions.
 ///
 /// This is a Vector SUPERVISOR -- Vector owns the Kafka consumer, not this
-/// process -- so the rustlib `ScalingEngine` inbound transport is `other`
+/// process -- so scalo's scaling engine inbound transport is `other`
 /// and the smart default is CPU-driven. The one local scale signal the
 /// supervisor genuinely owns is Vector subprocess health: when the
 /// subprocess is NOT serving traffic (crashed / starting / shutting down)
@@ -180,21 +182,31 @@ pub fn spawn_lifecycle_gauge_task(
 /// [`crate::vector::run_lifecycle`], not inferred from this channel (which
 /// would miss a fast Crashed->Starting->Running transition).
 ///
+/// `pressure` is the runtime's `Option<Arc<ScalingPressure>>`: `None` when
+/// the scaling engine is disabled/absent. In that case there is no circuit
+/// to gate, so this returns a completed no-op handle and spawns nothing.
+///
 /// Spawns a background task and returns immediately. The task exits when
 /// the lifecycle drops all senders.
 pub fn spawn_circuit_gate_task(
     lifecycle: &Lifecycle,
-    scaling_signals: std::sync::Arc<hyperi_rustlib::scaling::ScalingSignalsCell>,
+    pressure: Option<std::sync::Arc<scalo::ScalingPressure>>,
 ) -> tokio::task::JoinHandle<()> {
+    let Some(pressure) = pressure else {
+        // Scaling engine disabled -- nothing to gate. Return a handle that is
+        // already complete so the call site stays uniform.
+        return tokio::spawn(async {});
+    };
+
     let mut rx: watch::Receiver<State> = lifecycle.subscribe();
     tokio::spawn(async move {
         // Seed the circuit from the initial state (not ready at startup).
-        scaling_signals.set_circuit_open(!rx.borrow().is_ready());
+        pressure.set_circuit_open(!rx.borrow().is_ready());
 
         while rx.changed().await.is_ok() {
             let state = *rx.borrow();
             let open = !state.is_ready();
-            scaling_signals.set_circuit_open(open);
+            pressure.set_circuit_open(open);
             debug!(?state, circuit_open = open, "scaling circuit gate updated");
         }
     })

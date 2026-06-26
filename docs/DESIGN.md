@@ -261,7 +261,7 @@ The combined `/metrics` endpoint gives Prometheus a single scrape target that sh
 KEDA scales based on Kafka consumer lag (ScaledObject targets the consumer group
 directly). The wrapper exposes `dfe_pipeline_ready` as a basic readiness signal.
 Composite scaling pressure (weighted Kafka lag + memory + error rate) is planned
-for a future release via the rustlib `scaling` feature.
+for a future release via the scalo `scaling` feature.
 
 ---
 
@@ -269,7 +269,7 @@ for a future release via the rustlib `scaling` feature.
 
 ### 5.1 Big-Dial Config (Rust side)
 
-The Rust binary loads its own config via the standard hyperi-rustlib 7-layer cascade:
+The Rust binary loads its own config via the standard scalo 7-layer cascade:
 
 ```
 1. CLI args                              (highest priority)
@@ -535,7 +535,7 @@ vector:
 | `disabled` | Skip check entirely. |
 
 Version check failures are logged at startup. No runtime version metrics are
-currently emitted — this is deferred until the rustlib `version-check` feature
+currently emitted — this is deferred until the scalo `version-check` feature
 is adopted.
 
 ### 7.2 Version Update Strategy
@@ -675,7 +675,7 @@ The wrapper does not touch the data path — it only manages config and process 
 
 ### 8.5 Memory Backpressure (MemoryGuard)
 
-**Not applicable to this project.** The `hyperi-rustlib` `MemoryGuard` provides
+**Not applicable to this project.** The `scalo` `MemoryGuard` provides
 cgroup-aware memory backpressure for services that buffer data in-process
 (dfe-receiver, dfe-loader, dfe-transform-vrl, dfe-fetcher, dfe-archiver).
 

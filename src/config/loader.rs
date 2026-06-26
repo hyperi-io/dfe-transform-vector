@@ -17,7 +17,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
+use scalo::kafka_config::{KafkaSource, ServiceRole};
 
 use crate::Result;
 
@@ -103,11 +103,11 @@ impl Default for DecodingConfig {
 /// - `health.address` — HTTP server binds at startup
 /// - `metrics.*` — HTTP server binds at startup
 /// - `logging.*` — tracing subscriber configured at startup
-/// - `scaling.*` — the rustlib `ScalingEngine` reads the `scaling:` block
+/// - `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block
 ///   from the cascade at startup (via run_app's `config::setup()`); the
 ///   app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.
 ///   Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are
-///   honoured by rustlib and ignored by this struct (and vice-versa).
+///   honoured by scalo and ignored by this struct (and vice-versa).
 /// - `reload.poll_interval_secs` — captured at reload loop start
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -120,7 +120,7 @@ pub struct Config {
     /// - `source.group_id` → `"dfe-transform-vector-{dfe_source}"`
     ///
     /// Explicit values always override the derived defaults.
-    /// See [`DfeSource`] for the platform topic naming convention.
+    /// See [`KafkaSource`] for the platform topic naming convention.
     pub dfe_source: Option<String>,
     /// Pipeline identity. **Requires restart.**
     pub pipeline: PipelineConfig,
@@ -456,7 +456,7 @@ impl Default for ScalingConfig {
 /// Environment variable prefix for all config overrides.
 const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
-use hyperi_rustlib::config::flat_env::{self, ApplyFlatEnv, Normalize};
+use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
 
 /// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
 fn apply_figment_env(config: &mut Config) -> Result<()> {
@@ -659,7 +659,7 @@ impl Config {
             return Ok(());
         };
 
-        let dfe = DfeSource::new(source_name);
+        let dfe = KafkaSource::new(source_name);
         let defaults = SourceConfig::default();
         let sink_defaults = SinkConfig::default();
 

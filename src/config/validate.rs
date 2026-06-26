@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::process::Stdio;
 
-use hyperi_rustlib::logger::security;
+use scalo::logger::security;
 use tracing::{debug, error};
 
 use super::loader::VectorConfig;

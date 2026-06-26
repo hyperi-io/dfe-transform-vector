@@ -19,7 +19,7 @@ Settings merge in priority order (highest wins):
 | 4. User config YAML | `librdkafka_options:` in service config | Platform operator |
 | 3. Central config file | `librdkafka.yaml` in git-managed config repo (dfe-devex) | Platform team |
 | 2. Service-specific | Hardcoded in each service's generator | Service developer |
-| 1. DFE baseline | `hyperi_rustlib::kafka_config` constants | Shared library |
+| 1. DFE baseline | `scalo::kafka_config` constants | Shared library |
 
 **Layer 1** provides the coded-in fallback — always available, even without a
 config repo. **Layer 3** is the primary management point for production tuning.
@@ -29,7 +29,7 @@ config repo. **Layer 3** is the primary management point for production tuning.
 
 A transform-vector pod producing to Kafka:
 
-1. Rustlib `PRODUCER_PRODUCTION` sets `linger.ms=100`, `compression.type=zstd`,
+1. scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`, `compression.type=zstd`,
    `socket.nagle.disable=true`, `statistics.interval.ms=1000`
 2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
 3. Central config file could override `linger.ms=50` for the whole platform
@@ -180,7 +180,7 @@ No service-specific overrides currently. Uses production baseline as-is.
 
 A single `librdkafka.yaml` in the git-managed config repo (`dfe-devex`)
 is the primary management point for production tuning. All DFE services
-read this file at startup and fall back to rustlib coded-in constants if
+read this file at startup and fall back to scalo coded-in constants if
 it isn't present.
 
 **Location:** `dfe-devex/shared/librdkafka.yaml`
@@ -232,10 +232,10 @@ producer:
     # ...
 ```
 
-Profile names match the rustlib constant names (`production`, `devtest`,
+Profile names match the scalo constant names (`production`, `devtest`,
 `low_latency`, `exactly_once`). If a profile exists in the file, it
-completely replaces the rustlib constant for that profile. If a profile
-is missing from the file, the rustlib constant is used.
+completely replaces the scalo constant for that profile. If a profile
+is missing from the file, the scalo constant is used.
 
 ## User Config Overrides
 
@@ -257,7 +257,7 @@ These are layer 4 (highest priority) and override everything below.
 
 ## Source Code References
 
-- **Shared baseline constants:** `hyperi-rustlib/src/kafka_config.rs`
+- **Shared baseline constants:** `scalo/src/kafka_config.rs`
 - **Merge helper:** `kafka_config::merge_with_overrides()`
 - **Central config loader:** `src/config/kafka_defaults.rs` (YAML loading, `OnceLock` cache, fallback)
 - **Profile accessors:** `kafka_defaults::consumer_profile()`, `kafka_defaults::producer_profile()`

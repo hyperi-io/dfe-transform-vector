@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use hyperi_rustlib::logger::security;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
+use scalo::logger::security;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 

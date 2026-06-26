@@ -371,7 +371,7 @@ fn config_env_override_flat() {
 }
 
 // =========================================================================
-// DfeSource integration tests
+// KafkaSource integration tests
 // =========================================================================
 
 #[test]
@@ -450,7 +450,7 @@ sink:
     .unwrap();
 
     let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
-    // Explicit values should NOT be overridden by DfeSource
+    // Explicit values should NOT be overridden by KafkaSource
     assert_eq!(config.source.topics, vec!["custom_input_topic"]);
     assert_eq!(config.sink.topic, "custom_output_topic");
     assert_eq!(config.source.group_id, "custom-consumer-group");

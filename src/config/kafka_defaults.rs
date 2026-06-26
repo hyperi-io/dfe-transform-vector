@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      src/config/kafka_defaults.rs
-// Purpose:   Load librdkafka defaults from central config or rustlib fallback
+// Purpose:   Load librdkafka defaults from central config or scalo fallback
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -9,14 +9,14 @@
 //! Central librdkafka defaults loader.
 //!
 //! Attempts to load profiles from `$DFE_CONFIG_DIR/shared/librdkafka.yaml`.
-//! Falls back to `hyperi_rustlib::kafka_config` coded-in constants if the
+//! Falls back to `scalo::kafka_config` coded-in constants if the
 //! file is not present or cannot be parsed.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use hyperi_rustlib::kafka_config;
+use scalo::kafka_config;
 use tracing::{debug, warn};
 
 /// Parsed librdkafka profiles from the central config file.
@@ -43,7 +43,7 @@ fn load_central_profiles() -> Option<CentralProfiles> {
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            debug!(path = %path.display(), error = %e, "Central librdkafka config not found, using rustlib defaults");
+            debug!(path = %path.display(), error = %e, "Central librdkafka config not found, using scalo defaults");
             return None;
         }
     };
@@ -51,7 +51,7 @@ fn load_central_profiles() -> Option<CentralProfiles> {
     let raw: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&content) {
         Ok(v) => v,
         Err(e) => {
-            warn!(path = %path.display(), error = %e, "Failed to parse central librdkafka config, using rustlib defaults");
+            warn!(path = %path.display(), error = %e, "Failed to parse central librdkafka config, using scalo defaults");
             return None;
         }
     };
@@ -112,7 +112,7 @@ fn get_central() -> &'static Option<CentralProfiles> {
     CENTRAL_PROFILES.get_or_init(load_central_profiles)
 }
 
-/// Convert a rustlib const profile to a HashMap.
+/// Convert a scalo const profile to a HashMap.
 fn profile_to_map(profile: &[(&str, &str)]) -> HashMap<String, String> {
     profile
         .iter()
@@ -123,7 +123,7 @@ fn profile_to_map(profile: &[(&str, &str)]) -> HashMap<String, String> {
 /// Get consumer profile defaults.
 ///
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
-/// falls back to `hyperi_rustlib::kafka_config` constants.
+/// falls back to `scalo::kafka_config` constants.
 #[must_use]
 pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
     if let Some(Some(central)) = Some(get_central())
@@ -132,7 +132,7 @@ pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
         return profile.clone();
     }
 
-    // Fallback to rustlib constants
+    // Fallback to scalo constants
     match profile_name {
         "production" => profile_to_map(kafka_config::CONSUMER_PRODUCTION),
         "devtest" => profile_to_map(kafka_config::CONSUMER_DEVTEST),
@@ -150,7 +150,7 @@ pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
 /// Get producer profile defaults.
 ///
 /// Tries the central config file first (`$DFE_CONFIG_DIR/shared/librdkafka.yaml`),
-/// falls back to `hyperi_rustlib::kafka_config` constants.
+/// falls back to `scalo::kafka_config` constants.
 #[must_use]
 pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
     if let Some(Some(central)) = Some(get_central())
@@ -159,7 +159,7 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
         return profile.clone();
     }
 
-    // Fallback to rustlib constants
+    // Fallback to scalo constants
     match profile_name {
         "production" => profile_to_map(kafka_config::PRODUCER_PRODUCTION),
         "exactly_once" => profile_to_map(kafka_config::PRODUCER_EXACTLY_ONCE),
@@ -178,7 +178,7 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
 /// Merge a base profile with user overrides.
 ///
 /// This is the full 3-layer merge for a single component:
-/// 1. Central config (or rustlib fallback) baseline
+/// 1. Central config (or scalo fallback) baseline
 /// 2. Service-specific overrides (only if not already set by user)
 /// 3. User config YAML `librdkafka_options` (highest priority)
 #[must_use]
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn fallback_consumer_production() {
-        // No DFE_CONFIG_DIR set — should return rustlib constants
+        // No DFE_CONFIG_DIR set — should return scalo constants
         let profile = consumer_profile("production");
         assert_eq!(
             profile["partition.assignment.strategy"],

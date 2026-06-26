@@ -20,7 +20,16 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.env_prefix, "DFE_TRANSFORM");
     assert_eq!(c.metric_prefix, "transform_vector");
     assert_eq!(c.metrics_port, 9090);
-    assert_eq!(c.base_image, "ubuntu:24.04");
+    // base_image is resolved via the scalo cascade (deployment.base_image),
+    // defaulting to debian:trixie-slim. Don't pin a distro here -- assert it is
+    // non-empty and carries an explicit tag so the test survives an org-wide
+    // base-image change.
+    assert!(!c.base_image.is_empty(), "base_image must not be empty");
+    assert!(
+        c.base_image.contains(':'),
+        "base_image must include an explicit tag: {}",
+        c.base_image
+    );
 
     // Health paths match the DFE contract
     assert_eq!(c.health.liveness_path, "/health/live");
@@ -71,10 +80,11 @@ fn contract_produces_valid_structure() {
 fn emit_dockerfile_produces_valid_output() {
     let dockerfile = deployment::emit_dockerfile();
 
-    // Base image
+    // Base image -- cascade-resolved (debian:trixie-slim by default), so just
+    // assert a FROM line with an explicitly tagged image, not a specific distro.
     assert!(
-        dockerfile.contains("FROM ubuntu:24.04"),
-        "missing base image in Dockerfile"
+        dockerfile.contains(&format!("FROM {}", deployment::contract().base_image)),
+        "missing/incorrect base image FROM line in Dockerfile"
     );
 
     // Wrapper binary COPY
@@ -186,7 +196,7 @@ fn emit_chart_generates_without_panic() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let dir_path = dir.path().to_str().unwrap();
 
-    let result = hyperi_rustlib::deployment::generate_chart(&contract, dir_path, None);
+    let result = scalo::deployment::generate_chart(&contract, dir_path, None);
     assert!(
         result.is_ok(),
         "chart generation failed: {:?}",
@@ -209,7 +219,7 @@ fn emit_chart_generates_without_panic() {
 #[test]
 fn emit_compose_generates_without_panic() {
     let contract = deployment::contract();
-    let compose = hyperi_rustlib::deployment::generate_compose_fragment(&contract);
+    let compose = scalo::deployment::generate_compose_fragment(&contract);
 
     assert!(!compose.is_empty(), "compose fragment is empty");
     assert!(

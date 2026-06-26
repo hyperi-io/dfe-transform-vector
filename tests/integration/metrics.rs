@@ -9,17 +9,22 @@
 //! Metrics registration completeness and health endpoint behaviour.
 //!
 //! Note: the wrapper no longer runs its own metrics HTTP server. The
-//! rustlib `ServiceRuntime` owns `/metrics`. These tests register
+//! scalo `ServiceRuntime` owns `/metrics`. These tests register
 //! `WrapperMetrics` against a local `MetricsManager` and exercise the
 //! `render()` output directly — what shows up on the live `/metrics`
 //! endpoint in production.
+//!
+//! The fixture namespace here is `"dfe"` (the platform namespace -- rule:
+//! group by platform + app via LABEL, scalo emits BARE names and the
+//! namespace prepends `dfe_` once). So bare names render `dfe_<name>` and
+//! the app-segment gauges render `dfe_transform_vector_<name>`.
 
 use std::sync::Arc;
 
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
-use hyperi_rustlib::metrics::MetricsManager;
+use scalo::metrics::MetricsManager;
 
 use crate::common::{free_port, reqwest_lite};
 
@@ -29,7 +34,7 @@ use crate::common::{free_port, reqwest_lite};
 
 #[test]
 fn metrics_completeness_all_expected_metrics_present() {
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "completeness-test");
 
     // Drive all code paths to ensure metrics are emitted
@@ -43,19 +48,20 @@ fn metrics_completeness_all_expected_metrics_present() {
 
     let output = manager.render();
 
-    // Service-specific counters
+    // Bare platform counters (namespace `dfe` prepends `dfe_` once).
     let expected = [
-        "dfe_transform_vector_crashes_total",
-        "dfe_transform_vector_restarts_total",
-        "dfe_transform_vector_config_validation_errors_total",
+        "dfe_crashes_total",
+        "dfe_restarts_total",
+        "dfe_config_validation_errors_total",
+        // App-segment metrics (the wrapper adds the `transform_vector_` segment).
         "dfe_transform_vector_config_reloads_total",
-        // Gauges
         "dfe_transform_vector_lifecycle_state",
-        "dfe_transform_vector_uptime_seconds",
-        // AppMetrics (from rustlib)
-        "dfe_transform_vector_info",
-        "dfe_transform_vector_start_time_seconds",
-        // DfeMetrics pipeline readiness
+        // Bare gauge
+        "dfe_uptime_seconds",
+        // AppMetrics (from scalo)
+        "dfe_info",
+        "dfe_start_time_seconds",
+        // ServiceMetrics pipeline readiness
         "dfe_pipeline_ready",
     ];
 
@@ -71,7 +77,7 @@ fn metrics_completeness_all_expected_metrics_present() {
 
 #[test]
 fn metrics_lifecycle_state_labels_are_correct() {
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "label-test");
 
     // Set to Running
@@ -110,7 +116,7 @@ fn metrics_lifecycle_state_labels_are_correct() {
 #[test]
 fn wrapper_metrics_does_not_own_a_metrics_manager() {
     // WrapperMetrics only carries metric *handles* (Counter, Gauge) +
-    // AppMetrics / DfeMetrics. If a future refactor adds a
+    // AppMetrics / ServiceMetrics. If a future refactor adds a
     // `manager: MetricsManager` field back, this test fails at compile
     // time — std::mem::size_of catches the layout change.
     let size = std::mem::size_of::<WrapperMetrics>();
@@ -128,7 +134,7 @@ fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
     // Registering twice on the same manager must not panic. The metrics
     // crate uses interior deduplication, so a re-registration returns
     // the same counter handle.
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let _first = WrapperMetrics::register(&manager, "first");
     let _second = WrapperMetrics::register(&manager, "second");
     // If we got here without panic, the contract holds.
@@ -142,18 +148,23 @@ fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
 
 #[tokio::test]
 async fn circuit_gate_tracks_vector_health() {
-    use hyperi_rustlib::scaling::ScalingSignalsCell;
+    use scalo::scaling::{ScalingComponent, ScalingPressure, ScalingPressureConfig};
 
     let lifecycle = Lifecycle::new(); // starts Initialising -> not ready
-    let signals = Arc::new(ScalingSignalsCell::new());
+    // The supervisor only drives the circuit breaker gate; a single CPU-ish
+    // component keeps the pressure calculator well-formed.
+    let pressure = Arc::new(ScalingPressure::new(
+        ScalingPressureConfig::default(),
+        vec![ScalingComponent::new("cpu", 1.0, 1.0)],
+    ));
 
     let handle =
-        dfe_transform_vector::metrics::spawn_circuit_gate_task(&lifecycle, signals.clone());
+        dfe_transform_vector::metrics::spawn_circuit_gate_task(&lifecycle, Some(pressure.clone()));
 
     // Seed: Initialising is not ready, so the circuit starts OPEN.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        signals.snapshot().circuit_open,
+        pressure.snapshot().circuit_open,
         "circuit should be open at startup (Vector not yet running)"
     );
 
@@ -161,7 +172,7 @@ async fn circuit_gate_tracks_vector_health() {
     lifecycle.set(State::Running);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        !signals.snapshot().circuit_open,
+        !pressure.snapshot().circuit_open,
         "circuit should close once Vector is Running"
     );
 
@@ -169,7 +180,7 @@ async fn circuit_gate_tracks_vector_health() {
     lifecycle.set(State::Reloading);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        !signals.snapshot().circuit_open,
+        !pressure.snapshot().circuit_open,
         "circuit should stay closed while Reloading (still serving)"
     );
 
@@ -177,7 +188,7 @@ async fn circuit_gate_tracks_vector_health() {
     lifecycle.set(State::Crashed);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        signals.snapshot().circuit_open,
+        pressure.snapshot().circuit_open,
         "circuit should open when Vector crashes"
     );
 
@@ -198,7 +209,7 @@ async fn run_lifecycle_increments_crash_and_restart_counters() {
     use dfe_transform_vector::config::VectorConfig;
     use dfe_transform_vector::vector::{BackoffConfig, run_lifecycle};
 
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "counter-test");
 
     let vector_config = VectorConfig {
@@ -250,11 +261,11 @@ async fn run_lifecycle_increments_crash_and_restart_counters() {
             .unwrap_or(0.0)
     };
     assert!(
-        counter_value("dfe_transform_vector_crashes_total") >= 1.0,
+        counter_value("dfe_crashes_total") >= 1.0,
         "crashes_total should be >= 1 after spawn failures, got:\n{output}"
     );
     assert!(
-        counter_value("dfe_transform_vector_restarts_total") >= 1.0,
+        counter_value("dfe_restarts_total") >= 1.0,
         "restarts_total should be >= 1 after re-spawns, got:\n{output}"
     );
 }
@@ -277,7 +288,7 @@ async fn health_endpoints_respond_correctly() {
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Liveness — always 200 if process can respond (rustlib standard)
+    // Liveness — always 200 if process can respond (scalo standard)
     let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
     assert_eq!(resp.0, 200, "liveness should be 200 when running");
 
@@ -304,7 +315,7 @@ async fn health_not_ready_returns_503() {
     let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
     assert_eq!(resp.0, 503, "readiness should be 503 when initialising");
 
-    // Liveness always 200 (rustlib: process is alive if it can respond)
+    // Liveness always 200 (scalo: process is alive if it can respond)
     let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
     assert_eq!(resp.0, 200, "liveness should be 200 even when initialising");
 }

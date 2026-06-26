@@ -12,7 +12,7 @@
 //! understands, using the canonical component labels `dfe_source` and
 //! `dfe_sink`.
 //!
-//! Production librdkafka defaults come from `hyperi_rustlib::kafka_config`
+//! Production librdkafka defaults come from `scalo::kafka_config`
 //! (shared DFE baseline). Service-specific overrides and user-supplied
 //! `librdkafka_options` from config YAML are merged on top.
 
@@ -240,7 +240,7 @@ pub fn generate_observability_yaml() -> Value {
 
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
-/// Currently none — uses the shared DFE baseline from rustlib as-is.
+/// Currently none — uses the shared DFE baseline from scalo as-is.
 const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[];
 
 /// Service-specific producer librdkafka overrides for transform-vector.
@@ -299,7 +299,7 @@ fn build_sink_librdkafka(sink: &SinkConfig) -> serde_yaml_ng::Mapping {
         m.insert(val(k), val(v));
     }
 
-    // Compression from big-dial config (overrides rustlib default if different)
+    // Compression from big-dial config (overrides scalo default if different)
     let compression = match sink.compression.as_str() {
         "none" => "none",
         "gzip" => "gzip",
@@ -428,7 +428,7 @@ mod tests {
         assert!(text.contains("raw_events"));
         assert!(text.contains("test-group"));
         assert!(text.contains("codec: json"));
-        // Production librdkafka defaults (from rustlib kafka_config)
+        // Production librdkafka defaults (from scalo kafka_config)
         assert!(text.contains("cooperative-sticky"));
         assert!(text.contains("fetch.min.bytes: '1048576'"));
         assert!(text.contains("fetch.wait.max.ms: '100'"));
@@ -555,7 +555,7 @@ mod tests {
         assert!(text.contains("last_transform"));
         assert!(text.contains("codec: json"));
         assert!(text.contains("compression: zstd"));
-        // Production librdkafka defaults (from rustlib kafka_config)
+        // Production librdkafka defaults (from scalo kafka_config)
         assert!(text.contains("linger.ms: '100'"));
         assert!(text.contains("compression.type: zstd"));
         assert!(text.contains("socket.nagle.disable: 'true'"));

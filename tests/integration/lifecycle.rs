@@ -12,12 +12,12 @@
 //! Metrics endpoint tests live in `tests/integration/metrics.rs` and
 //! exercise `WrapperMetrics::register()` against a local
 //! `MetricsManager`. The wrapper no longer runs its own metrics HTTP
-//! server — the rustlib `ServiceRuntime` owns `/metrics`.
+//! server — the scalo `ServiceRuntime` owns `/metrics`.
 
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
-use hyperi_rustlib::metrics::MetricsManager;
+use scalo::metrics::MetricsManager;
 
 use crate::common::{free_port, reqwest_lite};
 
@@ -61,7 +61,7 @@ fn lifecycle_subscriber_gets_updates() {
 
 #[test]
 fn wrapper_metrics_register_and_render() {
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "test-commit");
 
     // Increment some counters
@@ -74,17 +74,18 @@ fn wrapper_metrics_register_and_render() {
     // the same path in production).
     let output = manager.render();
 
-    // Verify metric names appear in output
+    // Verify metric names appear in output. Bare platform counters render
+    // `dfe_<name>`; the app-segment counter keeps `transform_vector_`.
     assert!(
-        output.contains("dfe_transform_vector_crashes_total"),
+        output.contains("dfe_crashes_total"),
         "missing crashes_total in:\n{output}"
     );
     assert!(
-        output.contains("dfe_transform_vector_restarts_total"),
+        output.contains("dfe_restarts_total"),
         "missing restarts_total in:\n{output}"
     );
     assert!(
-        output.contains("dfe_transform_vector_config_validation_errors_total"),
+        output.contains("dfe_config_validation_errors_total"),
         "missing config_validation_errors_total in:\n{output}"
     );
     assert!(
@@ -95,7 +96,7 @@ fn wrapper_metrics_register_and_render() {
 
 #[test]
 fn wrapper_metrics_lifecycle_state_gauge() {
-    let manager = MetricsManager::new("dfe_transform_vector");
+    let manager = MetricsManager::new("dfe");
     let metrics = WrapperMetrics::register(&manager, "test-commit");
 
     metrics.set_lifecycle_state(State::Running);
@@ -124,12 +125,12 @@ async fn health_server_responds() {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Test liveness (rustlib HttpServer returns "OK")
+    // Test liveness (scalo HttpServer returns "OK")
     let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
     assert_eq!(resp.0, 200);
     assert!(resp.1.contains("OK"), "liveness body: {}", resp.1);
 
-    // Test readiness (rustlib HttpServer returns "OK" when ready)
+    // Test readiness (scalo HttpServer returns "OK" when ready)
     let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
     assert_eq!(resp.0, 200);
     assert!(resp.1.contains("OK"), "readiness body: {}", resp.1);
@@ -153,7 +154,7 @@ async fn health_server_reports_not_ready_when_initialising() {
     let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
     assert_eq!(resp.0, 200);
 
-    // Readiness: not ready (rustlib HttpServer returns "NOT READY" with 503)
+    // Readiness: not ready (scalo HttpServer returns "NOT READY" with 503)
     let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
     assert_eq!(resp.0, 503);
     assert!(resp.1.contains("NOT READY"), "not-ready body: {}", resp.1);

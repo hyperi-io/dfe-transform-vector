@@ -37,8 +37,8 @@ use dfe_transform_vector::config::loader::{
     Config, DecodingConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig,
     TransformConfig, VectorConfig,
 };
-use hyperi_rustlib::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
-use hyperi_rustlib::transport::{TransportBase, TransportReceiver, TransportSender};
+use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
+use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::sleep;
@@ -73,7 +73,7 @@ fn write_enrich_transform(dir: &std::path::Path) {
     .expect("write enrich transform");
 }
 
-/// Build a `dfe-transform-vector` Config that mirrors a rustlib `KafkaConfig`.
+/// Build a `dfe-transform-vector` Config that mirrors a scalo `KafkaConfig`.
 fn config_from_kafka_test_config(
     kf: &KafkaConfig,
     source_topic: &str,
@@ -89,7 +89,7 @@ fn config_from_kafka_test_config(
     let sasl = if sasl_enabled {
         SaslConfig {
             enabled: true,
-            // rustlib uses "SCRAM-SHA-512" style, ours uses lowercase_underscore
+            // scalo uses "SCRAM-SHA-512" style, ours uses lowercase_underscore
             mechanism: kf
                 .sasl_mechanism
                 .clone()
@@ -284,8 +284,7 @@ async fn run_pipeline_assertions(
         .await;
     let send_ok = matches!(
         send_result,
-        hyperi_rustlib::transport::SendResult::Ok
-            | hyperi_rustlib::transport::SendResult::Backpressured
+        scalo::transport::SendResult::Ok | scalo::transport::SendResult::Backpressured
     );
     let _ = producer.close().await;
     if !send_ok {
