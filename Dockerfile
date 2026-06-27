@@ -58,3 +58,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 ENTRYPOINT ["dfe-transform-vector"]
 CMD ["--config", "/etc/dfe-transform-vector/config.yaml"]
+
