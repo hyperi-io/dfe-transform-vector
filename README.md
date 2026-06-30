@@ -1,24 +1,25 @@
 # dfe-transform-vector
 
 Rust wrapper that manages Vector.dev as a subprocess for Kafka-to-Kafka
-transform pipelines in the HyperI DFE (Data Fusion Engine) platform.
+transform pipelines in the HyperI DFE (Data Fusion Engine) platform. The wrapper
+is built on the [scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime
+(config cascade, logging, metrics, health probes, CLI, deployment contract).
 
 ## Architecture
 
-```text
-Kafka source topic(s)
-        |
-        v
-dfe-transform-vector (Rust, PID 1)
-  |-- Config engine (big-dial YAML -> Vector config dir)
-  |-- Process manager (spawn, signal, crash recovery)
-  |-- Health server (:9000)
-  |-- Metrics server (:9090, wrapper + proxied Vector)
-  |
-  +-- Vector.dev (subprocess, --config-dir)
-        |
-        v
-Kafka sink topic
+```mermaid
+flowchart TB
+    SRC[("Kafka source topic(s)")]
+    SINK[("Kafka sink topic")]
+    subgraph W["dfe-transform-vector (Rust, PID 1)"]
+        CE["Config engine<br/>big-dial YAML -> Vector config dir"]
+        PM["Process manager<br/>spawn / signal / crash recovery"]
+        VEC["Vector.dev<br/>subprocess (--config-dir)"]
+        OPS["Health :9000 + Metrics :9090<br/>wrapper + proxied Vector"]
+        CE --> VEC
+        PM --> VEC
+    end
+    SRC --> VEC --> SINK
 ```
 
 ## Features
