@@ -137,12 +137,46 @@ pub fn contract() -> DeploymentContract {
         base_image: base_image_from_cascade(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
-        schema_version: 2,
+        schema_version: 3,
         oci_labels: scalo::deployment::OciLabels {
             licenses: "BUSL-1.1".into(),
             ..Default::default()
         },
+        // Reflectable config (scalo-rs#6): derived JSON Schema of the wrapper
+        // Config + a minimal catalog. This wrapper is the Vector-owns-routing
+        // anomaly -- Vector's own YAML defines transforms/routing, so the
+        // catalog describes only the wrapper capability (Kafka in/out + the
+        // managed Vector transform), not per-transform knobs.
+        config_schema: Some(scalo::deployment::config_schema_json::<crate::config::Config>()),
+        capabilities: capabilities(),
     }
+}
+
+/// Capability catalog for dfe-transform-vector: the Vector-subprocess wrapper.
+/// Deliberately thin -- Vector's own YAML config owns the transform/routing
+/// surface (the documented anomaly), so this describes the wrapper only.
+fn capabilities() -> Vec<scalo::deployment::Capability> {
+    use scalo::deployment::{Capability, FieldSpec};
+    vec![
+        Capability::new("transform", "vector")
+            .description(
+                "Vector (vector.dev) subprocess wrapper: Kafka source -> user transform YAML -> \
+                 Kafka sink. Vector's own YAML config defines the transforms + routing; this \
+                 wrapper manages the process lifecycle and Kafka wiring.",
+            )
+            .maturity("stable")
+            .field(FieldSpec::string("dfe_source").description(
+                "DFE source name; derives topic/group defaults ({src}_land -> {src}_load).",
+            ))
+            .field(
+                FieldSpec::string("transforms.dir")
+                    .description("Directory of Vector transform YAML files (hot-reloaded)."),
+            )
+            .field(
+                FieldSpec::list("transforms.files")
+                    .description("Explicit ordered list of Vector transform YAML files."),
+            ),
+    ]
 }
 
 /// Vector.dev version bundled into the published image.
@@ -212,5 +246,27 @@ pub fn emit_dockerfile() -> String {
             "scalo generate_dockerfile() output missing `USER ` directive — \
              cannot splice Vector binary install. Review scalo output shape."
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contract_carries_reflectable_config() {
+        let c = contract();
+        assert_eq!(c.schema_version, 3);
+        assert!(c.config_schema.is_some());
+        assert!(c.capabilities.iter().any(|cap| cap.name == "vector"));
+    }
+
+    /// The committed reflectable artefacts under docs/ must not drift from a
+    /// fresh regen. Regenerate with `dfe-transform-vector config-schema --dir docs`.
+    #[test]
+    fn test_config_artifacts_do_not_drift() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        scalo::deployment::assert_no_config_artifact_drift(&contract(), dir);
     }
 }

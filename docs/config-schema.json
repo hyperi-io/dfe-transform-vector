@@ -1,0 +1,645 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` — watcher switches to new directory after successful reload\n- `transforms.files` — watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — Kafka consumer connections established at Vector startup\n- `sink.*` — Kafka producer connections established at Vector startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, API address, log level set at Vector spawn\n- `health.address` — HTTP server binds at startup\n- `metrics.*` — HTTP server binds at startup\n- `logging.*` — tracing subscriber configured at startup\n- `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block\n  from the cascade at startup (via run_app's `config::setup()`); the\n  app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.\n  Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are\n  honoured by scalo and ignored by this struct (and vice-versa).\n- `reload.poll_interval_secs` — captured at reload loop start",
+  "type": "object",
+  "properties": {
+    "dfe_source": {
+      "description": "DFE source name (e.g. `\"syslog\"`, `\"netflow\"`).\n\nWhen set, derives defaults for fields not explicitly configured:\n- `source.topics` → `[\"{dfe_source}_land\"]`\n- `sink.topic` → `\"{dfe_source}_load\"`\n- `source.group_id` → `\"dfe-transform-vector-{dfe_source}\"`\n\nExplicit values always override the derived defaults.\nSee [`KafkaSource`] for the platform topic naming convention.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "pipeline": {
+      "description": "Pipeline identity. **Requires restart.**",
+      "$ref": "#/$defs/PipelineConfig",
+      "default": {
+        "name": "default"
+      }
+    },
+    "source": {
+      "description": "Kafka source (input). **Requires restart.**",
+      "$ref": "#/$defs/SourceConfig",
+      "default": {
+        "brokers": [
+          "localhost:9092"
+        ],
+        "topics": [
+          "events"
+        ],
+        "group_id": "dfe-transform-vector",
+        "decoding": {
+          "codec": "json"
+        },
+        "sasl": {
+          "enabled": false,
+          "mechanism": "scram_sha_512",
+          "username": "",
+          "password": ""
+        },
+        "tls": {
+          "enabled": false,
+          "ca_cert_file": null,
+          "cert_file": null,
+          "key_file": null,
+          "skip_verify": false
+        },
+        "auto_offset_reset": "largest",
+        "session_timeout_ms": 30000,
+        "commit_interval_ms": 5000,
+        "drain_timeout_ms": null,
+        "topic_lag_metric": true,
+        "librdkafka_options": {}
+      }
+    },
+    "sink": {
+      "description": "Kafka sink (output). **Requires restart.**",
+      "$ref": "#/$defs/SinkConfig",
+      "default": {
+        "brokers": [
+          "localhost:9092"
+        ],
+        "topic": "",
+        "key_field": "",
+        "encoding": "json",
+        "compression": "none",
+        "sasl": {
+          "enabled": false,
+          "mechanism": "scram_sha_512",
+          "username": "",
+          "password": ""
+        },
+        "tls": {
+          "enabled": false,
+          "ca_cert_file": null,
+          "cert_file": null,
+          "key_file": null,
+          "skip_verify": false
+        },
+        "buffer": {
+          "type": "memory",
+          "max_events": null,
+          "max_size": null,
+          "when_full": "block"
+        },
+        "batch": {
+          "max_events": 10000,
+          "max_bytes": null,
+          "timeout_secs": 1
+        },
+        "message_timeout_ms": 300000,
+        "socket_timeout_ms": 60000,
+        "librdkafka_options": {}
+      }
+    },
+    "transforms": {
+      "description": "User-supplied transform YAML files. **Hot-reloaded.**",
+      "$ref": "#/$defs/TransformConfig",
+      "default": {
+        "dir": null,
+        "files": null
+      }
+    },
+    "vector": {
+      "description": "Vector subprocess settings. **Requires restart.**",
+      "$ref": "#/$defs/VectorConfig",
+      "default": {
+        "binary": "/usr/local/bin/vector",
+        "data_dir": "/var/lib/vector",
+        "api_address": "0.0.0.0:8686",
+        "log_level": "info",
+        "version": "",
+        "version_check": "strict"
+      }
+    },
+    "health": {
+      "description": "Health endpoint. **Requires restart** (server binds at startup).",
+      "$ref": "#/$defs/HealthConfig",
+      "default": {
+        "address": "0.0.0.0:9000"
+      }
+    },
+    "metrics": {
+      "description": "Metrics endpoint. **Requires restart** (server binds at startup).",
+      "$ref": "#/$defs/MetricsConfig",
+      "default": {
+        "address": "0.0.0.0:9090",
+        "vector_metrics_address": "127.0.0.1:9598"
+      }
+    },
+    "logging": {
+      "description": "Logging. **Requires restart** (subscriber configured at startup).",
+      "$ref": "#/$defs/LoggingConfig",
+      "default": {
+        "level": "info",
+        "format": "json"
+      }
+    },
+    "scaling": {
+      "description": "KEDA scaling pressure. **Requires restart.**",
+      "$ref": "#/$defs/ScalingConfig",
+      "default": {
+        "pressure_threshold": 0.8
+      }
+    },
+    "reload": {
+      "description": "Hot-reload configuration. **Requires restart** (poll interval captured at start).",
+      "$ref": "#/$defs/ReloadConfig",
+      "default": {
+        "enabled": true,
+        "poll_interval_secs": 30
+      }
+    }
+  },
+  "$defs": {
+    "PipelineConfig": {
+      "description": "Pipeline identity.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Pipeline name (used in metrics labels, Kafka group_id, logging).",
+          "type": "string",
+          "default": "default"
+        }
+      }
+    },
+    "SourceConfig": {
+      "description": "Kafka source configuration (input big dials).",
+      "type": "object",
+      "properties": {
+        "brokers": {
+          "description": "Kafka bootstrap servers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "localhost:9092"
+          ]
+        },
+        "topics": {
+          "description": "Topics to consume from.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "events"
+          ]
+        },
+        "group_id": {
+          "description": "Consumer group ID.",
+          "type": "string",
+          "default": "dfe-transform-vector"
+        },
+        "decoding": {
+          "description": "Message decoding.",
+          "$ref": "#/$defs/DecodingConfig",
+          "default": {
+            "codec": "json"
+          }
+        },
+        "sasl": {
+          "description": "SASL authentication.",
+          "$ref": "#/$defs/SaslConfig",
+          "default": {
+            "enabled": false,
+            "mechanism": "scram_sha_512",
+            "username": "",
+            "password": ""
+          }
+        },
+        "tls": {
+          "description": "TLS configuration.",
+          "$ref": "#/$defs/TlsConfig",
+          "default": {
+            "enabled": false,
+            "ca_cert_file": null,
+            "cert_file": null,
+            "key_file": null,
+            "skip_verify": false
+          }
+        },
+        "auto_offset_reset": {
+          "description": "Auto offset reset: `largest` (default) or `smallest`.",
+          "type": "string",
+          "default": "largest"
+        },
+        "session_timeout_ms": {
+          "description": "Session timeout (ms). Default: 30000.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 30000
+        },
+        "commit_interval_ms": {
+          "description": "Offset commit interval (ms). Default: 5000.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 5000
+        },
+        "drain_timeout_ms": {
+          "description": "Drain timeout (ms) — max wait for pending acks during shutdown/rebalance.\nMust be less than session_timeout_ms. Default: half of session_timeout_ms.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "topic_lag_metric": {
+          "description": "Expose per-topic consumer lag metric. Default: true.",
+          "type": "boolean",
+          "default": true
+        },
+        "librdkafka_options": {
+          "description": "Extra librdkafka options (passed through to Vector).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+    "DecodingConfig": {
+      "description": "Message decoding configuration.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "description": "Codec: json, raw_bytes, protobuf.",
+          "type": "string",
+          "default": "json"
+        }
+      }
+    },
+    "SaslConfig": {
+      "description": "SASL authentication for Kafka.\n\nNOTE: `password` is `String`, not `SensitiveString`, because the config\ngoes through a figment serialize→merge→deserialize round-trip in\n`apply_figment_env()`. `SensitiveString` serialises as `***REDACTED***`\nwhich destroys the value during the round-trip. Password protection is\nhandled by: (1) `flat_env_string_sensitive` which masks the env var in\nlogs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`\nenv-var interpolation — the actual secret never appears in our config.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable SASL authentication.",
+          "type": "boolean",
+          "default": false
+        },
+        "mechanism": {
+          "description": "SASL mechanism: plain, scram_sha_256, scram_sha_512.",
+          "type": "string",
+          "default": "scram_sha_512"
+        },
+        "username": {
+          "description": "SASL username. Supports Vector env interpolation: `${KAFKA_SASL_USERNAME}`.",
+          "type": "string",
+          "default": ""
+        },
+        "password": {
+          "description": "SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "TlsConfig": {
+      "description": "TLS configuration for Kafka.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS.",
+          "type": "boolean",
+          "default": false
+        },
+        "ca_cert_file": {
+          "description": "Path to CA certificate PEM file.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "cert_file": {
+          "description": "Path to client certificate PEM file (for mTLS).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "key_file": {
+          "description": "Path to client key PEM file (for mTLS).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "skip_verify": {
+          "description": "Skip hostname verification (dev/test only).",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "SinkConfig": {
+      "description": "Kafka sink configuration (output big dials).",
+      "type": "object",
+      "properties": {
+        "brokers": {
+          "description": "Kafka bootstrap servers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "localhost:9092"
+          ]
+        },
+        "topic": {
+          "description": "Output topic name.",
+          "type": "string",
+          "default": ""
+        },
+        "key_field": {
+          "description": "Event field path for Kafka partition key (e.g., \".org_id\").",
+          "type": "string",
+          "default": ""
+        },
+        "encoding": {
+          "description": "Encoding codec: json, raw_bytes.",
+          "type": "string",
+          "default": "json"
+        },
+        "compression": {
+          "description": "Compression: none, gzip, lz4, snappy, zstd.",
+          "type": "string",
+          "default": "none"
+        },
+        "sasl": {
+          "description": "SASL authentication.",
+          "$ref": "#/$defs/SaslConfig",
+          "default": {
+            "enabled": false,
+            "mechanism": "scram_sha_512",
+            "username": "",
+            "password": ""
+          }
+        },
+        "tls": {
+          "description": "TLS configuration.",
+          "$ref": "#/$defs/TlsConfig",
+          "default": {
+            "enabled": false,
+            "ca_cert_file": null,
+            "cert_file": null,
+            "key_file": null,
+            "skip_verify": false
+          }
+        },
+        "buffer": {
+          "description": "Sink buffer configuration.",
+          "$ref": "#/$defs/BufferConfig",
+          "default": {
+            "type": "memory",
+            "max_events": null,
+            "max_size": null,
+            "when_full": "block"
+          }
+        },
+        "batch": {
+          "description": "Sink batch configuration (Vector-level batching).",
+          "$ref": "#/$defs/BatchConfig",
+          "default": {
+            "max_events": 10000,
+            "max_bytes": null,
+            "timeout_secs": 1
+          }
+        },
+        "message_timeout_ms": {
+          "description": "Local message timeout (ms). Default: 300000 (5 min).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 300000
+        },
+        "socket_timeout_ms": {
+          "description": "Network request timeout (ms). Default: 60000 (60s).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 60000
+        },
+        "librdkafka_options": {
+          "description": "Extra librdkafka options (passed through to Vector).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+    "BufferConfig": {
+      "description": "Buffer configuration for Vector sinks.\n\nSupports two modes:\n- `memory`: in-memory buffer (default), configured by `max_events`\n- `disk`: persistent disk buffer, configured by `max_size` (bytes, min ~256 MiB)",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "Buffer type: `memory` or `disk`.",
+          "type": "string",
+          "default": "memory"
+        },
+        "max_events": {
+          "description": "Maximum events in memory buffer (only for type=memory). Default: 500.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "max_size": {
+          "description": "Maximum buffer size in bytes (only for type=disk). Min ~256 MiB (268435488).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "when_full": {
+          "description": "Behaviour when buffer is full: `block` (default) or `drop_newest`.",
+          "type": "string",
+          "default": "block"
+        }
+      }
+    },
+    "BatchConfig": {
+      "description": "Vector-level batch configuration for sinks.",
+      "type": "object",
+      "properties": {
+        "max_events": {
+          "description": "Maximum events per batch before flush. Default: 10000.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10000
+        },
+        "max_bytes": {
+          "description": "Maximum uncompressed batch size (bytes) before flush.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "timeout_secs": {
+          "description": "Max batch age (seconds) before flush. Default: 1.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        }
+      }
+    },
+    "TransformConfig": {
+      "description": "Transform file loading configuration.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "Directory to load all YAML transform files from.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "files": {
+          "description": "Explicit list of transform YAML file paths (loaded in order).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        }
+      }
+    },
+    "VectorConfig": {
+      "description": "Vector subprocess configuration.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "Path to Vector binary.",
+          "type": "string",
+          "default": "/usr/local/bin/vector"
+        },
+        "data_dir": {
+          "description": "Data directory for disk buffers and state.",
+          "type": "string",
+          "default": "/var/lib/vector"
+        },
+        "api_address": {
+          "description": "Vector API server address (host:port).",
+          "type": "string",
+          "default": "0.0.0.0:8686"
+        },
+        "log_level": {
+          "description": "Vector log level.",
+          "type": "string",
+          "default": "info"
+        },
+        "version": {
+          "description": "Expected Vector version (semver).",
+          "type": "string",
+          "default": ""
+        },
+        "version_check": {
+          "description": "Version check mode: strict, warn, disabled.",
+          "type": "string",
+          "default": "strict"
+        }
+      }
+    },
+    "HealthConfig": {
+      "description": "Health endpoint configuration.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "Health server bind address (host:port).",
+          "type": "string",
+          "default": "0.0.0.0:9000"
+        }
+      }
+    },
+    "MetricsConfig": {
+      "description": "Metrics endpoint configuration.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "Metrics server bind address (host:port).",
+          "type": "string",
+          "default": "0.0.0.0:9090"
+        },
+        "vector_metrics_address": {
+          "description": "Vector's prometheus_exporter address to proxy (host:port).",
+          "type": "string",
+          "default": "127.0.0.1:9598"
+        }
+      }
+    },
+    "LoggingConfig": {
+      "description": "Logging configuration.",
+      "type": "object",
+      "properties": {
+        "level": {
+          "description": "Log level (trace, debug, info, warn, error).",
+          "type": "string",
+          "default": "info"
+        },
+        "format": {
+          "description": "Log format (json, text).",
+          "type": "string",
+          "default": "json"
+        }
+      }
+    },
+    "ScalingConfig": {
+      "description": "KEDA scaling pressure configuration.",
+      "type": "object",
+      "properties": {
+        "pressure_threshold": {
+          "description": "Scaling pressure threshold (0.0–1.0).",
+          "type": "number",
+          "format": "double",
+          "default": 0.8
+        }
+      }
+    },
+    "ReloadConfig": {
+      "description": "Hot-reload configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable hot-reload (poll-based file watcher + SIGHUP).",
+          "type": "boolean",
+          "default": true
+        },
+        "poll_interval_secs": {
+          "description": "Poll interval in seconds for detecting config/transform file changes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 30
+        }
+      }
+    }
+  }
+}

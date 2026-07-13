@@ -30,7 +30,7 @@ use crate::Result;
 /// handled by: (1) `flat_env_string_sensitive` which masks the env var in
 /// logs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`
 /// env-var interpolation — the actual secret never appears in our config.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SaslConfig {
     /// Enable SASL authentication.
@@ -55,7 +55,7 @@ impl Default for SaslConfig {
 }
 
 /// TLS configuration for Kafka.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TlsConfig {
     /// Enable TLS.
@@ -71,7 +71,7 @@ pub struct TlsConfig {
 }
 
 /// Message decoding configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct DecodingConfig {
     /// Codec: json, raw_bytes, protobuf.
@@ -109,7 +109,7 @@ impl Default for DecodingConfig {
 ///   Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are
 ///   honoured by scalo and ignored by this struct (and vice-versa).
 /// - `reload.poll_interval_secs` — captured at reload loop start
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     /// DFE source name (e.g. `"syslog"`, `"netflow"`).
@@ -145,7 +145,7 @@ pub struct Config {
 }
 
 /// Pipeline identity.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PipelineConfig {
     /// Pipeline name (used in metrics labels, Kafka group_id, logging).
@@ -173,7 +173,7 @@ impl PipelineConfig {
 }
 
 /// Kafka source configuration (input big dials).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
     /// Kafka bootstrap servers.
@@ -223,7 +223,7 @@ impl Default for SourceConfig {
 }
 
 /// Kafka sink configuration (output big dials).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
     /// Kafka bootstrap servers.
@@ -272,7 +272,7 @@ impl Default for SinkConfig {
 }
 
 /// Vector-level batch configuration for sinks.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct BatchConfig {
     /// Maximum events per batch before flush. Default: 10000.
@@ -298,7 +298,7 @@ impl Default for BatchConfig {
 /// Supports two modes:
 /// - `memory`: in-memory buffer (default), configured by `max_events`
 /// - `disk`: persistent disk buffer, configured by `max_size` (bytes, min ~256 MiB)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct BufferConfig {
     /// Buffer type: `memory` or `disk`.
@@ -324,7 +324,7 @@ impl Default for BufferConfig {
 }
 
 /// Transform file loading configuration.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TransformConfig {
     /// Directory to load all YAML transform files from.
@@ -334,7 +334,7 @@ pub struct TransformConfig {
 }
 
 /// Vector subprocess configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct VectorConfig {
     /// Path to Vector binary.
@@ -365,7 +365,7 @@ impl Default for VectorConfig {
 }
 
 /// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct HealthConfig {
     /// Health server bind address (host:port).
@@ -381,7 +381,7 @@ impl Default for HealthConfig {
 }
 
 /// Metrics endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MetricsConfig {
     /// Metrics server bind address (host:port).
@@ -400,7 +400,7 @@ impl Default for MetricsConfig {
 }
 
 /// Logging configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
@@ -419,7 +419,7 @@ impl Default for LoggingConfig {
 }
 
 /// Hot-reload configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ReloadConfig {
     /// Enable hot-reload (poll-based file watcher + SIGHUP).
@@ -438,7 +438,7 @@ impl Default for ReloadConfig {
 }
 
 /// KEDA scaling pressure configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ScalingConfig {
     /// Scaling pressure threshold (0.0–1.0).

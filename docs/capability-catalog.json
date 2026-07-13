@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "transform",
+    "name": "vector",
+    "description": "Vector (vector.dev) subprocess wrapper: Kafka source -> user transform YAML -> Kafka sink. Vector's own YAML config defines the transforms + routing; this wrapper manages the process lifecycle and Kafka wiring.",
+    "maturity": "stable",
+    "fields": [
+      {
+        "name": "dfe_source",
+        "type": "string",
+        "required": false,
+        "description": "DFE source name; derives topic/group defaults ({src}_land -> {src}_load)."
+      },
+      {
+        "name": "transforms.dir",
+        "type": "string",
+        "required": false,
+        "description": "Directory of Vector transform YAML files (hot-reloaded)."
+      },
+      {
+        "name": "transforms.files",
+        "type": "list",
+        "required": false,
+        "description": "Explicit ordered list of Vector transform YAML files."
+      }
+    ]
+  }
+]
