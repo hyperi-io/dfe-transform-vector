@@ -1,12 +1,12 @@
 // Project:   dfe-transform-vector
 // File:      src/health.rs
-// Purpose:   Health endpoints (/health/live, /health/ready)
+// Purpose:   Health endpoints (/livez, /readyz)
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Health endpoints (`/health/live`, `/health/ready`).
+//! Health endpoints (`/livez`, `/readyz`).
 //!
 //! Uses scalo `HttpServer` (axum) for the HTTP transport. The readiness
 //! state is driven by the Vector subprocess lifecycle — ready only when
@@ -24,8 +24,8 @@ use crate::vector::Lifecycle;
 /// Start the health HTTP server.
 ///
 /// Serves:
-/// - `/health/live` — 200 if wrapper process is alive (always, handled by scalo)
-/// - `/health/ready` — 200 if Vector is running and healthy, 503 otherwise
+/// - `/livez` — 200 if wrapper process is alive (always, handled by scalo)
+/// - `/readyz` — 200 if Vector is running and healthy, 503 otherwise
 pub async fn serve_health(address: &str, lifecycle: Lifecycle) -> Result<()> {
     let config = HttpServerConfig {
         bind_address: address.to_string(),

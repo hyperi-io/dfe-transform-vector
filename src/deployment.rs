@@ -31,8 +31,8 @@ pub fn contract() -> DeploymentContract {
         description: "Vector.dev subprocess wrapper for Kafka-to-Kafka transform pipelines".into(),
         metrics_port: 9090,
         health: HealthContract {
-            liveness_path: "/health/live".into(),
-            readiness_path: "/health/ready".into(),
+            liveness_path: "/livez".into(),
+            readiness_path: "/readyz".into(),
             metrics_path: "/metrics".into(),
         },
         env_prefix: "DFE_TRANSFORM".into(),
