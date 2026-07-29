@@ -393,7 +393,6 @@ mod tests {
 
     #[test]
     fn stable_picks_the_previous_minors_newest_patch() {
-        // Derek's example: current 0.57, previous minor 0.56 with patches.
         let r = vs(&["0.57.0", "0.56.0", "0.56.3", "0.55.1"]);
         assert_eq!(select_stable(&r).unwrap().to_string(), "0.56.3");
         assert_eq!(select_latest(&r).unwrap().to_string(), "0.57.0");

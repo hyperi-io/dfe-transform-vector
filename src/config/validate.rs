@@ -400,9 +400,8 @@ mod tests {
 
     #[test]
     fn empty_dir_is_ephemeral_despite_being_its_own_mount() {
-        // The case worth pinning: an emptyDir IS a separate mount, so a
-        // mount-point test alone would call it durable. Its lifetime is the
-        // pod's, which is exactly what a disk buffer has to outlive.
+        // An emptyDir is its own mount, so a mount-point test alone reads it as
+        // durable. Its lifetime is the pod's, which a disk buffer must outlive.
         assert_eq!(
             classify_data_dir(Some(EMPTY_DIR), Path::new("/var/lib/vector")),
             DataDirBacking::Ephemeral
