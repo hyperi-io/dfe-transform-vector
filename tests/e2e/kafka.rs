@@ -149,6 +149,7 @@ fn config_from_kafka_test_config(
             log_level: "warn".into(),
             version: String::new(),
             version_check: "disabled".into(),
+            ..Default::default()
         },
         ..Default::default()
     }

@@ -61,6 +61,24 @@ Service account name.
 {{- end }}
 
 {{/*
+Refuse to template a disk buffer with nowhere durable to put it.
+
+`sink.buffer.type: disk` asks Vector for durability across restarts. Without a
+claim the buffer goes to an emptyDir, so every write succeeds, nothing errors,
+and the buffered events are discarded the moment the pod moves. That is worse
+than no buffer -- it looks like a guarantee and is not one.
+
+Failing at template time is the right place: this is the only point where both
+the buffer type and the storage decision are visible together.
+*/}}
+{{- define "dfe-transform-vector.persistenceRequired" -}}
+{{- $buffer := (.Values.config.sink).buffer | default dict -}}
+{{- if and (eq ($buffer.type | default "memory") "disk") (not .Values.persistence.enabled) -}}
+{{- fail "config.sink.buffer.type is 'disk' but persistence.enabled is false. A disk buffer on an emptyDir is discarded when the pod moves, so the durability it promises is absent. Set persistence.enabled=true (and persistence.size >= the buffer's max_size), or use buffer type 'memory'." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 kafka secret name — use existing or generate from fullname.
 */}}
 {{- define "dfe-transform-vector.kafkaSecretName" -}}

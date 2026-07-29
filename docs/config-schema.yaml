@@ -123,6 +123,8 @@ properties:
       log_level: info
       version: 0.56.0
       version_check: strict
+      version_source: preshipped
+      cache_dir: /var/cache/vector
   health:
     description: Health endpoint. **Requires restart** (server binds at startup).
     $ref: '#/$defs/HealthConfig'
@@ -498,6 +500,28 @@ $defs:
         description: 'Version check mode: strict, warn, disabled.'
         type: string
         default: strict
+      version_source:
+        description: |-
+          Where the Vector version comes from: `preshipped`, `latest`, `stable`,
+          a minor line (`0.56`), or an exact version (`0.56.0`).
+
+          Defaults to `preshipped` -- the binary baked into the image. It needs no
+          network, is the version this build was tested against, and is the only
+          mode that works on a cold airgapped deploy.
+
+          See [`crate::vector::VersionSource`].
+        type: string
+        default: preshipped
+      cache_dir:
+        description: |-
+          Persistent cache directory for Vector binaries.
+
+          Deliberately OUTSIDE the container's writable layer -- mount a k8s
+          volume or a docker bind here so it survives pod restarts and image
+          pulls. Pre-populate it to run a non-pre-shipped version in an airgapped
+          environment.
+        type: string
+        default: /var/cache/vector
   HealthConfig:
     description: Health endpoint configuration.
     type: object

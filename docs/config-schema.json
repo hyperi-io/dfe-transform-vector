@@ -111,7 +111,9 @@
         "api_address": "0.0.0.0:8686",
         "log_level": "info",
         "version": "0.56.0",
-        "version_check": "strict"
+        "version_check": "strict",
+        "version_source": "preshipped",
+        "cache_dir": "/var/cache/vector"
       }
     },
     "health": {
@@ -565,6 +567,16 @@
           "description": "Version check mode: strict, warn, disabled.",
           "type": "string",
           "default": "strict"
+        },
+        "version_source": {
+          "description": "Where the Vector version comes from: `preshipped`, `latest`, `stable`,\na minor line (`0.56`), or an exact version (`0.56.0`).\n\nDefaults to `preshipped` -- the binary baked into the image. It needs no\nnetwork, is the version this build was tested against, and is the only\nmode that works on a cold airgapped deploy.\n\nSee [`crate::vector::VersionSource`].",
+          "type": "string",
+          "default": "preshipped"
+        },
+        "cache_dir": {
+          "description": "Persistent cache directory for Vector binaries.\n\nDeliberately OUTSIDE the container's writable layer -- mount a k8s\nvolume or a docker bind here so it survives pod restarts and image\npulls. Pre-populate it to run a non-pre-shipped version in an airgapped\nenvironment.",
+          "type": "string",
+          "default": "/var/cache/vector"
         }
       }
     },

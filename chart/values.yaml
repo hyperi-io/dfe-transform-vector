@@ -44,6 +44,32 @@ resources:
     cpu: "2"
     memory: 1Gi
 
+# -- Persistent storage for Vector's data_dir, where disk buffers live.
+#
+# OPT-IN. Most deployments buffer in memory and need nothing here. Turn it on
+# only when `config.sink.buffer.type` is `disk` -- and if you set that without
+# turning this on, the chart refuses to template rather than handing you a
+# buffer that silently loses events on reschedule.
+#
+# One claim per replica, via the StatefulSet's volumeClaimTemplates: a Vector
+# disk buffer is per-process state and replicas must not share a volume.
+#
+# `size` is the only knob most deployments touch, and it must be at least the
+# buffer's `max_size` (Vector's own floor is 256 MiB) with room for its index.
+# Mounted at the path Vector already expects, so nothing else needs configuring.
+#
+# Provisioner-specific tuning (gp3 IOPS and throughput, for instance) is not
+# here -- that belongs to the StorageClass, so point `storageClass` at one that
+# carries it rather than expressing it per workload.
+persistence:
+  enabled: false
+  # Doubles as the emptyDir sizeLimit when disabled, so a runaway buffer evicts
+  # the pod instead of filling the node's disk.
+  size: 2Gi
+  accessMode: ReadWriteOnce
+  # Empty means the cluster default StorageClass.
+  storageClass: ""
+
 # -- Metrics and health endpoint service
 service:
   type: ClusterIP

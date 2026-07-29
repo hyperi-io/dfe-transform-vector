@@ -776,6 +776,7 @@ fn config_with_all_fields_populated_validates() {
             log_level: "debug".into(),
             version: "0.53.0".into(),
             version_check: "warn".into(),
+            ..Default::default()
         },
         health: HealthConfig {
             address: "0.0.0.0:8080".into(),

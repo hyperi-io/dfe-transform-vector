@@ -359,6 +359,22 @@ pub struct VectorConfig {
     pub version: String,
     /// Version check mode: strict, warn, disabled.
     pub version_check: String,
+    /// Where the Vector version comes from: `preshipped`, `latest`, `stable`,
+    /// a minor line (`0.56`), or an exact version (`0.56.0`).
+    ///
+    /// Defaults to `preshipped` -- the binary baked into the image. It needs no
+    /// network, is the version this build was tested against, and is the only
+    /// mode that works on a cold airgapped deploy.
+    ///
+    /// See [`crate::vector::VersionSource`].
+    pub version_source: String,
+    /// Persistent cache directory for Vector binaries.
+    ///
+    /// Deliberately OUTSIDE the container's writable layer -- mount a k8s
+    /// volume or a docker bind here so it survives pod restarts and image
+    /// pulls. Pre-populate it to run a non-pre-shipped version in an airgapped
+    /// environment.
+    pub cache_dir: String,
 }
 
 impl Default for VectorConfig {
@@ -370,6 +386,8 @@ impl Default for VectorConfig {
             log_level: "info".to_string(),
             version: crate::deployment::VECTOR_VERSION.to_string(),
             version_check: "strict".to_string(),
+            version_source: "preshipped".to_string(),
+            cache_dir: "/var/cache/vector".to_string(),
         }
     }
 }
@@ -564,6 +582,12 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_VERSION_CHECK") {
             self.vector.version_check = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_VERSION_SOURCE") {
+            self.vector.version_source = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_CACHE_DIR") {
+            self.vector.cache_dir = v;
         }
 
         // Health
@@ -793,6 +817,21 @@ impl Config {
                 "vector.version_check must be one of: {}",
                 valid_modes.join(", ")
             )));
+        }
+
+        // Reject a bad version_source HERE rather than at first use. A typo
+        // that only surfaces when the binary is acquired means the pod starts,
+        // passes config validation, and then fails somewhere less obvious.
+        crate::vector::VersionSource::parse(&self.vector.version_source)
+            .map_err(|e| crate::Error::Validation(e.to_string()))?;
+
+        if self.vector.cache_dir.is_empty() {
+            return Err(crate::Error::Validation(
+                "vector.cache_dir must not be empty -- it is where the binary \
+                 cache lives, and an empty path silently resolves to the \
+                 working directory"
+                    .to_string(),
+            ));
         }
 
         // Scaling pressure threshold must be in [0.0, 1.0]
