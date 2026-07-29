@@ -180,16 +180,38 @@ async fn authenticated_probe(cfg: &KafkaConfig) -> bool {
     .unwrap_or(false)
 }
 
+/// Panic if a backing service is missing while running in CI.
+///
+/// Skipping is right on a developer machine, where the daemon may simply be
+/// down. In CI it makes the test pass VACUOUSLY: the suite reports green while
+/// exercising none of the integration surface. A gate that disappears along
+/// with its environment is not a gate.
+pub fn require_service_in_ci(what: &str, detail: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{what} unreachable in CI ({detail}) -- integration tests must RUN here, \
+         not skip. Skipping would report green while testing nothing."
+    );
+}
+
 /// Spawn an ephemeral Apache Kafka container (testcontainers).
 ///
 /// The container runs in PLAINTEXT mode (no SASL/TLS) — sufficient for
 /// validating pipeline wiring. The returned fixture owns the container;
 /// it stops on drop.
 async fn try_testcontainer() -> Result<KafkaFixture, String> {
+    use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::kafka::apache;
 
+    // Pinned here, not left to the module default of 3.8.0. A tag baked into a
+    // dependency's source is invisible to dependency review: Renovate reads
+    // Cargo.toml, correctly reports the crate current, and never sees the image.
+    // renovate: datasource=docker depName=apache/kafka-native
+    const KAFKA_TAG: &str = "4.3.1";
+
     let container = apache::Kafka::default()
+        .with_tag(KAFKA_TAG)
         .start()
         .await
         .map_err(|e| format!("start kafka container: {e}"))?;
