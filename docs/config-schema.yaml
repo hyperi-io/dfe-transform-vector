@@ -121,7 +121,7 @@ properties:
       data_dir: /var/lib/vector
       api_address: 0.0.0.0:8686
       log_level: info
-      version: ''
+      version: 0.56.0
       version_check: strict
   health:
     description: Health endpoint. **Requires restart** (server binds at startup).
@@ -480,9 +480,20 @@ $defs:
         type: string
         default: info
       version:
-        description: Expected Vector version (semver).
+        description: |-
+          Expected Vector version (semver).
+
+          Defaults to the version the image was built with
+          ([`crate::deployment::VECTOR_VERSION`]) rather than empty. Empty means
+          [`check_vector_version`](crate::config::validate::check_vector_version)
+          skips the comparison, so the default `version_check: strict` was a check
+          that never ran. Defaulting it here makes strict mean what it says: the
+          binary on PATH must be the one this image shipped.
+
+          Set it explicitly (or set `version_check` to `warn`/`disabled`) when
+          deliberately running a different Vector to the pre-shipped one.
         type: string
-        default: ''
+        default: 0.56.0
       version_check:
         description: 'Version check mode: strict, warn, disabled.'
         type: string

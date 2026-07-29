@@ -32,8 +32,8 @@ fn contract_produces_valid_structure() {
     );
 
     // Health paths match the DFE contract
-    assert_eq!(c.health.liveness_path, "/health/live");
-    assert_eq!(c.health.readiness_path, "/health/ready");
+    assert_eq!(c.health.liveness_path, "/livez");
+    assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
     // Required ports: health (9000), vector-api (8686)

@@ -289,11 +289,11 @@ async fn health_endpoints_respond_correctly() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Liveness — always 200 if process can respond (scalo standard)
-    let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
     assert_eq!(resp.0, 200, "liveness should be 200 when running");
 
     // Readiness — 200 when Running
-    let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
     assert_eq!(resp.0, 200, "readiness should be 200 when running");
 }
 
@@ -312,11 +312,11 @@ async fn health_not_ready_returns_503() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Readiness should be 503 when initialising (not ready)
-    let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
     assert_eq!(resp.0, 503, "readiness should be 503 when initialising");
 
     // Liveness always 200 (scalo: process is alive if it can respond)
-    let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
     assert_eq!(resp.0, 200, "liveness should be 200 even when initialising");
 }
 

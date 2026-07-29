@@ -346,6 +346,16 @@ pub struct VectorConfig {
     /// Vector log level.
     pub log_level: String,
     /// Expected Vector version (semver).
+    ///
+    /// Defaults to the version the image was built with
+    /// ([`crate::deployment::VECTOR_VERSION`]) rather than empty. Empty means
+    /// [`check_vector_version`](crate::config::validate::check_vector_version)
+    /// skips the comparison, so the default `version_check: strict` was a check
+    /// that never ran. Defaulting it here makes strict mean what it says: the
+    /// binary on PATH must be the one this image shipped.
+    ///
+    /// Set it explicitly (or set `version_check` to `warn`/`disabled`) when
+    /// deliberately running a different Vector to the pre-shipped one.
     pub version: String,
     /// Version check mode: strict, warn, disabled.
     pub version_check: String,
@@ -358,7 +368,7 @@ impl Default for VectorConfig {
             data_dir: "/var/lib/vector".to_string(),
             api_address: "0.0.0.0:8686".to_string(),
             log_level: "info".to_string(),
-            version: String::new(),
+            version: crate::deployment::VECTOR_VERSION.to_string(),
             version_check: "strict".to_string(),
         }
     }
