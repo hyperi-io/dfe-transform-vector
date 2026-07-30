@@ -160,7 +160,7 @@ fn config_from_kafka_test_config(
 async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
     crate::common::skip_if_no_vector!();
 
-    let Some(fixture) = KafkaFixture::acquire().await else {
+    let Some(fixture) = KafkaFixture::acquire("kafka-pipeline-produces-consumes").await else {
         crate::common::require_service_in_ci("Kafka", "live unreachable and no Docker");
         eprintln!("Skipping: no Kafka backend available (live unreachable AND no Docker)");
         return;

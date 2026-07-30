@@ -37,7 +37,7 @@ tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
 # and `cli-service` pulls `scaling` but NOT `expression`. Without it the
 # engine silently compiles out -- no scaling_pressure gauge, signals
 # pushed to a cell nobody reads.
-scalo = { version = ">=2.10.4, <3", features = [
+scalo = { version = ">=2.10.7, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -96,7 +96,7 @@ tokio-test = ">=0.4, <0.5"
 bytes = ">=1.11, <2"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.10.4, <3", features = [
+scalo = { version = ">=2.10.7, <3", features = [
     "transport-kafka",
 ] }
 
