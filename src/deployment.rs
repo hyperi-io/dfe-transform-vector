@@ -208,9 +208,8 @@ const VERSION_PLACEHOLDER: &str = "@VECTOR_VERSION@";
 /// are single-binary images; this consumer-side override exists because
 /// scalo's deployment contract has no slot for an add-on native binary.
 ///
-/// When `hyperi-ci`'s overlay framework lands (see
-/// `docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`)
-/// this override moves into `.hyperi-ci.yaml`.
+/// When `hyperi-ci` grows an overlay framework this override moves into
+/// `.hyperi-ci.yaml`.
 #[must_use]
 pub fn emit_dockerfile() -> String {
     let base = scalo::deployment::generate_dockerfile(&contract(), None);
