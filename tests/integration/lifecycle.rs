@@ -126,12 +126,12 @@ async fn health_server_responds() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Test liveness (scalo HttpServer returns "OK")
-    let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
     assert_eq!(resp.0, 200);
     assert!(resp.1.contains("OK"), "liveness body: {}", resp.1);
 
     // Test readiness (scalo HttpServer returns "OK" when ready)
-    let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
     assert_eq!(resp.0, 200);
     assert!(resp.1.contains("OK"), "readiness body: {}", resp.1);
 }
@@ -151,11 +151,11 @@ async fn health_server_reports_not_ready_when_initialising() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Liveness: alive (even when initialising)
-    let resp = reqwest_lite(&format!("http://{addr}/health/live")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
     assert_eq!(resp.0, 200);
 
     // Readiness: not ready (scalo HttpServer returns "NOT READY" with 503)
-    let resp = reqwest_lite(&format!("http://{addr}/health/ready")).await;
+    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
     assert_eq!(resp.0, 503);
     assert!(resp.1.contains("NOT READY"), "not-ready body: {}", resp.1);
 }

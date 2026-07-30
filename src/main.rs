@@ -29,7 +29,9 @@ use tracing::{debug, error, info};
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
-use dfe_transform_vector::config::validate::{check_vector_version, vector_validate};
+use dfe_transform_vector::config::validate::{
+    check_vector_version, vector_validate, warn_if_disk_buffer_is_ephemeral,
+};
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health::serve_health;
 use dfe_transform_vector::metrics::{
@@ -266,6 +268,10 @@ async fn run_transform_service(
     // Run vector validate on assembled config
     vector_validate(&config.vector, &config_dir).await?;
     info!("Vector config validation passed");
+
+    // After assembly, so it sees the operator's transforms and sinks too -- the
+    // Helm-time guard only knows about our own sink.buffer.
+    warn_if_disk_buffer_is_ephemeral(&config_dir, &config.vector);
 
     // Wrapper metrics register on the runtime's MetricsManager — the
     // runtime already owns the global recorder and the /metrics HTTP

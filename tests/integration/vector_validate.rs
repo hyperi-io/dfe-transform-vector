@@ -68,6 +68,7 @@ fn build_config(buffer: BufferConfig) -> (Config, TempDir) {
             log_level: "info".to_string(),
             version: String::new(),
             version_check: "disabled".to_string(),
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -255,6 +256,7 @@ fn vector_validate_full_chain_sasl_tls() {
             log_level: "info".to_string(),
             version: String::new(),
             version_check: "disabled".to_string(),
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -363,6 +365,7 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
             log_level: "info".to_string(),
             version: String::new(),
             version_check: "disabled".to_string(),
+            ..Default::default()
         },
         ..Default::default()
     };

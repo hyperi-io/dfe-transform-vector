@@ -1,10 +1,28 @@
+{{/*
+  A StatefulSet, not a Deployment, because a Vector disk buffer is PER-PROCESS
+  state. Replicas cannot share one volume without corrupting each other's
+  buffer, so each needs its own claim -- which is what volumeClaimTemplates
+  gives and a Deployment cannot.
+
+  Enabling `sink.buffer.type: disk` without a persistent volume used to write
+  the buffer into the container's writable layer: every write succeeded, nothing
+  errored, and the buffered events vanished on reschedule. The durability the
+  disk buffer exists to provide was silently absent. `persistenceRequired`
+  below refuses to template that combination now.
+
+  podManagementPolicy Parallel: this is a shared-nothing transform pipeline, so
+  ordered boot buys nothing and costs scale-up latency under KEDA.
+*/}}
+{{- include "dfe-transform-vector.persistenceRequired" . -}}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "dfe-transform-vector.fullname" . }}
   labels:
     {{- include "dfe-transform-vector.labels" . | nindent 4 }}
 spec:
+  serviceName: {{ include "dfe-transform-vector.fullname" . }}-headless
+  podManagementPolicy: Parallel
   {{- if not (or .Values.keda.enabled .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -98,6 +116,11 @@ spec:
             - name: config
               mountPath: /etc/dfe-transform-vector
               readOnly: true
+            # Vector's data_dir -- where disk buffers live. Always mounted, so
+            # the buffer never lands in the container's writable layer even when
+            # persistence is off.
+            - name: vector-data
+              mountPath: {{ .Values.config.vector.data_dir | default "/var/lib/vector" }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -109,9 +132,35 @@ spec:
         - name: config
           configMap:
             name: {{ include "dfe-transform-vector.fullname" . }}-config
+        {{- if not .Values.persistence.enabled }}
+        # No claim requested, so give data_dir an explicit emptyDir rather than
+        # letting it fall through to the writable layer. sizeLimit caps it so a
+        # runaway buffer evicts this pod instead of filling the node's disk.
+        - name: vector-data
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.size }}
+        {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+  {{- if .Values.persistence.enabled }}
+  # One claim PER REPLICA. Retained on scale-down (the default) so buffered
+  # events are not discarded by an autoscaler decision.
+  volumeClaimTemplates:
+    - metadata:
+        name: vector-data
+        labels:
+          {{- include "dfe-transform-vector.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

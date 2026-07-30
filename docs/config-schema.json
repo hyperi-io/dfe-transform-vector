@@ -110,8 +110,10 @@
         "data_dir": "/var/lib/vector",
         "api_address": "0.0.0.0:8686",
         "log_level": "info",
-        "version": "",
-        "version_check": "strict"
+        "version": "0.56.0",
+        "version_check": "strict",
+        "version_source": "preshipped",
+        "cache_dir": "/var/cache/vector"
       }
     },
     "health": {
@@ -557,14 +559,24 @@
           "default": "info"
         },
         "version": {
-          "description": "Expected Vector version (semver).",
+          "description": "Expected Vector version (semver).\n\nDefaults to the version the image was built with\n([`crate::deployment::VECTOR_VERSION`]) rather than empty:\n[`check_vector_version`](crate::config::validate::check_vector_version)\nskips the comparison on an empty pin, which would make the default\n`version_check: strict` a check that cannot fire. With the default pin,\nstrict means the binary on PATH must be the one this image shipped.\n\nSet it explicitly (or set `version_check` to `warn`/`disabled`) when\ndeliberately running a different Vector to the pre-shipped one.",
           "type": "string",
-          "default": ""
+          "default": "0.56.0"
         },
         "version_check": {
           "description": "Version check mode: strict, warn, disabled.",
           "type": "string",
           "default": "strict"
+        },
+        "version_source": {
+          "description": "Where the Vector version comes from: `preshipped`, `latest`, `stable`,\na minor line (`0.56`), or an exact version (`0.56.0`).\n\nDefaults to `preshipped` -- the binary baked into the image. It needs no\nnetwork, is the version this build was tested against, and is the only\nmode that works on a cold airgapped deploy.\n\nSee [`crate::vector::VersionSource`].",
+          "type": "string",
+          "default": "preshipped"
+        },
+        "cache_dir": {
+          "description": "Persistent cache directory for Vector binaries.\n\nDeliberately OUTSIDE the container's writable layer -- mount a k8s\nvolume or a docker bind here so it survives pod restarts and image\npulls. Pre-populate it to run a non-pre-shipped version in an airgapped\nenvironment.",
+          "type": "string",
+          "default": "/var/cache/vector"
         }
       }
     },

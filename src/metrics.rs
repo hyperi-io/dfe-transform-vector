@@ -10,7 +10,7 @@
 //!
 //! All metrics are registered on the `MetricsManager` owned by
 //! `scalo::cli::ServiceRuntime`. The runtime serves `/metrics`,
-//! `/healthz`, and `/readyz` on `args.metrics_addr` — this module no
+//! `/livez`, and `/readyz` on `args.metrics_addr` — this module no
 //! longer runs its own HTTP server, eliminating the previous double-bind
 //! against the same port.
 //!

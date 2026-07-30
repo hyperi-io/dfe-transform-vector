@@ -60,9 +60,12 @@ struct KafkaContainerHandle {
 impl KafkaFixture {
     /// Acquire a Kafka fixture using live-first, testcontainers-fallback order.
     ///
+    /// `test` names the calling test and goes into the container name, so
+    /// concurrent tests do not collide on it.
+    ///
     /// Returns `None` if neither live nor Docker are available — callers
     /// should skip the test in that case.
-    pub async fn acquire() -> Option<Self> {
+    pub async fn acquire(test: &str) -> Option<Self> {
         load_dotenv();
 
         // 1. Try live cluster (real authenticated connection probe)
@@ -75,7 +78,7 @@ impl KafkaFixture {
         }
 
         // 2. Fall back to testcontainers
-        match try_testcontainer().await {
+        match try_testcontainer(test).await {
             Ok(fixture) => {
                 eprintln!(
                     "kafka fixture: using TESTCONTAINER at {:?} \
@@ -180,16 +183,171 @@ async fn authenticated_probe(cfg: &KafkaConfig) -> bool {
     .unwrap_or(false)
 }
 
+/// Panic if a backing service is missing while running in CI.
+///
+/// Skipping is right on a developer machine, where the daemon may simply be
+/// down. In CI it makes the test pass VACUOUSLY: the suite reports green while
+/// exercising none of the integration surface. A gate that disappears along
+/// with its environment is not a gate.
+pub fn require_service_in_ci(what: &str, detail: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{what} unreachable in CI ({detail}) -- integration tests must RUN here, \
+         not skip. Skipping would report green while testing nothing."
+    );
+}
+
+// =============================================================================
+// Container naming and cleanup
+// =============================================================================
+//
+// Every container this suite starts carries a name that says which repo, which
+// suite and which backing service it is, so an operator looking at `docker ps`
+// can tell what left it behind. testcontainers' default is a random hex name,
+// which is untraceable the moment one survives.
+//
+// Naming: `dfe-transform-vector-test-integration-<test>-<service>`, because
+// every container here is owned by exactly ONE test. nextest runs each test in
+// its own process, so nothing is shared even when it looks like it should be --
+// two tests calling `KafkaFixture::acquire` start two brokers. That was already
+// true with testcontainers' random names; the only thing a single shared name
+// would add is a collision, where the first test wins and the rest fail with
+// "name is already in use" and skip. `container_name` still takes `None` for a
+// container started once for a whole binary, but no suite does that today.
+//
+// Cleanup is belt AND braces, because `Drop` alone is not enough:
+//
+//   - Normal completion and a panic both unwind, so `Drop` stops the container.
+//   - A SIGKILL, an abort, or Ctrl-C on the test run does NOT. `Drop` never
+//     runs and the container survives.
+//
+// testcontainers-rs 0.27 has no resource reaper (no Ryuk), so the second case
+// is the one that leaves crap behind. A deterministic name would then make it
+// WORSE than a random one -- the leaked container holds the name and every
+// later run fails with "name already in use". `reap_stale` closes that: remove
+// any container already holding the name before starting, so a leak costs the
+// next run nothing and self-heals.
+//
+// The label goes on as well, so a sweep can find these regardless of name:
+//   docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vector-integration)
+
+/// Label marking every container this suite starts, for bulk cleanup.
+pub const TEST_SUITE_LABEL: (&str, &str) =
+    ("io.hyperi.test.suite", "dfe-transform-vector-integration");
+
+/// Labels for a container this suite starts: what it is, and whose run owns it.
+///
+/// The name says what and why; these say WHO, which is what you need when
+/// several runs share a machine and one has left something behind. The pid is
+/// the owning test process -- `ps -p <pid>` answers "is that run still alive, or
+/// is this rubbish I can remove?".
+fn test_labels(service: &str) -> Vec<(String, String)> {
+    vec![
+        (
+            TEST_SUITE_LABEL.0.to_string(),
+            TEST_SUITE_LABEL.1.to_string(),
+        ),
+        (
+            "io.hyperi.test.repo".to_string(),
+            "dfe-transform-vector".to_string(),
+        ),
+        ("io.hyperi.test.service".to_string(), service.to_string()),
+        (
+            "io.hyperi.test.owner-pid".to_string(),
+            std::process::id().to_string(),
+        ),
+    ]
+}
+
+/// Container name for a backing service in this suite.
+///
+/// Pass `Some(test)` -- the owning test -- for anything a test starts for itself,
+/// which is everything here. `None` is for a container started once for a whole
+/// test binary; nothing does that today, and using it from several tests would
+/// make them collide on the name rather than share the container.
+///
+/// Names are lowercased and non-alphanumerics collapse to `-`, because Docker
+/// only accepts `[a-zA-Z0-9][a-zA-Z0-9_.-]*`, and a Rust test path
+/// (`kafka::test_roundtrip`) has colons in it.
+#[must_use]
+pub fn container_name(test: Option<&str>, service: &str) -> String {
+    let slug = |s: &str| {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    };
+    test.map_or_else(
+        || format!("dfe-transform-vector-test-integration-{}", slug(service)),
+        |t| {
+            format!(
+                "dfe-transform-vector-test-integration-{}-{}",
+                slug(t),
+                slug(service)
+            )
+        },
+    )
+}
+
+/// Remove a DEAD container holding `name`, so a leak from a killed run cannot
+/// block this one.
+///
+/// Never touches a RUNNING container. Two concurrent runs of this suite on one
+/// machine share these names, and force-removing a live one would sabotage the
+/// other run -- a confusing mid-test failure in a process that did nothing
+/// wrong. Leaving it means the start below fails with "name is already in use",
+/// which says what actually happened.
+///
+/// Best-effort otherwise: no Docker, nothing to remove, or an already-gone
+/// container are all fine. A failure here must not fail the test -- the start
+/// that follows reports the real problem.
+pub fn reap_stale(name: &str) {
+    let running = std::process::Command::new("docker")
+        .args(["ps", "--quiet", "--filter", &format!("name=^{name}$")])
+        .output();
+    // Non-empty stdout means a container by this name is up. Leave it alone.
+    if let Ok(out) = &running
+        && !out.stdout.is_empty()
+    {
+        return;
+    }
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "--force", "--volumes", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 /// Spawn an ephemeral Apache Kafka container (testcontainers).
 ///
 /// The container runs in PLAINTEXT mode (no SASL/TLS) — sufficient for
 /// validating pipeline wiring. The returned fixture owns the container;
 /// it stops on drop.
-async fn try_testcontainer() -> Result<KafkaFixture, String> {
+///
+/// `test` names the calling test and goes into the container name, so
+/// concurrent tests do not collide on it.
+async fn try_testcontainer(test: &str) -> Result<KafkaFixture, String> {
+    use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::kafka::apache;
 
+    // Pinned here, not left to the module default of 3.8.0. A tag baked into a
+    // dependency's source is invisible to dependency review: Renovate reads
+    // Cargo.toml, correctly reports the crate current, and never sees the image.
+    // renovate: datasource=docker depName=apache/kafka-native
+    const KAFKA_TAG: &str = "4.3.1";
+
+    let name = container_name(Some(test), "kafka");
+    reap_stale(&name);
     let container = apache::Kafka::default()
+        .with_tag(KAFKA_TAG)
+        .with_container_name(&name)
+        .with_labels(test_labels("kafka"))
         .start()
         .await
         .map_err(|e| format!("start kafka container: {e}"))?;

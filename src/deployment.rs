@@ -31,8 +31,8 @@ pub fn contract() -> DeploymentContract {
         description: "Vector.dev subprocess wrapper for Kafka-to-Kafka transform pipelines".into(),
         metrics_port: 9090,
         health: HealthContract {
-            liveness_path: "/health/live".into(),
-            readiness_path: "/health/ready".into(),
+            liveness_path: "/livez".into(),
+            readiness_path: "/readyz".into(),
             metrics_path: "/metrics".into(),
         },
         env_prefix: "DFE_TRANSFORM".into(),
@@ -184,7 +184,17 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// Pinned. Update deliberately — Vector minor versions can change CLI
 /// flags and config schema. Keep in sync with the `vector.version`
 /// default in [`crate::config::loader::VectorConfig`].
-pub const VECTOR_VERSION: &str = "0.48.0";
+// renovate: datasource=github-releases depName=vectordotdev/vector
+pub const VECTOR_VERSION: &str = "0.56.0";
+
+/// The Vector install layer, spliced into the generated Dockerfile.
+///
+/// A real Dockerfile so hadolint and shellcheck can lint it; see
+/// [`emit_dockerfile`].
+const VECTOR_LAYER_TEMPLATE: &str = include_str!("vector-layer.dockerfile");
+
+/// Substituted with [`VECTOR_VERSION`] in [`VECTOR_LAYER_TEMPLATE`].
+const VERSION_PLACEHOLDER: &str = "@VECTOR_VERSION@";
 
 /// Generate the Dockerfile from the contract.
 ///
@@ -198,55 +208,44 @@ pub const VECTOR_VERSION: &str = "0.48.0";
 /// are single-binary images; this consumer-side override exists because
 /// scalo's deployment contract has no slot for an add-on native binary.
 ///
-/// When `hyperi-ci`'s overlay framework lands (see
-/// `docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md`)
-/// this override moves into `.hyperi-ci.yaml`.
+/// When `hyperi-ci` grows an overlay framework this override moves into
+/// `.hyperi-ci.yaml`.
 #[must_use]
 pub fn emit_dockerfile() -> String {
     let base = scalo::deployment::generate_dockerfile(&contract(), None);
 
-    // Vector install + data dirs go BEFORE the `USER` directive so root
-    // can still chown the directories it creates.
-    let vector_layer = format!(
-        "# Vector binary — downloaded inside the build for portability.\n\
-         # Pinned to {VECTOR_VERSION}; bump deliberately (CLI flags + config\n\
-         # schema can shift between minor versions). Multi-arch via $TARGETARCH.\n\
-         ARG VECTOR_VERSION={VECTOR_VERSION}\n\
-         ARG TARGETARCH\n\
-         RUN set -eu \\\n \
-         && case \"${{TARGETARCH:-amd64}}\" in \\\n     \
-                 amd64) ARCH=x86_64 ;; \\\n     \
-                 arm64) ARCH=aarch64 ;; \\\n     \
-                 *) echo \"unsupported TARGETARCH: ${{TARGETARCH}}\" >&2; exit 1 ;; \\\n \
-            esac \\\n \
-         && curl -fsSL \"https://packages.timber.io/vector/${{VECTOR_VERSION}}/vector-${{VECTOR_VERSION}}-${{ARCH}}-unknown-linux-gnu.tar.gz\" \\\n         \
-                 -o /tmp/vector.tar.gz \\\n \
-         && tar xz -C /tmp -f /tmp/vector.tar.gz \\\n \
-         && mv \"/tmp/vector-${{ARCH}}-unknown-linux-gnu/bin/vector\" /usr/local/bin/vector \\\n \
-         && chmod +x /usr/local/bin/vector \\\n \
-         && rm -rf /tmp/vector.tar.gz \"/tmp/vector-${{ARCH}}-unknown-linux-gnu\" \\\n \
-         && /usr/local/bin/vector --version\n\
-         \n\
-         # Vector data and config directories\n\
-         RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \\\n     \
-             && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector\n\
-         \n\
-         LABEL io.hyperi.vector.version=\"{VECTOR_VERSION}\"\n\
-         \n"
+    // The fragment is a REAL Dockerfile file, not a Rust string literal, so
+    // hadolint and shellcheck can read it. Shell embedded in `format!` is
+    // validated by nothing until the image build runs in CI, and the escaping
+    // (`\\\n`, doubled braces) hides typos from review.
+    //
+    // include_str! means it is still compile-time -- no runtime IO, no build
+    // script, and the file ships inside the published crate.
+    let vector_layer = VECTOR_LAYER_TEMPLATE.replace(VERSION_PLACEHOLDER, VECTOR_VERSION);
+
+    debug_assert!(
+        !vector_layer.contains(VERSION_PLACEHOLDER),
+        "unsubstituted {VERSION_PLACEHOLDER} left in the Vector layer"
     );
 
-    // Splice in before the `USER ` line. Fail loudly if the anchor isn't
-    // found — that means scalo's generator changed shape and this
-    // override needs reviewing.
-    if let Some(idx) = base.find("USER ") {
-        let (before, after) = base.split_at(idx);
-        format!("{before}{vector_layer}{after}")
-    } else {
+    // Vector install + data dirs go BEFORE the `USER` directive so root can
+    // still chown the directories it creates.
+    //
+    // Anchoring on scalo's output text is the weak point of this override: it
+    // breaks if the generator's shape changes. Panicking is deliberate -- the
+    // alternative is emitting a Dockerfile that silently drops the Vector
+    // install and produces an image whose second binary is simply absent.
+    let Some(idx) = base.find("\nUSER ") else {
         panic!(
-            "scalo generate_dockerfile() output missing `USER ` directive — \
-             cannot splice Vector binary install. Review scalo output shape."
+            "scalo generate_dockerfile() output has no `USER ` directive to \
+             splice the Vector install before. scalo's generator shape changed; \
+             review this override rather than working around it."
         );
-    }
+    };
+
+    // +1 to keep the newline with `before`, so the splice starts on its own line.
+    let (before, after) = base.split_at(idx + 1);
+    format!("{before}{vector_layer}\n{after}")
 }
 
 #[cfg(test)]

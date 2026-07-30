@@ -47,16 +47,23 @@ case "${OS}" in
         ;;
 esac
 
-# Get desired version (default: latest)
+# Desired version: env override, else the version this image ships.
+#
+# It used to default to whatever GitHub called `latest`, which meant tests ran
+# against a different Vector to the one we deploy -- and drifted apart silently
+# as upstream released. That is the wrong direction for a dependency whose CLI
+# flags and config schema move between minors.
+#
+# The single source is the const in src/deployment.rs, which also drives the
+# Dockerfile ARG and the runtime version check. Read rather than duplicated, so
+# there is one place to bump and Renovate has one annotation to act on.
 if [[ -z "${VECTOR_VERSION:-}" ]]; then
-    # Fetch latest release tag from GitHub API
-    VECTOR_VERSION=$(curl -fsSL "https://api.github.com/repos/vectordotdev/vector/releases/latest" \
-        | grep '"tag_name"' \
-        | head -1 \
-        | sed 's/.*"v\([^"]*\)".*/\1/')
+    VERSION_SRC="${REPO_ROOT:-$(dirname "$0")/..}/src/deployment.rs"
+    VECTOR_VERSION=$(sed -n 's/^pub const VECTOR_VERSION: &str = "\(.*\)";$/\1/p' "${VERSION_SRC}")
 
     if [[ -z "${VECTOR_VERSION}" ]]; then
-        echo "Failed to determine latest Vector version" >&2
+        echo "Could not read VECTOR_VERSION from ${VERSION_SRC}" >&2
+        echo "Set VECTOR_VERSION explicitly, or check the const's shape there." >&2
         exit 1
     fi
 fi

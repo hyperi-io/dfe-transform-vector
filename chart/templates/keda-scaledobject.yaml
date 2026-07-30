@@ -7,6 +7,10 @@ metadata:
     {{- include "dfe-transform-vector.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
+    # `kind` defaults to Deployment when omitted, so this must be explicit now
+    # the workload is a StatefulSet -- otherwise KEDA looks for a Deployment
+    # that does not exist and scales nothing.
+    kind: StatefulSet
     name: {{ include "dfe-transform-vector.fullname" . }}
   minReplicaCount: {{ .Values.keda.minReplicaCount }}
   maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
