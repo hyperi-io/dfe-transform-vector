@@ -559,7 +559,7 @@
           "default": "info"
         },
         "version": {
-          "description": "Expected Vector version (semver).\n\nDefaults to the version the image was built with\n([`crate::deployment::VECTOR_VERSION`]) rather than empty. Empty means\n[`check_vector_version`](crate::config::validate::check_vector_version)\nskips the comparison, so the default `version_check: strict` was a check\nthat never ran. Defaulting it here makes strict mean what it says: the\nbinary on PATH must be the one this image shipped.\n\nSet it explicitly (or set `version_check` to `warn`/`disabled`) when\ndeliberately running a different Vector to the pre-shipped one.",
+          "description": "Expected Vector version (semver).\n\nDefaults to the version the image was built with\n([`crate::deployment::VECTOR_VERSION`]) rather than empty:\n[`check_vector_version`](crate::config::validate::check_vector_version)\nskips the comparison on an empty pin, which would make the default\n`version_check: strict` a check that cannot fire. With the default pin,\nstrict means the binary on PATH must be the one this image shipped.\n\nSet it explicitly (or set `version_check` to `warn`/`disabled`) when\ndeliberately running a different Vector to the pre-shipped one.",
           "type": "string",
           "default": "0.56.0"
         },

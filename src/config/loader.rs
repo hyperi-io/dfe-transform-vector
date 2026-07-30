@@ -348,11 +348,11 @@ pub struct VectorConfig {
     /// Expected Vector version (semver).
     ///
     /// Defaults to the version the image was built with
-    /// ([`crate::deployment::VECTOR_VERSION`]) rather than empty. Empty means
+    /// ([`crate::deployment::VECTOR_VERSION`]) rather than empty:
     /// [`check_vector_version`](crate::config::validate::check_vector_version)
-    /// skips the comparison, so the default `version_check: strict` was a check
-    /// that never ran. Defaulting it here makes strict mean what it says: the
-    /// binary on PATH must be the one this image shipped.
+    /// skips the comparison on an empty pin, which would make the default
+    /// `version_check: strict` a check that cannot fire. With the default pin,
+    /// strict means the binary on PATH must be the one this image shipped.
     ///
     /// Set it explicitly (or set `version_check` to `warn`/`disabled`) when
     /// deliberately running a different Vector to the pre-shipped one.
@@ -816,6 +816,21 @@ impl Config {
             return Err(crate::Error::Validation(format!(
                 "vector.version_check must be one of: {}",
                 valid_modes.join(", ")
+            )));
+        }
+
+        // A mode without a pin is a check that cannot fire.
+        // `check_vector_version` compares only when `version` is non-empty, so
+        // `strict`/`warn` with an empty pin accepts whatever Vector is on PATH.
+        // The default pin is non-empty, but `vector: { version: "" }` in YAML
+        // and `..._VECTOR_VERSION=""` in the environment both reach here.
+        if self.vector.version_check != "disabled" && self.vector.version.is_empty() {
+            return Err(crate::Error::Validation(format!(
+                "vector.version must not be empty when vector.version_check is \
+                 '{}' -- an empty pin skips the comparison entirely, so the \
+                 check would never fire. Set the expected version, or set \
+                 vector.version_check to 'disabled'.",
+                self.vector.version_check
             )));
         }
 

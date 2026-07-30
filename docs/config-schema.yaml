@@ -486,11 +486,11 @@ $defs:
           Expected Vector version (semver).
 
           Defaults to the version the image was built with
-          ([`crate::deployment::VECTOR_VERSION`]) rather than empty. Empty means
+          ([`crate::deployment::VECTOR_VERSION`]) rather than empty:
           [`check_vector_version`](crate::config::validate::check_vector_version)
-          skips the comparison, so the default `version_check: strict` was a check
-          that never ran. Defaulting it here makes strict mean what it says: the
-          binary on PATH must be the one this image shipped.
+          skips the comparison on an empty pin, which would make the default
+          `version_check: strict` a check that cannot fire. With the default pin,
+          strict means the binary on PATH must be the one this image shipped.
 
           Set it explicitly (or set `version_check` to `warn`/`disabled`) when
           deliberately running a different Vector to the pre-shipped one.

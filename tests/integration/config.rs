@@ -302,6 +302,57 @@ fn config_validation_catches_invalid_version_check() {
     assert!(err.to_string().contains("version_check"));
 }
 
+/// `version_check: strict` with an empty `version` must be rejected.
+///
+/// `check_vector_version` compares only `if !vector_config.version.is_empty()`,
+/// so an empty pin makes strict mode a check that cannot fire. The default pin
+/// is the shipped `VECTOR_VERSION`, but `vector: { version: "" }` in YAML and
+/// `DFE_TRANSFORM_VECTOR_VECTOR_VERSION=""` in the environment both land an
+/// empty string on a strict config, which would then accept any Vector binary
+/// on PATH. The mode and the pin have to be validated together.
+#[test]
+fn config_validation_catches_strict_version_check_with_empty_version() {
+    let mut config = full_config(None);
+    config.vector.version_check = "strict".into();
+    config.vector.version = String::new();
+
+    let err = config.validate().expect_err(
+        "strict version_check with an empty version pin is a check that can \
+         never fire and must not validate",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("version"),
+        "error should name the version pin, got: {msg}"
+    );
+}
+
+/// Same rule for `warn`: a warn-mode check with no pin never warns.
+#[test]
+fn config_validation_catches_warn_version_check_with_empty_version() {
+    let mut config = full_config(None);
+    config.vector.version_check = "warn".into();
+    config.vector.version = String::new();
+
+    assert!(
+        config.validate().is_err(),
+        "warn version_check with an empty version pin can never warn"
+    );
+}
+
+/// `disabled` is the one mode where an empty pin is legitimate -- nothing is
+/// compared, so there is nothing to pin. Guards the fix against over-reach.
+#[test]
+fn config_validation_allows_disabled_version_check_with_empty_version() {
+    let mut config = full_config(None);
+    config.vector.version_check = "disabled".into();
+    config.vector.version = String::new();
+
+    config
+        .validate()
+        .expect("disabled version_check needs no version pin");
+}
+
 #[test]
 fn config_validation_catches_invalid_buffer_type() {
     let mut config = full_config(None);
