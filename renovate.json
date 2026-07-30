@@ -1,57 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Inlined (not extending hyperi-io/renovate-config) because the upstream preset uses deprecated matchPackagePatterns — Renovate v40+ rejects the whole config. Track upstream fix at hyperi-io/renovate-config.",
-  "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigestsToSemver"
-  ],
-  "labels": ["dependencies"],
-  "prHourlyLimit": 5,
-  "prConcurrentLimit": 10,
-  "commitMessagePrefix": "chore(deps):",
-  "dependencyDashboard": true,
-  "minimumReleaseAge": "7 days",
-  "minimumReleaseAgeBehaviour": "timestamp-required",
-  "packageRules": [
-    {
-      "description": "Automerge patch and digest updates once 7-day cooldown elapses",
-      "matchUpdateTypes": ["patch", "digest"],
-      "automerge": true
-    },
-    {
-      "description": "Security/vulnerability fixes bypass the cooldown",
-      "matchDepTypes": ["*"],
-      "vulnerabilityAlerts": {
-        "minimumReleaseAge": "0 days",
-        "automerge": true
-      }
-    },
-    {
-      "description": "Same-org HyperI packages bypass the cooldown",
-      "matchSourceUrls": ["https://github.com/hyperi-io/**"],
-      "minimumReleaseAge": "0 days"
-    },
-    {
-      "description": "Same-org HyperI container images bypass the cooldown (matchPackageNames replaces deprecated matchPackagePatterns)",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["/^ghcr\\.io/hyperi-io//"],
-      "minimumReleaseAge": "0 days"
-    },
-    {
-      "description": "Group GitHub Actions updates",
-      "matchManagers": ["github-actions"],
-      "groupName": "github-actions",
-      "automerge": true
-    },
-    {
-      "description": "Group Rust crate updates",
-      "matchManagers": ["cargo"],
-      "groupName": "rust-dependencies"
-    },
-    {
-      "description": "Group Docker image updates",
-      "matchManagers": ["dockerfile", "docker-compose"],
-      "groupName": "docker-images"
-    }
-  ]
+  "description": "Extends the org preset (github>hyperi-io/renovate-config) like every other DFE consumer. Local-only: commitMessageAction lowercase (hyperi-ci commit-lint requires the description to start lowercase; renovate's default 'Update' fails it).",
+  "extends": ["github>hyperi-io/renovate-config"],
+  "commitMessageAction": "update"
 }
