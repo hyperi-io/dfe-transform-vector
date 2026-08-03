@@ -1,3 +1,10 @@
+# Changelog
+
+Rendered by CI and committed back at the end of a release -- do not edit by
+hand. Release notes also appear on the GitHub Releases page, one per tag.
+
+## [1.0.25](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.24...v1.0.25) (2026-08-03)
+
 ## [1.0.13](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.12...v1.0.13) (2026-05-27)
 
 
