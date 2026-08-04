@@ -185,7 +185,7 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// flags and config schema. Keep in sync with the `vector.version`
 /// default in [`crate::config::loader::VectorConfig`].
 // renovate: datasource=github-releases depName=vectordotdev/vector
-pub const VECTOR_VERSION: &str = "0.56.0";
+pub const VECTOR_VERSION: &str = "0.57.0";
 
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///

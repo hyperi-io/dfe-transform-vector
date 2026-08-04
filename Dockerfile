@@ -35,11 +35,11 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create
 # binary shipped.
 #
 # This fragment is spliced into the generated Dockerfile by
-# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.56.0.
+# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.57.0.
 # It lives in its own file rather than inside a Rust string so that hadolint
 # and shellcheck can actually read it -- shell embedded in `format!` is
 # validated by nothing until the image build runs in CI.
-ARG VECTOR_VERSION=0.56.0
+ARG VECTOR_VERSION=0.57.0
 ARG TARGETARCH
 RUN set -eu \
     && case "${TARGETARCH:-amd64}" in \
@@ -58,10 +58,10 @@ RUN set -eu \
         "${VDIR}/licenses" /usr/share/doc/vector/ \
     && printf '%s\n' \
         'Vector is redistributed here unmodified, under the Mozilla Public' \
-        'License 2.0. Version: 0.56.0' \
+        'License 2.0. Version: 0.57.0' \
         '' \
         'Source code for this version (MPL-2.0 section 3.2(a)):' \
-        '  https://github.com/vectordotdev/vector/releases/tag/v0.56.0' \
+        '  https://github.com/vectordotdev/vector/releases/tag/v0.57.0' \
         '' \
         'Upstream LICENSE, NOTICE and third-party attributions are in this' \
         'directory, taken from the release archive itself.' \
@@ -73,7 +73,7 @@ RUN set -eu \
 RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \
     && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector
 
-LABEL io.hyperi.vector.version="0.56.0"
+LABEL io.hyperi.vector.version="0.57.0"
 
 USER appuser
 
