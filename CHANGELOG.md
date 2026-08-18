@@ -3,6 +3,8 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.28](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.27...v1.0.28) (2026-08-18)
+
 ## [1.0.27](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.26...v1.0.27) (2026-08-17)
 
 ## [1.0.26](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.25...v1.0.26) (2026-08-04)
