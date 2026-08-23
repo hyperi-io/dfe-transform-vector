@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.30](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.29...v1.0.30) (2026-08-23)
+
+### Bug Fixes
+
+* **deps:** clear the h2 advisory in the lock ([ed0b065](https://github.com/hyperi-io/dfe-transform-vector/commit/ed0b0653862a1af07b01b62dda51385a747c19f1))
+
 ## [1.0.29](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.28...v1.0.29) (2026-08-23)
 
 ### Bug Fixes
