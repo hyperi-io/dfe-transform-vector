@@ -242,12 +242,13 @@ async fn run_transform_service(
         "startup config"
     );
 
-    // Fire-and-forget startup version check
-    VersionCheck::new(VersionCheckConfig {
-        product: "dfe-transform-vector".into(),
-        current_version: env!("CARGO_PKG_VERSION").into(),
-        ..Default::default()
-    })
+    // Fire-and-forget startup version check; from_cascade makes it
+    // deploy-configurable (version_check.enabled + api_url), matching the
+    // rest of the fleet. No-op unless the cascade enables it.
+    VersionCheck::new(VersionCheckConfig::from_cascade(
+        "dfe-transform-vector",
+        env!("CARGO_PKG_VERSION"),
+    ))
     .check_on_startup();
 
     // Lifecycle state machine
