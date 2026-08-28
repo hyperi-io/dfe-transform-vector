@@ -7,43 +7,37 @@ metadata:
     {{- include "dfe-transform-vector.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
-    # `kind` defaults to Deployment when omitted, so this must be explicit now
-    # the workload is a StatefulSet -- otherwise KEDA looks for a Deployment
-    # that does not exist and scales nothing.
-    kind: StatefulSet
     name: {{ include "dfe-transform-vector.fullname" . }}
   minReplicaCount: {{ .Values.keda.minReplicaCount }}
   maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
   pollingInterval: {{ .Values.keda.pollingInterval }}
   cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
   triggers:
+    # Kafka consumer group lag (primary scaler)
     - type: kafka
       authenticationRef:
         name: {{ include "dfe-transform-vector.fullname" . }}-kafka-auth
       metadata:
-        bootstrapServers: {{ join "," .Values.config.source.brokers | quote }}
-        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.source.group_id | quote }}
-        topic: {{ .Values.keda.kafka.topic | default (index .Values.config.source.topics 0) | quote }}
+        bootstrapServers: {{ .Values.config.kafka.brokers | quote }}
+        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.kafka.group_id | quote }}
+        {{- /* `default (index X 0)` would eagerly evaluate `index nil 0` and fail
+            lint when no topics are set. Use explicit conditional instead. */}}
+        {{- if .Values.keda.kafka.topic }}
+        topic: {{ .Values.keda.kafka.topic | quote }}
+        {{- else if .Values.config.kafka.topics }}
+        topic: {{ (index .Values.config.kafka.topics 0) | quote }}
+        {{- else }}
+        topic: ""
+        {{- end }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         activationLagThreshold: {{ .Values.keda.kafka.activationLagThreshold | quote }}
         saslType: scram_sha512
-        tls: {{ if .Values.config.source.tls.enabled }}enable{{ else }}disable{{ end }}
+        tls: disable
     {{- if .Values.keda.cpu.enabled }}
+    # CPU utilisation (secondary scaler)
     - type: cpu
       metricType: Utilization
       metadata:
         value: {{ .Values.keda.cpu.threshold | quote }}
-    {{- end }}
-    {{- if .Values.keda.prometheus.enabled }}
-    - type: prometheus
-      metricType: AverageValue
-      metadata:
-        serverAddress: {{ required "keda.prometheus.serverAddress is required when keda.prometheus.enabled" .Values.keda.prometheus.serverAddress | quote }}
-        metricName: dfe_transform_vector_scaling_pressure
-        # Composite scaling pressure emitted by the rustlib ScalingEngine
-        # (CPU-driven, gated on Vector subprocess health). Averaged across
-        # pods -- it is a ratio, never summed.
-        query: avg(dfe_transform_vector_scaling_pressure{name="default"})
-        threshold: {{ .Values.keda.prometheus.threshold | quote }}
     {{- end }}
 {{- end }}
