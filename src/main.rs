@@ -23,7 +23,7 @@ use clap::{Parser, Subcommand};
 use scalo::cli::{CliError, CommonArgs, ServiceApp, StandardCommand, VersionInfo};
 use scalo::deployment::{generate_chart, generate_compose_fragment};
 use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
-use scalo::version_check::{VersionCheck, VersionCheckConfig};
+use scalo::version_check::VersionCheckConfig;
 use tracing::{debug, error, info};
 
 use dfe_transform_vector::config::Config;
@@ -149,6 +149,15 @@ impl ServiceApp for App {
     fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }
+
+    fn version_check_defaults(&self) -> VersionCheckConfig {
+        // The runtime overlays the version_check cascade keys on this, so a
+        // deployment's explicit enabled: false always wins.
+        VersionCheckConfig {
+            api_url: "https://releases.hyperi.io/api/v1/check".into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[tokio::main]
@@ -241,15 +250,6 @@ async fn run_transform_service(
         restart_reset_after_secs = 300,
         "startup config"
     );
-
-    // Fire-and-forget startup version check; from_cascade makes it
-    // deploy-configurable (version_check.enabled + api_url), matching the
-    // rest of the fleet. No-op unless the cascade enables it.
-    VersionCheck::new(VersionCheckConfig::from_cascade(
-        "dfe-transform-vector",
-        env!("CARGO_PKG_VERSION"),
-    ))
-    .check_on_startup();
 
     // Lifecycle state machine
     let lifecycle = Lifecycle::new();
