@@ -18,14 +18,14 @@ spec:
       authenticationRef:
         name: {{ include "dfe-transform-vector.fullname" . }}-kafka-auth
       metadata:
-        bootstrapServers: {{ .Values.config.kafka.brokers | quote }}
-        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.kafka.group_id | quote }}
+        bootstrapServers: {{ join "," .Values.config.source.brokers | quote }}
+        consumerGroup: {{ .Values.keda.kafka.consumerGroup | default .Values.config.source.group_id | quote }}
         {{- /* `default (index X 0)` would eagerly evaluate `index nil 0` and fail
             lint when no topics are set. Use explicit conditional instead. */}}
         {{- if .Values.keda.kafka.topic }}
         topic: {{ .Values.keda.kafka.topic | quote }}
-        {{- else if .Values.config.kafka.topics }}
-        topic: {{ (index .Values.config.kafka.topics 0) | quote }}
+        {{- else if .Values.config.source.topics }}
+        topic: {{ (index .Values.config.source.topics 0) | quote }}
         {{- else }}
         topic: ""
         {{- end }}
