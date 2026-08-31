@@ -282,10 +282,7 @@ async fn run_pipeline_assertions(
     // this used to pass a fabricated message key, so the payload landed on a
     // topic named "k-<suffix>" and the pipeline never saw it.
     let send_result = producer
-        .send(
-            source_topic,
-            bytes::Bytes::from(test_payload.into_bytes()),
-        )
+        .send(source_topic, bytes::Bytes::from(test_payload.into_bytes()))
         .await;
     let send_ok = matches!(
         send_result,
