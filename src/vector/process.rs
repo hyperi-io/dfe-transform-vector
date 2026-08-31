@@ -60,10 +60,27 @@ impl Default for BackoffConfig {
     }
 }
 
+/// The argv Vector is started with.
+///
+/// `--watch-config` is a boolean flag; the watcher is chosen by the separate
+/// `--watch-config-method`. Passing the method as its value makes Vector read
+/// `poll` as a subcommand and exit 2 before it starts.
+///
+/// Polling rather than the recommended inotify watcher: a ConfigMap volume is
+/// a symlink swap, which inotify on the file does not see.
+fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
+    vec![
+        "--config-dir".into(),
+        config_dir.as_os_str().to_owned(),
+        "--watch-config".into(),
+        "--watch-config-method".into(),
+        "poll".into(),
+    ]
+}
+
 /// Spawn Vector as a child process.
 ///
-/// Runs: `<binary> --config-dir <config_dir> --watch-config poll`
-/// with stdout/stderr inherited (Vector logs pass through to pod stdout).
+/// stdout/stderr are inherited, so Vector's logs pass through to pod stdout.
 pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<Child> {
     info!(
         binary = %vector_config.binary,
@@ -73,10 +90,7 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
     );
 
     let mut cmd = Command::new(&vector_config.binary);
-    cmd.arg("--config-dir")
-        .arg(config_dir)
-        .arg("--watch-config")
-        .arg("poll");
+    cmd.args(vector_args(config_dir));
 
     // Pass through Vector-specific log level
     if !vector_config.log_level.is_empty() {
@@ -298,6 +312,30 @@ fn next_backoff(current: Duration, config: &BackoffConfig) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_watch_method_is_its_own_flag() {
+        // `--watch-config poll` reads `poll` as a subcommand: Vector prints its
+        // usage and exits 2 before starting, and the wrapper crash-loops.
+        let args: Vec<String> = vector_args(Path::new("/tmp/assembled"))
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let method = args
+            .iter()
+            .position(|a| a == "--watch-config-method")
+            .expect("the watcher method must be passed as its own flag");
+        assert_eq!(args.get(method + 1).map(String::as_str), Some("poll"));
+        let watch = args
+            .iter()
+            .position(|a| a == "--watch-config")
+            .expect("watching must be enabled");
+        assert_eq!(
+            args.get(watch + 1).map(String::as_str),
+            Some("--watch-config-method"),
+            "--watch-config takes no value"
+        );
+    }
 
     #[test]
     fn backoff_doubles() {

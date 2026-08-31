@@ -90,6 +90,9 @@ pipeline:
 # vector:
 #   binary: "/usr/local/bin/vector"
 #   data_dir: "/var/lib/vector"
+#   # Where the assembled Vector config is written. The default is the
+#   # container path; a bare install has no write access there.
+#   config_dir: "/var/run/vector/config"
 #   api_address: "0.0.0.0:8686"
 #   log_level: "info"
 #   # Version pinning — prevents silent version drift

@@ -86,8 +86,8 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 
 | Endpoint | Port | Purpose |
 |----------|------|---------|
-| `GET /health/live` | 9000 | K8s liveness probe |
-| `GET /health/ready` | 9000 | K8s readiness probe (200 only when Vector is healthy) |
+| `GET /livez` | 9000 | K8s liveness probe |
+| `GET /readyz` | 9000 | K8s readiness probe (200 only when Vector is healthy) |
 | `GET /metrics` | 9090 | Prometheus scrape (wrapper + proxied Vector metrics) |
 
 ## Development
@@ -99,12 +99,18 @@ make check
 # Run tests
 cargo nextest run
 
-# Run e2e test (requires Docker + Vector binary on PATH)
-cargo nextest run --test e2e_kafka --run-ignored all
+# Run the e2e suite, opt-in cases included (needs Docker + a Vector binary)
+cargo nextest run --test e2e --run-ignored all
 
-# Run Vector validate tests (requires Vector binary on PATH)
-cargo nextest run --test integration_vector_validate --run-ignored all
+# Run the Vector validate cases (needs a Vector binary)
+cargo nextest run -E 'test(vector_validate)' --run-ignored all
 ```
+
+The WS21 acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
+its own broker container. It grades the filebeat corpus against elastic's
+golden events, and both live in dfe-transform-vrl, so it skips with a message
+unless that repo is checked out beside this one or `DFE_TRANSFORM_VRL_DIR`
+points at it.
 
 ## Documentation
 

@@ -36,8 +36,8 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  │  │ Config      │  │ Process      │  │ Observability    │  │  │
 │  │  │ Engine      │  │ Manager      │  │ Server           │  │  │
 │  │  │             │  │              │  │                  │  │  │
-│  │  │ • Load big  │  │ • Spawn      │  │ • /health/live   │  │  │
-│  │  │   dials     │  │   vector     │  │ • /health/ready  │  │  │
+│  │  │ • Load big  │  │ • Spawn      │  │ • /livez         │  │  │
+│  │  │   dials     │  │   vector     │  │ • /readyz        │  │  │
 │  │  │ • Generate  │  │ • Signal     │  │ • /metrics       │  │  │
 │  │  │   source/   │  │   forwarding │  │ • scaling_       │  │  │
 │  │  │   sink YAML │  │ • Crash      │  │   pressure       │  │  │
@@ -53,7 +53,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  │  ┌────────────────────────────────────────────────────┐    │  │
 │  │  │  vector (subprocess)                                │    │  │
 │  │  │  --config-dir /var/run/vector/config/               │    │  │
-│  │  │  --watch-config poll                                │    │  │
+│  │  │  --watch-config --watch-config-method poll          │    │  │
 │  │  │                                                     │    │  │
 │  │  │  Kafka source ──► transforms ──► Kafka sink         │    │  │
 │  │  │            ──► internal_metrics ──► prometheus_exp   │    │  │
@@ -82,8 +82,8 @@ descriptor = ServiceDescriptor(
     metrics_port=9090,
     kafka_role=KafkaRole.BOTH,
     consumer_group="dfe-transform-vector",
-    liveness_paths=("/health/live",),
-    readiness_paths=("/health/ready",),
+    liveness_paths=("/livez",),
+    readiness_paths=("/readyz",),
     extra_ports={"vector-api": 8686},
     description="Kafka-to-Kafka transform pipelines powered by Vector.dev",
 )
@@ -199,15 +199,15 @@ All DFE services expose the same three endpoints. dfe-transform-vector is no exc
 
 | Endpoint | Port | Purpose | Response |
 |---|---|---|---|
-| `GET /health/live` | 9000 | K8s liveness probe | `200 OK` if wrapper process is running |
-| `GET /health/ready` | 9000 | K8s readiness probe | `200 OK` only when Vector child is healthy |
+| `GET /livez` | 9000 | K8s liveness probe | `200 OK` if wrapper process is running |
+| `GET /readyz` | 9000 | K8s readiness probe | `200 OK` only when Vector child is healthy |
 | `GET /metrics` | 9090 | Prometheus scrape | Wrapper metrics + proxied Vector metrics |
 
 ### 4.2 Liveness vs Readiness
 
 ```
-/health/live  → always 200 if the Rust process is running (fast, no deps)
-/health/ready → 200 only when:
+/livez  → always 200 if the Rust process is running (fast, no deps)
+/readyz → 200 only when:
                  1. Config is loaded and valid
                  2. Vector child process is running
                  3. Vector /health API returns {"ok": true}
@@ -605,7 +605,7 @@ Each CI build validates the wrapper against the pinned Vector version:
     # Start Vector, wait for health, stop
     dfe-transform-vector --config test/fixtures/basic.yaml &
     sleep 5
-    curl -f http://localhost:9000/health/ready
+    curl -f http://localhost:9000/readyz
     kill %1
 ```
 
@@ -790,7 +790,7 @@ affinity: {}
 | Feature | dfe-loader | dfe-receiver | dfe-transform-vector |
 |---|---|---|---|
 | Workload type | StatefulSet | StatefulSet | Deployment |
-| Health probes | /health/live, /health/ready | /health/live, /health/ready | /health/live, /health/ready |
+| Health probes | /livez, /readyz | /livez, /readyz | /livez, /readyz |
 | Metrics port | 9090 | 9090 | 9090 |
 | ConfigMap | config.yaml | config.yaml | config.yaml + transforms/ |
 | PVC | data dir | data dir | None (Deployment) |

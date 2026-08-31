@@ -94,6 +94,12 @@ jemalloc = ["dep:tikv-jemallocator"]
 tempfile = ">=3.10, <4"
 tokio-test = ">=0.4, <0.5"
 bytes = ">=1.11, <2"
+# The WS21 filebeat corpus (tests/common/filebeat.rs) is read in memory from
+# dfe-transform-vrl's committed tar.gz; chrono compares transformed timestamps
+# against the elastic golden outputs.
+flate2 = ">=1.1, <2"
+tar = ">=0.4.44, <0.5"
+chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 scalo = { version = ">=2.10.14, <3", features = [
