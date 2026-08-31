@@ -16,6 +16,11 @@ quality:
 test:
   enabled: true
   coverage: false
+  rust:
+    # The metrics tests need process-per-test isolation: a global recorder
+    # installs once per process, so under cargo test only the first test to
+    # run gets a live registry. Fail rather than silently degrade to it.
+    nextest: true
 
 # Building
 build:
