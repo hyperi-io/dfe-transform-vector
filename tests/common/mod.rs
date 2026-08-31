@@ -31,6 +31,12 @@ use std::time::Duration;
 use scalo::SensitiveString;
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile};
 
+// Kept in its own file so `tests/smoke.rs` can pull it in with `#[path]`
+// without dragging the Kafka/testcontainers helpers into that binary. Left
+// as a module rather than re-exported, because a `pub use` that a given test
+// binary never touches trips `unused_imports` under `-D warnings`.
+pub mod metrics_fixture;
+
 /// Which backend the current test fixture resolved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixtureMode {

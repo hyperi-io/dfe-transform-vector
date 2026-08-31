@@ -62,6 +62,12 @@ impl WrapperMetrics {
     /// This call adds wrapper-specific counters/gauges on the SAME
     /// manager so all metrics appear under a single `/metrics` endpoint
     /// served by the runtime.
+    ///
+    /// Pass the runtime's manager, never a second one. `MetricsManager::new`
+    /// installs the global recorder via `metrics::set_global_recorder`, which
+    /// succeeds at most once per process — a later manager keeps a Prometheus
+    /// handle over a registry nothing writes to, so its `render()` is empty
+    /// and `/metrics` silently serves nothing.
     pub fn register(manager: &MetricsManager, commit: &str) -> Self {
         let crashes_total =
             manager.counter("crashes_total", "Total number of Vector subprocess crashes");
