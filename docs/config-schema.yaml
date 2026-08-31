@@ -14,7 +14,8 @@ description: |-
   - `source.*` — Kafka consumer connections established at Vector startup
   - `sink.*` — Kafka producer connections established at Vector startup
   - `pipeline.name` — used in consumer group_id and metrics labels at startup
-  - `vector.*` — binary path, data_dir, API address, log level set at Vector spawn
+  - `vector.*` — binary path, data_dir, config_dir, API address, log level
+    set at Vector spawn
   - `health.address` — HTTP server binds at startup
   - `metrics.*` — HTTP server binds at startup
   - `logging.*` — tracing subscriber configured at startup
@@ -119,6 +120,7 @@ properties:
     default:
       binary: /usr/local/bin/vector
       data_dir: /var/lib/vector
+      config_dir: /var/run/vector/config
       api_address: 0.0.0.0:8686
       log_level: info
       version: 0.57.0
@@ -473,6 +475,15 @@ $defs:
         description: Data directory for disk buffers and state.
         type: string
         default: /var/lib/vector
+      config_dir:
+        description: |-
+          Directory the assembled Vector config is written to.
+
+          Defaults to the container path. A deployment that is not the image --
+          a bare install, or a test driving the binary directly -- has no write
+          access there and must point this somewhere it owns.
+        type: string
+        default: /var/run/vector/config
       api_address:
         description: Vector API server address (host:port).
         type: string

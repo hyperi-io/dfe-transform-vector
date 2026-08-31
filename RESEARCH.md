@@ -406,7 +406,7 @@ The official Vector Helm chart generates standard K8s resources (StatefulSet/Dep
 | Feature | Vector native | Notes |
 |---|---|---|
 | Graceful shutdown | SIGTERM → stop sources → flush buffers → exit | Default 60s timeout, configurable |
-| Config hot-reload | `--watch-config poll` or SIGHUP | Works with K8s ConfigMap volume mounts |
+| Config hot-reload | `--watch-config --watch-config-method poll` or SIGHUP | Works with K8s ConfigMap volume mounts |
 | Health endpoint | `/health` on API port (8686) | Returns `{"ok":true}` |
 | Internal metrics | `internal_metrics` source | Always available |
 | Prometheus exposition | `prometheus_exporter` sink | Config, not chart feature |
@@ -464,7 +464,10 @@ This is the key question. But consider:
 ```rust
 // Simplified — the actual implementation would use tokio::process
 let mut child = Command::new("/usr/bin/vector")
-    .args(["--config-dir", "/tmp/assembled/", "--watch-config", "poll"])
+    .args([
+        "--config-dir", "/tmp/assembled/",
+        "--watch-config", "--watch-config-method", "poll",
+    ])
     .stdout(Stdio::inherit())  // Vector logs go to pod stdout
     .stderr(Stdio::inherit())
     .spawn()?;

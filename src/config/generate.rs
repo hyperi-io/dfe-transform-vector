@@ -29,13 +29,17 @@ pub const SOURCE_LABEL: &str = "dfe_source";
 /// Canonical label for the generated Kafka sink component.
 pub const SINK_LABEL: &str = "dfe_sink";
 
-/// Generate Vector global config YAML (data_dir, api settings).
+/// Generate Vector global config YAML (timezone, data_dir, api settings).
 ///
-/// Produces the top-level `data_dir` and `api` settings that Vector
-/// needs at the global scope.
+/// Produces the top-level settings Vector needs at the global scope.
 #[must_use]
 pub fn generate_global_yaml(vector: &VectorConfig) -> Value {
     let mut root = serde_yaml_ng::Mapping::new();
+
+    // Vector's default is the HOST's timezone, so a transform that parses a
+    // zone-less timestamp would produce a different instant on every pod. DFE
+    // events are UTC end to end.
+    root.insert(val("timezone"), val("UTC"));
 
     if !vector.data_dir.is_empty() {
         root.insert(val("data_dir"), val(&vector.data_dir));
@@ -410,6 +414,18 @@ mod tests {
     use crate::config::{
         BatchConfig, BufferConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig,
     };
+
+    #[test]
+    fn global_yaml_pins_utc() {
+        // Left unset, Vector parses zone-less timestamps in the host's
+        // timezone, so the same event transforms differently per pod.
+        let global = generate_global_yaml(&crate::config::VectorConfig::default());
+        assert_eq!(
+            global.get("timezone").and_then(Value::as_str),
+            Some("UTC"),
+            "the assembled config must pin the timezone"
+        );
+    }
 
     #[test]
     fn source_yaml_production_defaults() {

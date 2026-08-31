@@ -1,64 +1,64 @@
 # Testing
 
-## Test Modes
+## Backends
 
-Tests support two backends, controlled by `TEST_MODE` in `.env`:
+There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
 
-### Remote (default)
+1. **A live cluster**, if `KAFKA_BROKERS` (and any SASL settings) in `.env`
+   authenticate against it. Faster, and a real multi-broker cluster.
+2. **Testcontainers**, otherwise -- an ephemeral single-node Apache Kafka the
+   fixture starts and stops.
+3. **Skip**, when neither is available. In CI that is an assertion failure
+   instead: a test that skips when its environment disappears is not a gate.
 
-Uses the devex cluster Kafka endpoint from `.env`. Tests skip if the endpoint
-is unreachable.
+`KafkaFixture::hermetic` skips step 1 outright and always starts its own
+container. Anything using the real DFE topic names takes that path, because
+`filebeat_land` on a shared broker is somebody else's data.
+
+Every container carries the repo, the suite, the service and the owning pid as
+labels, and a name derived from the test. Sweep leftovers with:
 
 ```bash
-TEST_MODE=remote cargo nextest run
+docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vector-integration)
 ```
 
-### Docker-local
+## The Vector binary
 
-Uses `dfe-docker` infra profile (Kafka on `localhost:19092`, PLAINTEXT, no auth).
+Tests that spawn Vector resolve it through `scripts/fetch-vector.sh`, which
+downloads the pinned build once into `.tmp/`, and fall back to `vector` on
+`PATH`. Without either they skip.
 
-```bash
-# Start infrastructure (once, stays running)
-cd /projects/dfe-docker
-docker compose --profile infra up -d
-
-# Run tests
-TEST_MODE=docker cargo nextest run
-
-# Tear down (when done)
-docker compose --profile infra down
-```
-
-## Test Categories
-
-### Unit tests (always run, no infrastructure)
+## Suites
 
 ```bash
+# Unit tests -- no infrastructure
 cargo nextest run --lib
+
+# Config assembly, wiring, fixtures, lifecycle, metrics
+cargo nextest run --test integration
+
+# CLI surface
+cargo nextest run --test smoke
+
+# End to end -- needs Docker or a live cluster, plus a Vector binary
+cargo nextest run --test e2e
+
+# Everything, opt-in cases included
+cargo nextest run --run-ignored all
 ```
 
-### Integration tests (config assembly, wiring, fixtures)
+Opt-in (`#[ignore]`) cases are the ones that need a Vector binary to prove
+something about Vector itself: `vector_validate` runs the real validator over
+each assembled config, and `e2e::kafka` drives a bare Vector process against a
+broker.
 
-```bash
-cargo nextest run --test integration_config --test integration_fixtures --test integration_lifecycle
-```
+## The WS21 acceptance case
 
-### Vector validate tests (require `vector` binary on PATH)
+`e2e::filebeat_kafka` runs by default -- it owns its broker, so it is safe to.
+It seeds the elastic/integrations filebeat corpus onto `filebeat_land`, runs the
+shipped binary over it, and grades `filebeat_load` against elastic's golden
+events.
 
-```bash
-cargo nextest run --test integration_vector_validate --run-ignored all
-```
-
-### E2E tests (require Kafka + `vector` binary on PATH)
-
-```bash
-cargo nextest run --test e2e_kafka
-```
-
-Skips automatically if Kafka is unreachable or Vector is not installed.
-
-## Infrastructure Endpoints
-
-| Service | Docker-local | Remote (devex) |
-|---------|-------------|----------------|
-| Kafka | `localhost:19092` (PLAINTEXT) | `kafka.devex.hyperi.io:32089` (SASL_SSL) |
+The corpus, the bundled pipeline and the list of documented divergences belong
+to dfe-transform-vrl, so the case needs that repo checked out beside this one,
+or `DFE_TRANSFORM_VRL_DIR` pointing at it. Without one it prints a skip.

@@ -99,7 +99,8 @@ impl Default for DecodingConfig {
 /// - `source.*` — Kafka consumer connections established at Vector startup
 /// - `sink.*` — Kafka producer connections established at Vector startup
 /// - `pipeline.name` — used in consumer group_id and metrics labels at startup
-/// - `vector.*` — binary path, data_dir, API address, log level set at Vector spawn
+/// - `vector.*` — binary path, data_dir, config_dir, API address, log level
+///   set at Vector spawn
 /// - `health.address` — HTTP server binds at startup
 /// - `metrics.*` — HTTP server binds at startup
 /// - `logging.*` — tracing subscriber configured at startup
@@ -341,6 +342,12 @@ pub struct VectorConfig {
     pub binary: String,
     /// Data directory for disk buffers and state.
     pub data_dir: String,
+    /// Directory the assembled Vector config is written to.
+    ///
+    /// Defaults to the container path. A deployment that is not the image --
+    /// a bare install, or a test driving the binary directly -- has no write
+    /// access there and must point this somewhere it owns.
+    pub config_dir: String,
     /// Vector API server address (host:port).
     pub api_address: String,
     /// Vector log level.
@@ -382,6 +389,7 @@ impl Default for VectorConfig {
         Self {
             binary: "/usr/local/bin/vector".to_string(),
             data_dir: "/var/lib/vector".to_string(),
+            config_dir: super::assembler::DEFAULT_CONFIG_DIR.to_string(),
             api_address: "0.0.0.0:8686".to_string(),
             log_level: "info".to_string(),
             version: crate::deployment::VECTOR_VERSION.to_string(),
@@ -573,6 +581,9 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_DATA_DIR") {
             self.vector.data_dir = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_CONFIG_DIR") {
+            self.vector.config_dir = v;
         }
         if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_LOG_LEVEL") {
             self.vector.log_level = v;

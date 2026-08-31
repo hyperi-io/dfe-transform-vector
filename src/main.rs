@@ -75,7 +75,9 @@ enum AppCommand {
     #[command(name = "assemble")]
     Assemble {
         /// Output directory for assembled Vector config.
-        #[arg(default_value = assembler::DEFAULT_CONFIG_DIR)]
+        ///
+        /// Defaults to `vector.config_dir`, so assembling by hand lands where
+        /// `run` would have put it rather than somewhere else.
         dir: Option<String>,
     },
 
@@ -203,8 +205,7 @@ async fn main() {
                     eprintln!("error: configuration validation failed: {e}");
                     std::process::exit(1);
                 }
-                let config_dir =
-                    PathBuf::from(dir.as_deref().unwrap_or(assembler::DEFAULT_CONFIG_DIR));
+                let config_dir = PathBuf::from(dir.as_deref().unwrap_or(&config.vector.config_dir));
                 if let Err(e) = assembler::assemble(&config, &config_dir) {
                     eprintln!("error: failed to assemble Vector config: {e}");
                     std::process::exit(1);
@@ -263,7 +264,7 @@ async fn run_transform_service(
 
     // Assemble Vector config directory
     lifecycle.set(State::Validating);
-    let config_dir = PathBuf::from(assembler::DEFAULT_CONFIG_DIR);
+    let config_dir = PathBuf::from(&config.vector.config_dir);
     assembler::assemble(&config, &config_dir)?;
 
     // Run vector validate on assembled config

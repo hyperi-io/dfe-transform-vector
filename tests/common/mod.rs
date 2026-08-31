@@ -96,6 +96,28 @@ impl KafkaFixture {
             }
         }
     }
+
+    /// Acquire a Kafka fixture this test OWNS — always a fresh container,
+    /// never a broker that was already there.
+    ///
+    /// `acquire` prefers the live cluster, which is wrong for a test that uses
+    /// the real DFE topic names: `filebeat_land` on a shared broker is
+    /// somebody else's data. Returns `None` when no container can be started.
+    pub async fn hermetic(test: &str) -> Option<Self> {
+        match try_testcontainer(test).await {
+            Ok(fixture) => {
+                eprintln!(
+                    "kafka fixture: using an OWNED TESTCONTAINER at {:?}",
+                    fixture.config.brokers
+                );
+                Some(fixture)
+            }
+            Err(e) => {
+                eprintln!("kafka fixture: UNAVAILABLE — testcontainers failed: {e}");
+                None
+            }
+        }
+    }
 }
 
 pub fn load_dotenv() {

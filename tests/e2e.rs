@@ -11,5 +11,9 @@
 
 mod common;
 
+/// The filebeat corpus and its golden comparison, owned by dfe-transform-vrl.
+#[path = "common/filebeat.rs"]
+mod filebeat_corpus;
+
 #[path = "e2e/mod.rs"]
 mod e2e;
