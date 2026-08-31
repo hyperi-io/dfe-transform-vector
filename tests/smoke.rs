@@ -11,11 +11,37 @@
 //! reach production. These run on every push and require no external
 //! dependencies (no servers, no network).
 
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
-use scalo::metrics::MetricsManager;
+
+use crate::metrics_fixture::metrics_manager;
+
+// Only the metrics helper, not the whole of `tests/common` — the smoke
+// binary is meant to link no Kafka or testcontainers machinery.
+#[path = "common/metrics_fixture.rs"]
+mod metrics_fixture;
+
+/// Serialises the tests that care about the process working directory.
+///
+/// `config_load_no_explicit_path_is_lenient` has to `set_current_dir` into an
+/// empty temp dir to prove the implicit config search finds nothing there, and
+/// the working directory is per-PROCESS. Under `cargo test` — one process per
+/// test binary, a thread per test — that move is visible to any test resolving
+/// a relative fixture path at the same instant, and two below do exactly that.
+/// `cargo nextest` gives every test its own process and never sees it.
+static CWD: Mutex<()> = Mutex::new(());
+
+/// Take the working-directory lock, ignoring poisoning.
+///
+/// A panic in one of these tests must not cascade into unrelated failures in
+/// the others — nothing here leaves shared state half-written on unwind.
+fn cwd_guard() -> MutexGuard<'static, ()> {
+    CWD.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 // ---------------------------------------------------------------------------
 // Startup smoke tests — catch init panics
@@ -27,8 +53,7 @@ fn smoke_metrics_initialisation_does_not_panic() {
     // MetricsManager (in production, that's the one owned by
     // scalo's ServiceRuntime). If any metric name/description is
     // invalid the registration panics; this test catches that.
-    let manager = MetricsManager::new("dfe");
-    let _metrics = WrapperMetrics::register(&manager, "smoke-test-commit");
+    let _metrics = WrapperMetrics::register(metrics_manager(), "smoke-test-commit");
 }
 
 #[test]
@@ -53,6 +78,8 @@ fn smoke_lifecycle_initialisation_does_not_panic() {
 
 #[test]
 fn smoke_config_load_from_fixture_does_not_panic() {
+    // Relative fixture path — hold the working directory still.
+    let _cwd = cwd_guard();
     let config = Config::load(Some("tests/fixtures/configs/minimal.yaml"))
         .expect("fixture minimal.yaml should load");
     config.validate().expect("fixture should pass validation");
@@ -73,8 +100,8 @@ fn smoke_backoff_config_defaults_are_sane() {
 
 #[test]
 fn smoke_metrics_render_after_state_transitions() {
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "smoke-render");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "smoke-render");
 
     // Simulate a full lifecycle
     metrics.crashes_total.increment(1);
@@ -123,6 +150,9 @@ fn config_load_no_explicit_path_is_lenient() {
     // Implicit search (config.yaml / config.yml in CWD) is optional by
     // design — missing is fine, defaults take over. Only --config <path>
     // is strict. Issue #12.
+    //
+    // Moves the process working directory — exclusive for the duration.
+    let _cwd = cwd_guard();
     let tmpdir = tempfile::tempdir().unwrap();
     let original = std::env::current_dir().unwrap();
     std::env::set_current_dir(tmpdir.path()).unwrap();
@@ -211,6 +241,8 @@ fn cli_version_prints_version() {
 
 #[test]
 fn cli_config_check_with_valid_fixture() {
+    // Relative fixture path, and the child inherits our working directory.
+    let _cwd = cwd_guard();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
         .args([
             "--config",

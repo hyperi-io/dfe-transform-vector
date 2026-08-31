@@ -10,11 +10,12 @@
 //!
 //! Note: the wrapper no longer runs its own metrics HTTP server. The
 //! scalo `ServiceRuntime` owns `/metrics`. These tests register
-//! `WrapperMetrics` against a local `MetricsManager` and exercise the
-//! `render()` output directly — what shows up on the live `/metrics`
-//! endpoint in production.
+//! `WrapperMetrics` against the process-wide `MetricsManager` from
+//! `common::metrics_fixture` and exercise the `render()` output directly —
+//! what shows up on the live `/metrics` endpoint in production. Building a
+//! manager per test instead renders empty; see that helper for why.
 //!
-//! The fixture namespace here is `"dfe"` (the platform namespace -- rule:
+//! The fixture namespace there is `"dfe"` (the platform namespace -- rule:
 //! group by platform + app via LABEL, scalo emits BARE names and the
 //! namespace prepends `dfe_` once). So bare names render `dfe_<name>` and
 //! the app-segment gauges render `dfe_transform_vector_<name>`.
@@ -24,8 +25,8 @@ use std::sync::Arc;
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
-use scalo::metrics::MetricsManager;
 
+use crate::common::metrics_fixture::metrics_manager;
 use crate::common::{free_port, reqwest_lite};
 
 // ---------------------------------------------------------------------------
@@ -34,8 +35,8 @@ use crate::common::{free_port, reqwest_lite};
 
 #[test]
 fn metrics_completeness_all_expected_metrics_present() {
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "completeness-test");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "completeness-test");
 
     // Drive all code paths to ensure metrics are emitted
     metrics.crashes_total.increment(1);
@@ -77,8 +78,8 @@ fn metrics_completeness_all_expected_metrics_present() {
 
 #[test]
 fn metrics_lifecycle_state_labels_are_correct() {
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "label-test");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "label-test");
 
     // Set to Running
     metrics.set_lifecycle_state(State::Running);
@@ -134,9 +135,9 @@ fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
     // Registering twice on the same manager must not panic. The metrics
     // crate uses interior deduplication, so a re-registration returns
     // the same counter handle.
-    let manager = MetricsManager::new("dfe");
-    let _first = WrapperMetrics::register(&manager, "first");
-    let _second = WrapperMetrics::register(&manager, "second");
+    let manager = metrics_manager();
+    let _first = WrapperMetrics::register(manager, "first");
+    let _second = WrapperMetrics::register(manager, "second");
     // If we got here without panic, the contract holds.
 }
 
@@ -209,8 +210,8 @@ async fn run_lifecycle_increments_crash_and_restart_counters() {
     use dfe_transform_vector::config::VectorConfig;
     use dfe_transform_vector::vector::{BackoffConfig, run_lifecycle};
 
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "counter-test");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "counter-test");
 
     let vector_config = VectorConfig {
         binary: "/nonexistent/vector-binary-for-test".to_string(),
