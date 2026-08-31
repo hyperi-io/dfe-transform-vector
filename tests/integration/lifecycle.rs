@@ -10,15 +10,16 @@
 //! HTTP server.
 //!
 //! Metrics endpoint tests live in `tests/integration/metrics.rs` and
-//! exercise `WrapperMetrics::register()` against a local
-//! `MetricsManager`. The wrapper no longer runs its own metrics HTTP
-//! server — the scalo `ServiceRuntime` owns `/metrics`.
+//! exercise `WrapperMetrics::register()` against the process-wide
+//! `MetricsManager` from `common::metrics_fixture`. The wrapper no longer
+//! runs its own metrics HTTP server — the scalo `ServiceRuntime` owns
+//! `/metrics`.
 
 use dfe_transform_vector::metrics::WrapperMetrics;
 use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
-use scalo::metrics::MetricsManager;
 
+use crate::common::metrics_fixture::metrics_manager;
 use crate::common::{free_port, reqwest_lite};
 
 #[test]
@@ -61,8 +62,8 @@ fn lifecycle_subscriber_gets_updates() {
 
 #[test]
 fn wrapper_metrics_register_and_render() {
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "test-commit");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "test-commit");
 
     // Increment some counters
     metrics.crashes_total.increment(2);
@@ -96,8 +97,8 @@ fn wrapper_metrics_register_and_render() {
 
 #[test]
 fn wrapper_metrics_lifecycle_state_gauge() {
-    let manager = MetricsManager::new("dfe");
-    let metrics = WrapperMetrics::register(&manager, "test-commit");
+    let manager = metrics_manager();
+    let metrics = WrapperMetrics::register(manager, "test-commit");
 
     metrics.set_lifecycle_state(State::Running);
 
