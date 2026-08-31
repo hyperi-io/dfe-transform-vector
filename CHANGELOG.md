@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.33](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.32...v1.0.33) (2026-08-31)
+
+### Bug Fixes
+
+* **ci:** require nextest rather than taking whatever the runner is carrying ([dcdcbc2](https://github.com/hyperi-io/dfe-transform-vector/commit/dcdcbc20c66c322112e329c83e08deaced3b2f47))
+* **deps:** rkyv 0.8.18 clears the three August RUSTSECs ([e8a1233](https://github.com/hyperi-io/dfe-transform-vector/commit/e8a123307c0a69755baf1b96335b6ff024ac713c))
+* keda scaler reads the source config, not a kafka block ([e03a573](https://github.com/hyperi-io/dfe-transform-vector/commit/e03a573274dddf113156965d1f05acc286193b7e))
+* the filebeat corpus proved through the app, Vector and a real broker ([584a4a8](https://github.com/hyperi-io/dfe-transform-vector/commit/584a4a8917b6f474fd0526353afd290ab8c8b888))
+
 ## [1.0.32](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.31...v1.0.32) (2026-08-28)
 
 ### Bug Fixes
