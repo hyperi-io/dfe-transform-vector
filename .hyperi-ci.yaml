@@ -35,7 +35,6 @@ publish:
   binaries: both
   container:
     enabled: true
-    registry: jfrog
     dockerfile: Dockerfile
     platforms:
       - linux/amd64
@@ -47,6 +46,5 @@ publish:
     # See: docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md
   helm:
     enabled: true
-    registry: jfrog
 
 # canary trigger touch — 2026-05-15T03:17:09Z
