@@ -17,7 +17,7 @@ Settings merge in priority order (highest wins):
 | Layer | Source | Who Manages |
 |-------|--------|-------------|
 | 4. User config YAML | `librdkafka_options:` in service config | Platform operator |
-| 3. Central config file | `librdkafka.yaml` in git-managed config repo (dfe-devex) | Platform team |
+| 3. Central config file | `librdkafka.yaml` in the deployment's git-managed config repo | Platform team |
 | 2. Service-specific | Hardcoded in each service's generator | Service developer |
 | 1. DFE baseline | `scalo::kafka_config` constants | Shared library |
 
@@ -178,12 +178,12 @@ No service-specific overrides currently. Uses production baseline as-is.
 
 ## Central Config File
 
-A single `librdkafka.yaml` in the git-managed config repo (`dfe-devex`)
+A single `librdkafka.yaml` in the deployment's git-managed config repo
 is the primary management point for production tuning. All DFE services
 read this file at startup and fall back to scalo coded-in constants if
 it isn't present.
 
-**Location:** `dfe-devex/shared/librdkafka.yaml`
+**Location:** `$DFE_CONFIG_DIR/shared/librdkafka.yaml`
 
 **Discovery:** Via `DFE_CONFIG_DIR` environment variable. The service reads
 `$DFE_CONFIG_DIR/shared/librdkafka.yaml`. This follows the same pattern
@@ -192,7 +192,7 @@ dfe-engine uses for `services/`, `deployment/`, etc.
 **Activation:**
 
 ```bash
-cd /path/to/dfe-devex
+cd /path/to/your-config-repo   # the repo $DFE_CONFIG_DIR points at
 cp shared/librdkafka.yaml.example shared/librdkafka.yaml
 # Edit as needed, then commit
 ```
@@ -264,7 +264,7 @@ These are layer 4 (highest priority) and override everything below.
 - **3-layer merge:** `kafka_defaults::merge_layers()` (base + service overrides + user overrides)
 - **YAML generator:** `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`)
 - **Config schema:** `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
-- **Central config file:** `dfe-devex/shared/librdkafka.yaml.example`
+- **Central config file:** the config repo's `shared/librdkafka.yaml.example`
 
 ## Reference
 

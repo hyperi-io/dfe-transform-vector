@@ -333,6 +333,10 @@ fn match_goldens(goldens: &[Golden], outputs: &[serde_json::Value]) -> Vec<Strin
 #[tokio::test]
 async fn filebeat_corpus_round_trips_through_vector() {
     if fb::vrl_repo().is_none() {
+        common::require_service_in_ci(
+            "dfe-transform-vrl checkout",
+            "the corpus and bundled pipeline grade this test; CI must check the repo out beside this one",
+        );
         eprintln!(
             "SKIP: the corpus and the bundled pipeline live in dfe-transform-vrl. \
              Point DFE_TRANSFORM_VRL_DIR at a checkout to run this."
@@ -340,6 +344,7 @@ async fn filebeat_corpus_round_trips_through_vector() {
         return;
     }
     let Some(vector_binary) = common::vector_binary_path() else {
+        common::require_service_in_ci("Vector binary", "run scripts/fetch-vector.sh");
         eprintln!("SKIP: no Vector binary (run scripts/fetch-vector.sh)");
         return;
     };

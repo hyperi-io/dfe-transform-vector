@@ -278,9 +278,12 @@ async fn run_pipeline_assertions(
         .map_err(|e| format!("producer transport: {e}"))?;
 
     let test_payload = format!(r#"{{"id":"{suffix}","value":"hello"}}"#);
+    // send()'s first argument is the DESTINATION (the topic, for Kafka) --
+    // this used to pass a fabricated message key, so the payload landed on a
+    // topic named "k-<suffix>" and the pipeline never saw it.
     let send_result = producer
         .send(
-            &format!("k-{suffix}"),
+            source_topic,
             bytes::Bytes::from(test_payload.into_bytes()),
         )
         .await;
