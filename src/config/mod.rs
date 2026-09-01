@@ -25,7 +25,7 @@ pub mod validate;
 pub mod wiring;
 
 pub use loader::{
-    BatchConfig, BufferConfig, Config, DecodingConfig, HealthConfig, LoggingConfig, MetricsConfig,
+    BatchConfig, BufferConfig, Config, DecodingConfig, LoggingConfig, MetricsConfig,
     PipelineConfig, ReloadConfig, SaslConfig, ScalingConfig, SinkConfig, SourceConfig, TlsConfig,
     TransformConfig, VectorConfig,
 };

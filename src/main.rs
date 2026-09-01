@@ -33,7 +33,7 @@ use dfe_transform_vector::config::validate::{
     check_vector_version, vector_validate, warn_if_disk_buffer_is_ephemeral,
 };
 use dfe_transform_vector::deployment;
-use dfe_transform_vector::health::serve_health;
+use dfe_transform_vector::health;
 use dfe_transform_vector::metrics::{
     WrapperMetrics, spawn_circuit_gate_task, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
 };
@@ -256,6 +256,11 @@ async fn run_transform_service(
     let lifecycle = Lifecycle::new();
     lifecycle.set(State::Initialising);
 
+    // Publish readiness before anything can fail, so a probe arriving during
+    // startup reads the real state rather than the unconditional 200 an
+    // unreported service answers with.
+    health::register_readiness(&lifecycle);
+
     // Check Vector binary version
     let version = check_vector_version(&config.vector).await?;
     if !version.is_empty() {
@@ -309,15 +314,6 @@ async fn run_transform_service(
 
     // Shutdown signal channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    // Spawn health server
-    let health_lifecycle = lifecycle.clone();
-    let health_address = config.health.address.clone();
-    tokio::spawn(async move {
-        if let Err(e) = serve_health(&health_address, health_lifecycle).await {
-            error!(error = %e, "health server failed");
-        }
-    });
 
     // Shared Vector PID for reload loop → SIGHUP
     let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));

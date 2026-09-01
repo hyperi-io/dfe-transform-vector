@@ -1,71 +1,101 @@
 // Project:   dfe-transform-vector
 // File:      src/health.rs
-// Purpose:   Health endpoints (/livez, /readyz)
+// Purpose:   Publish the Vector subprocess lifecycle as the service readiness signal
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Health endpoints (`/livez`, `/readyz`).
+//! Readiness reporting for the Vector subprocess.
 //!
-//! Uses scalo `HttpServer` (axum) for the HTTP transport. The readiness
-//! state is driven by the Vector subprocess lifecycle — ready only when
-//! Vector is running and healthy.
+//! The service has ONE health surface: `/livez`, `/readyz` and `/metrics` on
+//! the metrics port, served by scalo's `MetricsManager`. That is the port the
+//! generated deployment contract points every probe at.
+//!
+//! `/readyz` there answers 200 unless something reports the service not ready,
+//! so the wrapper must publish the subprocess state or a dead Vector advertises
+//! healthy to Kubernetes and KEDA.
+//!
+//! Publishing goes through scalo's `HealthRegistry` because the registry is
+//! evaluated on every probe request. The `MetricsManager` readiness callback
+//! cannot be used: `ServiceRuntime::build` starts the listener with a clone of
+//! whatever callback is set at that moment, which is before `run_service` runs.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use scalo::health::{HealthRegistry, HealthStatus};
+use tracing::debug;
 
-use scalo::http_server::{HttpServer, HttpServerConfig};
-use tracing::{info, trace, warn};
-
-use crate::Result;
 use crate::vector::Lifecycle;
+use crate::vector::lifecycle::State;
 
-/// Start the health HTTP server.
+/// Name the Vector subprocess reports under in scalo's health registry.
+const COMPONENT: &str = "vector_subprocess";
+
+/// Publish the Vector subprocess lifecycle as the service readiness signal.
 ///
-/// Serves:
-/// - `/livez` — 200 if wrapper process is alive (always, handled by scalo)
-/// - `/readyz` — 200 if Vector is running and healthy, 503 otherwise
-pub async fn serve_health(address: &str, lifecycle: Lifecycle) -> Result<()> {
-    let config = HttpServerConfig {
-        bind_address: address.to_string(),
-        enable_health_endpoints: true,
-        enable_metrics_endpoint: false,
-        enable_config_endpoint: false,
-        ..Default::default()
-    };
-
-    let server = HttpServer::new(config);
-
-    // Set initial readiness from current lifecycle state
-    server.set_ready(lifecycle.state().is_ready());
-
-    // Spawn a task that keeps the readiness flag in sync with lifecycle changes
-    let ready_flag = server.ready_flag();
-    let lc = lifecycle.clone();
-    tokio::spawn(async move {
-        sync_readiness(lc, ready_flag).await;
-    });
-
-    info!(address, "health server listening");
-
-    server
-        .serve(scalo::http_server::Router::new())
-        .await
-        .map_err(|e| crate::Error::Health(e.to_string()))
+/// Call once during startup. The closure is evaluated per probe request, so it
+/// always reads the live lifecycle state.
+pub fn register_readiness(lifecycle: &Lifecycle) {
+    let lifecycle = lifecycle.clone();
+    HealthRegistry::register(COMPONENT, move || readiness_status(lifecycle.state()));
+    debug!(component = COMPONENT, "readiness published to /readyz");
 }
 
-/// Keep the HttpServer readiness flag in sync with the Vector lifecycle.
-async fn sync_readiness(lifecycle: Lifecycle, ready_flag: Arc<AtomicBool>) {
-    let mut rx = lifecycle.subscribe();
-    loop {
-        if rx.changed().await.is_err() {
-            warn!("lifecycle channel closed, health readiness sync stopped");
-            break;
+/// Map a lifecycle state to the status `/readyz` reads.
+///
+/// Two-valued deliberately: the registry counts `Degraded` as ready, and no
+/// Vector state earns that -- either the subprocess is carrying traffic or the
+/// pod must leave the Service.
+#[must_use]
+pub fn readiness_status(state: State) -> HealthStatus {
+    if state.is_ready() {
+        HealthStatus::Healthy
+    } else {
+        HealthStatus::Unhealthy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_crashed_subprocess_is_not_ready() {
+        assert_eq!(readiness_status(State::Crashed), HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn a_starting_subprocess_is_not_ready() {
+        assert_eq!(readiness_status(State::Starting), HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn only_a_live_subprocess_is_ready() {
+        assert_eq!(readiness_status(State::Running), HealthStatus::Healthy);
+        assert_eq!(readiness_status(State::Reloading), HealthStatus::Healthy);
+        assert_eq!(
+            readiness_status(State::Initialising),
+            HealthStatus::Unhealthy
+        );
+        assert_eq!(readiness_status(State::Validating), HealthStatus::Unhealthy);
+        assert_eq!(
+            readiness_status(State::ShuttingDown),
+            HealthStatus::Unhealthy
+        );
+    }
+
+    /// `Degraded` would read as ready, which no Vector state should.
+    #[test]
+    fn no_state_maps_to_degraded() {
+        for state in [
+            State::Initialising,
+            State::Validating,
+            State::Starting,
+            State::Running,
+            State::Reloading,
+            State::ShuttingDown,
+            State::Crashed,
+        ] {
+            assert_ne!(readiness_status(state), HealthStatus::Degraded);
         }
-        let state = lifecycle.state();
-        let ready = state.is_ready();
-        trace!(state = %state, ready, "health readiness poll");
-        ready_flag.store(ready, Ordering::SeqCst);
     }
 }

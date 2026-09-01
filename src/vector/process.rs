@@ -32,6 +32,13 @@ static CRASH_LOG_DEBOUNCE: AtomicU64 = AtomicU64::new(0);
 /// Log spam protection: only log state transitions, not every check cycle.
 static VECTOR_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// How long a freshly spawned Vector must survive before it counts as running.
+///
+/// A successful spawn only means fork/exec worked; a bad argv or an unreadable
+/// config exits within milliseconds, and without this window every such crash
+/// is advertised as a healthy start.
+pub const SPAWN_SETTLE: Duration = Duration::from_millis(500);
+
 use super::lifecycle::{Lifecycle, State};
 use crate::Result;
 use crate::config::VectorConfig;
@@ -206,11 +213,38 @@ pub async fn run_lifecycle(
         // Publish PID for the reload loop
         *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = child.id();
 
-        lifecycle.set(State::Running);
-        if log_state_change(&VECTOR_RUNNING, true) {
-            info!("Vector subprocess is running");
-        }
         let started_at = Instant::now();
+
+        // Promote to Running only once the child has survived the settle
+        // window; a child that is already gone stays Starting and falls
+        // through to the single crash path below.
+        tokio::time::sleep(SPAWN_SETTLE).await;
+        match child.try_wait() {
+            // Still there: the only case that earns `Running`.
+            Ok(None) => {
+                lifecycle.set(State::Running);
+                if log_state_change(&VECTOR_RUNNING, true) {
+                    info!("Vector subprocess is running");
+                }
+            }
+            // Already gone -- a crash-on-start, handled by the crash path below.
+            Ok(Some(status)) => {
+                warn!(
+                    settle_ms = SPAWN_SETTLE.as_millis(),
+                    exit_code = status.code().unwrap_or(-1),
+                    "Vector did not survive the settle window, not reporting running"
+                );
+            }
+            // Whether the child is alive is unknown, so it does not earn
+            // `Running`; the `child.wait()` below decides.
+            Err(e) => {
+                error!(
+                    error = %e,
+                    settle_ms = SPAWN_SETTLE.as_millis(),
+                    "could not tell whether Vector survived the settle window"
+                );
+            }
+        }
 
         // Wait for either: child exit or shutdown signal
         let exit_status = tokio::select! {

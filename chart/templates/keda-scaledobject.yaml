@@ -1,3 +1,13 @@
+{{- /*
+  HAND-EDITED -- do NOT overwrite this file with `emit-chart` output.
+
+  The generator addresses the Kafka trigger through `.Values.config.kafka.*`.
+  This app names its consumer side `config.source`, has no `config.kafka` block,
+  and takes a broker LIST rather than a string. Regenerating renders empty
+  bootstrapServers, consumerGroup and topic, which KEDA accepts and then never
+  scales on. Guarded by the `checked_in_keda_scaledobject_survives_emit_chart`
+  integration test.
+*/}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject

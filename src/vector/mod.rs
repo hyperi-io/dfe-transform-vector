@@ -17,4 +17,4 @@ pub mod process;
 
 pub use binary::{VersionSource, cache_path, resolve, seed_cache};
 pub use lifecycle::{Lifecycle, State};
-pub use process::{BackoffConfig, run_lifecycle, spawn_vector};
+pub use process::{BackoffConfig, SPAWN_SETTLE, run_lifecycle, spawn_vector};

@@ -61,7 +61,6 @@ pub fn classify_change(old: &Config, new: &Config) -> ChangeKind {
         && old.sink == new.sink
         && old.pipeline == new.pipeline
         && old.vector == new.vector
-        && old.health == new.health
         && old.metrics == new.metrics
         && old.logging == new.logging
         && old.scaling == new.scaling
@@ -139,6 +138,19 @@ fn send_sighup(pid: u32) -> crate::Result<()> {
     })?;
     debug!(pid, "sent SIGHUP to Vector for config reload");
     Ok(())
+}
+
+/// Hand `Running` back at the end of a reload, but only while this loop still
+/// owns the `Reloading` it set.
+///
+/// `owns_reloading` is false when the reload never entered `Reloading` at all
+/// (the subprocess was not running when the change landed), and the
+/// compare-and-set fails when the supervisor has recorded a crash mid-reload.
+/// Either way the state is left as the supervisor last reported it.
+fn end_reload(lifecycle: &Lifecycle, owns_reloading: bool) {
+    if owns_reloading {
+        lifecycle.set_if(State::Reloading, State::Running);
+    }
 }
 
 /// Run the config reload loop.
@@ -231,14 +243,17 @@ pub async fn run_reload_loop(
             }
         }
 
-        // Set lifecycle to Reloading
-        lifecycle.set(State::Reloading);
+        // `Reloading` counts as ready, so it is only ever entered from
+        // `Running`. A config change landing mid crash-backoff must not flip
+        // /readyz to 200 for a subprocess that is not there. Every exit path
+        // below hands the state back through `end_reload`.
+        let owns_reloading = lifecycle.set_if(State::Running, State::Reloading);
 
         // Re-assemble config directory
         if let Err(e) = assembler::assemble(&new_config, &config_dir) {
             error!(error = %e, "failed to re-assemble config during reload");
             metrics.record_config_reload("error");
-            lifecycle.set(State::Running);
+            end_reload(&lifecycle, owns_reloading);
             continue;
         }
 
@@ -249,7 +264,7 @@ pub async fn run_reload_loop(
             metrics.record_config_validation_error();
             // Re-assemble with old config to restore
             let _ = assembler::assemble(&current_config, &config_dir);
-            lifecycle.set(State::Running);
+            end_reload(&lifecycle, owns_reloading);
             continue;
         }
 
@@ -264,13 +279,14 @@ pub async fn run_reload_loop(
                 if let Err(e) = send_sighup(pid) {
                     error!(error = %e, "failed to send SIGHUP to Vector");
                     metrics.record_config_reload("error");
-                    lifecycle.set(State::Running);
+                    end_reload(&lifecycle, owns_reloading);
                     continue;
                 }
             }
             None => {
                 warn!("Vector process not running, skipping SIGHUP");
-                lifecycle.set(State::Running);
+                metrics.record_config_reload("error");
+                end_reload(&lifecycle, owns_reloading);
                 continue;
             }
         }
@@ -278,7 +294,7 @@ pub async fn run_reload_loop(
         // Update state
         current_config = new_config;
         snapshot = FileSnapshot::capture(&current_config);
-        lifecycle.set(State::Running);
+        end_reload(&lifecycle, owns_reloading);
 
         info!("config hot-reload completed successfully");
         metrics.record_config_reload("success");
@@ -358,14 +374,6 @@ mod tests {
         let old = base_config();
         let mut new = old.clone();
         new.logging.level = "debug".into();
-        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
-    }
-
-    #[test]
-    fn classify_health_change_requires_restart() {
-        let old = base_config();
-        let mut new = old.clone();
-        new.health.address = "0.0.0.0:9999".into();
         assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
     }
 

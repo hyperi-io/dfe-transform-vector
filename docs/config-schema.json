@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` — watcher switches to new directory after successful reload\n- `transforms.files` — watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — Kafka consumer connections established at Vector startup\n- `sink.*` — Kafka producer connections established at Vector startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `health.address` — HTTP server binds at startup\n- `metrics.*` — HTTP server binds at startup\n- `logging.*` — tracing subscriber configured at startup\n- `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block\n  from the cascade at startup (via run_app's `config::setup()`); the\n  app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.\n  Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are\n  honoured by scalo and ignored by this struct (and vice-versa).\n- `reload.poll_interval_secs` — captured at reload loop start",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` — watcher switches to new directory after successful reload\n- `transforms.files` — watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — Kafka consumer connections established at Vector startup\n- `sink.*` — Kafka producer connections established at Vector startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.*` — HTTP server binds at startup\n- `logging.*` — tracing subscriber configured at startup\n- `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block\n  from the cascade at startup (via run_app's `config::setup()`); the\n  app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.\n  Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are\n  honoured by scalo and ignored by this struct (and vice-versa).\n- `reload.poll_interval_secs` — captured at reload loop start",
   "type": "object",
   "properties": {
     "dfe_source": {
@@ -115,13 +115,6 @@
         "version_check": "strict",
         "version_source": "preshipped",
         "cache_dir": "/var/cache/vector"
-      }
-    },
-    "health": {
-      "description": "Health endpoint. **Requires restart** (server binds at startup).",
-      "$ref": "#/$defs/HealthConfig",
-      "default": {
-        "address": "0.0.0.0:9000"
       }
     },
     "metrics": {
@@ -583,17 +576,6 @@
           "description": "Persistent cache directory for Vector binaries.\n\nDeliberately OUTSIDE the container's writable layer -- mount a k8s\nvolume or a docker bind here so it survives pod restarts and image\npulls. Pre-populate it to run a non-pre-shipped version in an airgapped\nenvironment.",
           "type": "string",
           "default": "/var/cache/vector"
-        }
-      }
-    },
-    "HealthConfig": {
-      "description": "Health endpoint configuration.",
-      "type": "object",
-      "properties": {
-        "address": {
-          "description": "Health server bind address (host:port).",
-          "type": "string",
-          "default": "0.0.0.0:9000"
         }
       }
     },
