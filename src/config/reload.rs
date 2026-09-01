@@ -61,7 +61,6 @@ pub fn classify_change(old: &Config, new: &Config) -> ChangeKind {
         && old.sink == new.sink
         && old.pipeline == new.pipeline
         && old.vector == new.vector
-        && old.health == new.health
         && old.metrics == new.metrics
         && old.logging == new.logging
         && old.scaling == new.scaling
@@ -358,14 +357,6 @@ mod tests {
         let old = base_config();
         let mut new = old.clone();
         new.logging.level = "debug".into();
-        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
-    }
-
-    #[test]
-    fn classify_health_change_requires_restart() {
-        let old = base_config();
-        let mut new = old.clone();
-        new.health.address = "0.0.0.0:9999".into();
         assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
     }
 

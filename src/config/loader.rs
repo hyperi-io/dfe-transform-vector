@@ -101,7 +101,6 @@ impl Default for DecodingConfig {
 /// - `pipeline.name` — used in consumer group_id and metrics labels at startup
 /// - `vector.*` — binary path, data_dir, config_dir, API address, log level
 ///   set at Vector spawn
-/// - `health.address` — HTTP server binds at startup
 /// - `metrics.*` — HTTP server binds at startup
 /// - `logging.*` — tracing subscriber configured at startup
 /// - `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block
@@ -133,8 +132,6 @@ pub struct Config {
     pub transforms: TransformConfig,
     /// Vector subprocess settings. **Requires restart.**
     pub vector: VectorConfig,
-    /// Health endpoint. **Requires restart** (server binds at startup).
-    pub health: HealthConfig,
     /// Metrics endpoint. **Requires restart** (server binds at startup).
     pub metrics: MetricsConfig,
     /// Logging. **Requires restart** (subscriber configured at startup).
@@ -400,22 +397,6 @@ impl Default for VectorConfig {
     }
 }
 
-/// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct HealthConfig {
-    /// Health server bind address (host:port).
-    pub address: String,
-}
-
-impl Default for HealthConfig {
-    fn default() -> Self {
-        Self {
-            address: "0.0.0.0:9000".to_string(),
-        }
-    }
-}
-
 /// Metrics endpoint configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -599,11 +580,6 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_CACHE_DIR") {
             self.vector.cache_dir = v;
-        }
-
-        // Health
-        if let Some(v) = flat_env::flat_env_string(prefix, "HEALTH_ADDRESS") {
-            self.health.address = v;
         }
 
         // Metrics

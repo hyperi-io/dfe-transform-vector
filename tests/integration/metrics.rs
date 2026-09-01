@@ -27,7 +27,6 @@ use dfe_transform_vector::vector::Lifecycle;
 use dfe_transform_vector::vector::lifecycle::State;
 
 use crate::common::metrics_fixture::metrics_manager;
-use crate::common::{free_port, reqwest_lite};
 
 // ---------------------------------------------------------------------------
 // Metrics completeness — every expected metric name must appear in output
@@ -271,55 +270,9 @@ async fn run_lifecycle_increments_crash_and_restart_counters() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Health response format — health server is unchanged
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn health_endpoints_respond_correctly() {
-    let lifecycle = Lifecycle::new();
-    lifecycle.set(State::Running);
-
-    let addr = free_port().await;
-    let health_lc = lifecycle.clone();
-    let addr_clone = addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::health::serve_health(&addr_clone, health_lc).await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Liveness — always 200 if process can respond (scalo standard)
-    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
-    assert_eq!(resp.0, 200, "liveness should be 200 when running");
-
-    // Readiness — 200 when Running
-    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
-    assert_eq!(resp.0, 200, "readiness should be 200 when running");
-}
-
-#[tokio::test]
-async fn health_not_ready_returns_503() {
-    let lifecycle = Lifecycle::new();
-    // Initialising state = not ready
-
-    let addr = free_port().await;
-    let health_lc = lifecycle.clone();
-    let addr_clone = addr.clone();
-    tokio::spawn(async move {
-        let _ = dfe_transform_vector::health::serve_health(&addr_clone, health_lc).await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Readiness should be 503 when initialising (not ready)
-    let resp = reqwest_lite(&format!("http://{addr}/readyz")).await;
-    assert_eq!(resp.0, 503, "readiness should be 503 when initialising");
-
-    // Liveness always 200 (scalo: process is alive if it can respond)
-    let resp = reqwest_lite(&format!("http://{addr}/livez")).await;
-    assert_eq!(resp.0, 200, "liveness should be 200 even when initialising");
-}
+// The probe endpoints are exercised in `tests/integration/lifecycle.rs`, which
+// registers into scalo's process-global health registry and must be the only
+// test that does.
 
 #[allow(dead_code, unused_imports)]
 mod _suppress_unused {

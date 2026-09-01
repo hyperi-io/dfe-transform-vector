@@ -96,18 +96,13 @@ pipeline:
 #   api_address: "0.0.0.0:8686"
 #   log_level: "info"
 #   # Version pinning — prevents silent version drift
-#   version: "0.48.0"
+#   version: "0.57.0"
 #   version_check: "strict"           # strict, warn, disabled
-
-# -----------------------------------------------------------------------------
-# Health endpoint
-# -----------------------------------------------------------------------------
-# health:
-#   address: "0.0.0.0:9000"
 
 # -----------------------------------------------------------------------------
 # Metrics endpoint
 # -----------------------------------------------------------------------------
+# Also serves /livez and /readyz -- the whole probe surface is on this port.
 # metrics:
 #   address: "0.0.0.0:9090"
 

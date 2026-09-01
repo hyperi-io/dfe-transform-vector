@@ -36,16 +36,17 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
-    // Required ports: health (9000), vector-api (8686)
+    // The probe paths above are all served on metrics_port; the only extra
+    // port is Vector's own API.
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
-    assert!(port_names.contains(&"health"), "missing health port");
-    assert!(
-        port_names.contains(&"vector-api"),
-        "missing vector-api port"
-    );
+    assert_eq!(port_names, vec!["vector-api"]);
 
-    let health_port = c.extra_ports.iter().find(|p| p.name == "health").unwrap();
-    assert_eq!(health_port.port, 9000);
+    let vector_api = c
+        .extra_ports
+        .iter()
+        .find(|p| p.name == "vector-api")
+        .unwrap();
+    assert_eq!(vector_api.port, 8686);
 
     // KEDA config present
     assert!(c.keda.is_some(), "KEDA contract must be defined");

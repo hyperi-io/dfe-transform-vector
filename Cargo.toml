@@ -37,13 +37,17 @@ tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
 # and `cli-service` pulls `scaling` but NOT `expression`. Without it the
 # engine silently compiles out -- no scaling_pressure gauge, signals
 # pushed to a cell nobody reads.
+#
+# `health` is REQUIRED for a truthful `/readyz`: the metrics listener only
+# consults `HealthRegistry` under that feature, and its other readiness hook
+# is snapshotted before the app can set one.
 scalo = { version = ">=2.10.14, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
     "deployment",
     "expression",
-    "http-server",
+    "health",
     "logger",
     "metrics",
     "service-metrics",
@@ -76,7 +80,7 @@ tracing-subscriber = { version = ">=0.3, <0.4", features = ["env-filter", "json"
 metrics = ">=0.24, <0.25"
 
 # Note: Vector metrics proxy uses raw TcpStream (no HTTP client crate needed).
-# Health + metrics HTTP servers use scalo http-server (axum).
+# /metrics, /livez and /readyz are served by scalo's MetricsManager listener.
 
 # Unix signals (sending SIGTERM/SIGHUP to child process)
 nix = { version = ">=0.31.3, <0.32", features = ["signal", "process"] }

@@ -66,7 +66,6 @@ fn full_config(transforms_dir: Option<String>) -> Config {
             files: None,
         },
         vector: VectorConfig::default(),
-        health: HealthConfig::default(),
         metrics: MetricsConfig::default(),
         logging: LoggingConfig::default(),
         scaling: ScalingConfig::default(),
@@ -828,9 +827,6 @@ fn config_with_all_fields_populated_validates() {
             version: "0.53.0".into(),
             version_check: "warn".into(),
             ..Default::default()
-        },
-        health: HealthConfig {
-            address: "0.0.0.0:8080".into(),
         },
         metrics: MetricsConfig {
             address: "0.0.0.0:9090".into(),

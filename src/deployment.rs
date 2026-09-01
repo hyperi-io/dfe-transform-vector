@@ -39,18 +39,13 @@ pub fn contract() -> DeploymentContract {
         metric_prefix: "transform_vector".into(),
         config_mount_path: "/etc/dfe-transform-vector/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
-        extra_ports: vec![
-            PortContract {
-                name: "health".into(),
-                port: 9000,
-                protocol: "TCP".into(),
-            },
-            PortContract {
-                name: "vector-api".into(),
-                port: 8686,
-                protocol: "TCP".into(),
-            },
-        ],
+        // No separate health port: `metrics_port` carries /livez, /readyz and
+        // /metrics, and is the only port the generated probes target.
+        extra_ports: vec![PortContract {
+            name: "vector-api".into(),
+            port: 8686,
+            protocol: "TCP".into(),
+        }],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vector/config.yaml".into(),
@@ -99,11 +94,8 @@ pub fn contract() -> DeploymentContract {
                 "data_dir": "/var/lib/vector",
                 "api_address": "0.0.0.0:8686",
                 "log_level": "info",
-                "version": "0.48.0",
+                "version": VECTOR_VERSION,
                 "version_check": "warn"
-            },
-            "health": {
-                "address": "0.0.0.0:9000"
             },
             "metrics": {
                 "address": "0.0.0.0:9090",
@@ -182,8 +174,10 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// Vector.dev version bundled into the published image.
 ///
 /// Pinned. Update deliberately — Vector minor versions can change CLI
-/// flags and config schema. Keep in sync with the `vector.version`
-/// default in [`crate::config::loader::VectorConfig`].
+/// flags and config schema. The `vector.version` default in
+/// [`crate::config::loader::VectorConfig`] and the contract's own
+/// `default_config` both read this constant, so a deployment's expected
+/// version cannot drift from the shipped binary.
 // renovate: datasource=github-releases depName=vectordotdev/vector
 pub const VECTOR_VERSION: &str = "0.57.0";
 
@@ -259,6 +253,26 @@ mod tests {
         assert_eq!(c.schema_version, 3);
         assert!(c.config_schema.is_some());
         assert!(c.capabilities.iter().any(|cap| cap.name == "vector"));
+    }
+
+    /// The version the chart hands a deployment must be the version in the
+    /// image, or `version_check: strict` refuses to start every pod.
+    #[test]
+    fn test_default_config_expects_the_shipped_vector() {
+        let c = contract();
+        let default_config = c.default_config.expect("contract carries default config");
+        assert_eq!(default_config["vector"]["version"], VECTOR_VERSION);
+    }
+
+    /// One health surface: every probe path is served on `metrics_port`, so no
+    /// extra port may claim to answer them.
+    #[test]
+    fn test_contract_advertises_no_second_health_port() {
+        let c = contract();
+        assert!(
+            !c.extra_ports.iter().any(|p| p.name == "health"),
+            "a second health port is a second answer to readiness"
+        );
     }
 
     /// The committed reflectable artefacts under docs/ must not drift from a

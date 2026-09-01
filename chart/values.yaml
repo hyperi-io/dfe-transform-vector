@@ -111,10 +111,8 @@ config:
     data_dir: /var/lib/vector
     api_address: 0.0.0.0:8686
     log_level: info
-    version: 0.48.0
+    version: 0.57.0
     version_check: warn
-  health:
-    address: 0.0.0.0:9000
   metrics:
     address: 0.0.0.0:9090
     vector_metrics_address: 127.0.0.1:9598

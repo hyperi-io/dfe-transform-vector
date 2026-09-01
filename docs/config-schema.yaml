@@ -16,7 +16,6 @@ description: |-
   - `pipeline.name` — used in consumer group_id and metrics labels at startup
   - `vector.*` — binary path, data_dir, config_dir, API address, log level
     set at Vector spawn
-  - `health.address` — HTTP server binds at startup
   - `metrics.*` — HTTP server binds at startup
   - `logging.*` — tracing subscriber configured at startup
   - `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block
@@ -127,11 +126,6 @@ properties:
       version_check: strict
       version_source: preshipped
       cache_dir: /var/cache/vector
-  health:
-    description: Health endpoint. **Requires restart** (server binds at startup).
-    $ref: '#/$defs/HealthConfig'
-    default:
-      address: 0.0.0.0:9000
   metrics:
     description: Metrics endpoint. **Requires restart** (server binds at startup).
     $ref: '#/$defs/MetricsConfig'
@@ -533,14 +527,6 @@ $defs:
           environment.
         type: string
         default: /var/cache/vector
-  HealthConfig:
-    description: Health endpoint configuration.
-    type: object
-    properties:
-      address:
-        description: Health server bind address (host:port).
-        type: string
-        default: 0.0.0.0:9000
   MetricsConfig:
     description: Metrics endpoint configuration.
     type: object

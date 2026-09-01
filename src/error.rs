@@ -28,9 +28,6 @@ pub enum Error {
     #[error("validation error: {0}")]
     Validation(String),
 
-    #[error("health check error: {0}")]
-    Health(String),
-
     #[error("shutdown requested")]
     Shutdown,
 }

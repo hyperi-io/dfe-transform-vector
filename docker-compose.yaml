@@ -7,7 +7,6 @@ services:
         condition: service_healthy
     ports:
       - "9090:9090"
-      - "9000:9000"
       - "8686:8686"
     volumes:
       - ./config/config.yaml:/etc/dfe-transform-vector/config.yaml:ro

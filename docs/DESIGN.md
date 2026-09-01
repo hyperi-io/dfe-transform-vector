@@ -78,7 +78,7 @@ descriptor = ServiceDescriptor(
     name="transform-vector",
     display_name="DFE Transform - Vector",
     image="ghcr.io/hyperi-io/dfe-transform-vector",
-    default_port=9000,
+    default_port=9090,
     metrics_port=9090,
     kafka_role=KafkaRole.BOTH,
     consumer_group="dfe-transform-vector",
@@ -195,24 +195,33 @@ Once registered, dfe-engine automatically provides:
 
 ### 4.1 Endpoints
 
-All DFE services expose the same three endpoints. dfe-transform-vector is no exception.
+All DFE services expose the same three endpoints, on the one ops port, so a pod
+has a single answer to "are you ready". dfe-transform-vector is no exception.
 
 | Endpoint | Port | Purpose | Response |
 |---|---|---|---|
-| `GET /livez` | 9000 | K8s liveness probe | `200 OK` if wrapper process is running |
-| `GET /readyz` | 9000 | K8s readiness probe | `200 OK` only when Vector child is healthy |
+| `GET /livez` | 9090 | K8s liveness + startup probes | `200 OK` if the supervisor process is running |
+| `GET /readyz` | 9090 | K8s readiness probe | `200 OK` only while the Vector child is carrying traffic |
 | `GET /metrics` | 9090 | Prometheus scrape | Wrapper metrics + proxied Vector metrics |
 
 ### 4.2 Liveness vs Readiness
 
 ```
 /livez  → always 200 if the Rust process is running (fast, no deps)
-/readyz → 200 only when:
-                 1. Config is loaded and valid
-                 2. Vector child process is running
-                 3. Vector /health API returns {"ok": true}
-                 4. Not in crash-recovery backoff
+/readyz → 200 only when the lifecycle is Running or Reloading, which means:
+                 1. Config loaded, assembled and `vector validate`-clean
+                 2. The Vector child was spawned and survived the settle window
+                 3. Not in crash-recovery backoff
 ```
+
+The supervisor publishes its lifecycle into scalo's health registry, which the
+ops listener consults per request -- so `/readyz` tracks the subprocess rather
+than the supervisor that outlives it.
+
+A spawn returning success is not a running subprocess. The lifecycle only
+reaches `Running` once the child has survived a short settle window, so a
+crash-on-start (bad argv, unreadable config) reports 503 instead of a healthy
+start.
 
 During config reload, readiness stays healthy (old config still running). During crash recovery, readiness returns 503 until Vector restarts successfully.
 
@@ -314,11 +323,8 @@ vector:
   api_address: "0.0.0.0:8686"
   log_level: info
 
-health:
-  address: "0.0.0.0:9000"
-
 metrics:
-  address: "0.0.0.0:9090"
+  address: "0.0.0.0:9090"   # also serves /livez and /readyz
 
 scaling:
   pressure_threshold: 0.8
@@ -605,7 +611,7 @@ Each CI build validates the wrapper against the pinned Vector version:
     # Start Vector, wait for health, stop
     dfe-transform-vector --config test/fixtures/basic.yaml &
     sleep 5
-    curl -f http://localhost:9000/readyz
+    curl -f http://localhost:9090/readyz
     kill %1
 ```
 

@@ -166,7 +166,6 @@ fn write_config(
     data_dir: &std::path::Path,
     assembled_dir: &std::path::Path,
     vector_binary: &std::path::Path,
-    health_port: u16,
 ) -> std::path::PathBuf {
     // JSON is valid YAML 1.2, so serialising sidesteps quoting the paths.
     let config = serde_json::json!({
@@ -195,7 +194,6 @@ fn write_config(
             // host provides, which need not be the pinned one.
             "version_check": "disabled",
         },
-        "health": { "address": format!("127.0.0.1:{health_port}") },
         "logging": { "level": "info", "format": "text" },
         "scaling": { "enabled": false },
     });
@@ -405,7 +403,6 @@ async fn filebeat_corpus_round_trips_through_vector() {
     write_transform(&transforms_dir);
     let data_dir = work.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create the vector data dir");
-    let health_port = free_port();
     let config_path = write_config(
         work.path(),
         &base.brokers,
@@ -413,8 +410,11 @@ async fn filebeat_corpus_round_trips_through_vector() {
         &data_dir,
         &work.path().join("assembled"),
         vector_binary,
-        health_port,
     );
+
+    // The port the generated probes target: /metrics, /livez and /readyz are
+    // all served here, and it is the only health surface the app has.
+    let probe_port = free_port();
 
     // kill_on_drop is the backstop for an assertion failure; the happy path
     // stops the app with SIGTERM instead, because SIGKILL leaves the Vector
@@ -423,7 +423,7 @@ async fn filebeat_corpus_round_trips_through_vector() {
         .arg("--config")
         .arg(&config_path)
         .arg("--metrics-addr")
-        .arg(format!("127.0.0.1:{}", free_port()))
+        .arg(format!("127.0.0.1:{probe_port}"))
         .arg("run")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
@@ -431,14 +431,14 @@ async fn filebeat_corpus_round_trips_through_vector() {
         .spawn()
         .expect("spawn dfe-transform-vector");
 
-    let health = format!("127.0.0.1:{health_port}");
+    let probes = format!("127.0.0.1:{probe_port}");
     let deadline = Instant::now() + READY_TIMEOUT;
     let mut ready = false;
     while Instant::now() < deadline {
         if let Ok(Some(status)) = app.try_wait() {
             panic!("dfe-transform-vector exited before becoming ready: {status}");
         }
-        if http_status(&health, "/readyz").await == Some(200) {
+        if http_status(&probes, "/readyz").await == Some(200) {
             ready = true;
             break;
         }
@@ -446,7 +446,7 @@ async fn filebeat_corpus_round_trips_through_vector() {
     }
     assert!(
         ready,
-        "dfe-transform-vector did not report ready on {health} within {READY_TIMEOUT:?}"
+        "dfe-transform-vector did not report ready on {probes} within {READY_TIMEOUT:?}"
     );
 
     let outputs = drain(

@@ -48,9 +48,6 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            - name: health
-              containerPort: 9000
-              protocol: TCP
             - name: vector-api
               containerPort: 8686
               protocol: TCP
