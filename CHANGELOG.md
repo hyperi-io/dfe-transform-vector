@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.34](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.33...v1.0.34) (2026-09-01)
+
+### Bug Fixes
+
+* readiness reports the subprocess, not the supervisor that outlives it ([3d93537](https://github.com/hyperi-io/dfe-transform-vector/commit/3d93537e982289e67678f804992d5ee777c7f8db))
+* the reload loop stops manufacturing readiness it has not earned ([5c0bb5e](https://github.com/hyperi-io/dfe-transform-vector/commit/5c0bb5e96128bfd724bedec3fc5392b8357a4da2))
+
 ## [1.0.33](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.32...v1.0.33) (2026-08-31)
 
 ### Bug Fixes
