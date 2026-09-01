@@ -17,6 +17,8 @@ use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::*;
 use tempfile::TempDir;
 
+use crate::integration::config_env::{env_write_guard, load_config};
+
 /// Build a complete test config with realistic values.
 fn full_config(transforms_dir: Option<String>) -> Config {
     Config {
@@ -271,7 +273,7 @@ sink:
     )
     .unwrap();
 
-    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    let config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     // Check fields not affected by env var leakage from other tests
     assert_eq!(config.source.topics, vec!["test-topic"]);
     assert_eq!(config.sink.topic, "output-topic");
@@ -412,12 +414,17 @@ fn config_validation_accepts_disk_buffer() {
 
 #[test]
 fn config_env_override_flat() {
-    // Set env var, load config, verify override
-    // SAFETY: test is single-threaded for this env var, no concurrent access
+    // The environment is per-process, so this must exclude every concurrent
+    // `Config::load` for the whole set -> load -> remove sequence.
+    let _exclusive = env_write_guard();
+
+    // SAFETY: `env_write_guard` excludes every other reader and writer of the
+    // config environment for the life of `_exclusive`.
     unsafe { std::env::set_var("DFE_TRANSFORM_PIPELINE_NAME", "env-override-test") };
     let config = Config::load(None).unwrap();
-    assert_eq!(config.pipeline.name, "env-override-test");
     unsafe { std::env::remove_var("DFE_TRANSFORM_PIPELINE_NAME") };
+
+    assert_eq!(config.pipeline.name, "env-override-test");
 }
 
 // =========================================================================
@@ -442,7 +449,7 @@ source:
     )
     .unwrap();
 
-    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    let config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     assert_eq!(config.source.topics, vec!["syslog_land"]);
     assert_eq!(config.sink.topic, "syslog_load");
     assert_eq!(config.source.group_id, "dfe-transform-vector-syslog");
@@ -468,7 +475,7 @@ source:
     )
     .unwrap();
 
-    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    let config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     assert_eq!(config.source.topics, vec!["syslog_land"]);
     assert_eq!(config.sink.topic, "syslog_load");
     assert_eq!(
@@ -499,7 +506,7 @@ sink:
     )
     .unwrap();
 
-    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    let config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     // Explicit values should NOT be overridden by KafkaSource
     assert_eq!(config.source.topics, vec!["custom_input_topic"]);
     assert_eq!(config.sink.topic, "custom_output_topic");
@@ -527,7 +534,7 @@ sink:
     )
     .unwrap();
 
-    let config = Config::load(Some(config_path.to_str().unwrap())).unwrap();
+    let config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     assert_eq!(config.source.topics, vec!["raw_events"]);
     assert_eq!(config.sink.topic, "out_events");
     assert_eq!(config.source.group_id, "my-group");
@@ -893,7 +900,7 @@ fn config_malformed_yaml_produces_error() {
     let path = dir.path().join("bad.yaml");
     fs::write(&path, "{{{{not valid yaml: [[[").unwrap();
 
-    let result = Config::load(Some(path.to_str().unwrap()));
+    let result = load_config(Some(path.to_str().unwrap()));
     assert!(result.is_err(), "malformed YAML should produce error");
 }
 
@@ -905,7 +912,7 @@ fn config_empty_file_loads_defaults() {
 
     // Empty YAML is valid — deserialises as null, which should either
     // produce defaults or an error (both acceptable)
-    let _ = Config::load(Some(path.to_str().unwrap()));
+    let _ = load_config(Some(path.to_str().unwrap()));
 }
 
 #[test]
@@ -930,7 +937,7 @@ sink:
     .unwrap();
 
     // serde strict mode should reject unknown fields
-    let result = Config::load(Some(path.to_str().unwrap()));
+    let result = load_config(Some(path.to_str().unwrap()));
     // If serde is not in deny_unknown_fields mode, this passes — that's a finding
     // Either way, the test documents the current behaviour
     if let Ok(config) = result {

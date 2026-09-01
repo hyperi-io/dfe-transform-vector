@@ -98,9 +98,40 @@ impl Lifecycle {
     }
 
     /// Transition to a new state.
+    ///
+    /// Unconditional, so it belongs to the task that OWNS the subprocess --
+    /// `run_lifecycle`. Anything else annotating the state wants `set_if`.
     pub fn set(&self, state: State) {
         let _ = self.tx.send(state);
         tracing::debug!(state = %state, "lifecycle transition");
+    }
+
+    /// Transition to `to` only if the state is still `from`. Returns whether
+    /// it moved.
+    ///
+    /// Two tasks write this state: `run_lifecycle`, which owns the subprocess
+    /// and is authoritative, and the reload loop, which only annotates a reload
+    /// in progress. An unconditional write from the reload loop can resurrect a
+    /// state the supervisor has already moved past -- reporting `Running` over a
+    /// `Crashed` recorded microseconds earlier, which puts a dead pod back in
+    /// the Service. Going through here instead drops a transition this caller no
+    /// longer owns.
+    ///
+    /// The compare and the write happen under the watch channel's own lock, so
+    /// there is no window between the two for the other writer to slip through.
+    pub fn set_if(&self, from: State, to: State) -> bool {
+        let moved = self.tx.send_if_modified(|current| {
+            if *current == from {
+                *current = to;
+                true
+            } else {
+                false
+            }
+        });
+        if moved {
+            tracing::debug!(from = %from, to = %to, "lifecycle transition");
+        }
+        moved
     }
 
     /// Get a receiver that can watch for state changes.
@@ -126,6 +157,21 @@ mod tests {
         assert_eq!(lc.state(), State::Validating);
         lc.set(State::Running);
         assert_eq!(lc.state(), State::Running);
+    }
+
+    #[test]
+    fn set_if_moves_only_from_the_expected_state() {
+        let lc = Lifecycle::new();
+        lc.set(State::Running);
+
+        assert!(lc.set_if(State::Running, State::Reloading));
+        assert_eq!(lc.state(), State::Reloading);
+
+        // The supervisor has since recorded a crash; the reload loop's
+        // hand-back must not resurrect it.
+        lc.set(State::Crashed);
+        assert!(!lc.set_if(State::Reloading, State::Running));
+        assert_eq!(lc.state(), State::Crashed);
     }
 
     #[test]

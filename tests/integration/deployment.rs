@@ -217,6 +217,80 @@ fn emit_chart_generates_without_panic() {
     assert!(templates.is_dir(), "templates/ not generated");
 }
 
+/// The committed KEDA ScaledObject is a deliberate hand-edit of the generated
+/// one, and a fresh `emit-chart` over `chart/` silently clobbers it.
+///
+/// The generator addresses `.Values.config.kafka.*`. This app has no
+/// `config.kafka` block, so a regenerated ScaledObject renders empty
+/// `bootstrapServers`, `consumerGroup` and `topic` — valid YAML that KEDA
+/// accepts and then never scales on, with nothing logged.
+#[test]
+fn checked_in_keda_scaledobject_survives_emit_chart() {
+    let committed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("chart/templates/keda-scaledobject.yaml");
+    let committed = std::fs::read_to_string(&committed_path).expect("read committed ScaledObject");
+
+    // Assert on the trigger metadata itself, not on a substring anywhere in the
+    // file, so the explanatory note at the top cannot satisfy or trip it.
+    let directive = |key: &str| {
+        committed
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(&format!("{key}:")))
+            .unwrap_or_else(|| panic!("committed ScaledObject has no `{key}:` line"))
+            .to_string()
+    };
+
+    for (key, expected) in [
+        ("bootstrapServers", ".Values.config.source.brokers"),
+        ("consumerGroup", ".Values.config.source.group_id"),
+    ] {
+        let line = directive(key);
+        assert!(
+            line.contains(expected),
+            "chart/templates/keda-scaledobject.yaml has been overwritten by `emit-chart`: \
+             `{line}` does not read {expected}. The generator addresses config.kafka.*, which \
+             this chart does not define, so KEDA would get an empty value here and stop \
+             scaling with nothing logged."
+        );
+    }
+    assert!(
+        committed.contains("index .Values.config.source.topics 0"),
+        "committed ScaledObject no longer derives the topic from config.source.topics"
+    );
+
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let values: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+    let source = values
+        .get("config")
+        .and_then(|c| c.get("source"))
+        .expect("chart values define config.source");
+    for key in ["brokers", "group_id", "topics"] {
+        assert!(
+            source.get(key).is_some(),
+            "chart values.yaml has no config.source.{key} for the ScaledObject to read"
+        );
+    }
+
+    // The divergence itself: if scalo's generator ever converges on this shape,
+    // the hand-edit and its note in the template are stale.
+    let dir = tempfile::tempdir().expect("create temp dir");
+    scalo::deployment::generate_chart(&deployment::contract(), dir.path().to_str().unwrap(), None)
+        .expect("chart generation");
+    let generated = std::fs::read_to_string(dir.path().join("templates/keda-scaledobject.yaml"))
+        .expect("read generated ScaledObject");
+    assert_ne!(
+        generated.trim(),
+        committed.trim(),
+        "the generator now emits the committed ScaledObject verbatim — drop the hand-edit \
+         note from chart/templates/keda-scaledobject.yaml and this divergence assertion"
+    );
+}
+
 #[test]
 fn emit_compose_generates_without_panic() {
     let contract = deployment::contract();

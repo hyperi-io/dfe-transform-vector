@@ -113,7 +113,7 @@ Key differences:
 | Chart source | `helm.vector.dev` v0.42.1 | `dfe-transform-vector.git` `/chart` |
 | Image | `timberio/vector:0.48.0-debian` | `ghcr.io/hyperi-io/dfe-transform-vector` |
 | Workload type | StatefulSet | Deployment |
-| Health endpoint | `/health` on :8686 | `/livez`, `/readyz` on :9000 |
+| Health endpoint | `/health` on :8686 | `/livez`, `/readyz` on :9090, beside `/metrics` |
 | Metrics | Vector native on :9090 | Wrapper + proxied Vector on :9090 |
 | Config format | Full Vector YAML (customConfig) | Big-dial config (source/sink/transforms) |
 | DAG wiring | Manual (inline in values) | Auto-wired by wrapper |

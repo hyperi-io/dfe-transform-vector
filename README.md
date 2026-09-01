@@ -90,8 +90,16 @@ pod ready".
 | Endpoint | Port | Purpose |
 |----------|------|---------|
 | `GET /livez` | 9090 | K8s liveness and startup probes (the supervisor is up) |
-| `GET /readyz` | 9090 | K8s readiness probe (200 only while the Vector subprocess is carrying traffic) |
+| `GET /readyz` | 9090 | K8s readiness probe (200 only while the Vector subprocess is up -- see below) |
 | `GET /metrics` | 9090 | Prometheus scrape (wrapper + proxied Vector metrics) |
+
+`/readyz` reports whether the Vector subprocess EXISTS, not whether it is
+carrying traffic. The gate is that the child was still alive 500ms after spawn,
+which rules out the crash-on-start cases (bad argv, unreadable config) and a
+pod sitting in crash-recovery backoff. Vector's own startup routinely takes
+longer than that, so there is a window where the pod reports ready and Vector
+is still coming up. Proving traffic would mean reading Vector's own API, which
+the wrapper does not do today.
 
 ## Development
 

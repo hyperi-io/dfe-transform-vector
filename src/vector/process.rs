@@ -37,7 +37,7 @@ static VECTOR_RUNNING: AtomicBool = AtomicBool::new(false);
 /// A successful spawn only means fork/exec worked; a bad argv or an unreadable
 /// config exits within milliseconds, and without this window every such crash
 /// is advertised as a healthy start.
-const SPAWN_SETTLE: Duration = Duration::from_millis(500);
+pub const SPAWN_SETTLE: Duration = Duration::from_millis(500);
 
 use super::lifecycle::{Lifecycle, State};
 use crate::Result;
@@ -219,16 +219,31 @@ pub async fn run_lifecycle(
         // window; a child that is already gone stays Starting and falls
         // through to the single crash path below.
         tokio::time::sleep(SPAWN_SETTLE).await;
-        if matches!(child.try_wait(), Ok(None)) {
-            lifecycle.set(State::Running);
-            if log_state_change(&VECTOR_RUNNING, true) {
-                info!("Vector subprocess is running");
+        match child.try_wait() {
+            // Still there: the only case that earns `Running`.
+            Ok(None) => {
+                lifecycle.set(State::Running);
+                if log_state_change(&VECTOR_RUNNING, true) {
+                    info!("Vector subprocess is running");
+                }
             }
-        } else {
-            warn!(
-                settle_ms = SPAWN_SETTLE.as_millis(),
-                "Vector did not survive the settle window, not reporting running"
-            );
+            // Already gone -- a crash-on-start, handled by the crash path below.
+            Ok(Some(status)) => {
+                warn!(
+                    settle_ms = SPAWN_SETTLE.as_millis(),
+                    exit_code = status.code().unwrap_or(-1),
+                    "Vector did not survive the settle window, not reporting running"
+                );
+            }
+            // Whether the child is alive is unknown, so it does not earn
+            // `Running`; the `child.wait()` below decides.
+            Err(e) => {
+                error!(
+                    error = %e,
+                    settle_ms = SPAWN_SETTLE.as_millis(),
+                    "could not tell whether Vector survived the settle window"
+                );
+            }
         }
 
         // Wait for either: child exit or shutdown signal

@@ -15,8 +15,8 @@
 use std::fs;
 use std::path::Path;
 
+use crate::integration::config_env::load_config;
 use dfe_transform_vector::config::assembler;
-use dfe_transform_vector::config::loader::Config;
 use dfe_transform_vector::config::transforms::load_transforms;
 use dfe_transform_vector::config::wiring::{auto_wire, extract_components, validate_dag};
 use tempfile::TempDir;
@@ -31,7 +31,7 @@ const FIXTURE_CONFIGS: &str = "tests/fixtures/configs";
 #[test]
 fn fixture_minimal_config_loads_and_validates() {
     let path = Path::new(FIXTURE_CONFIGS).join("minimal.yaml");
-    let config = Config::load(Some(path.to_str().unwrap())).expect("minimal.yaml should load");
+    let config = load_config(Some(path.to_str().unwrap())).expect("minimal.yaml should load");
     config.validate().expect("minimal.yaml should be valid");
 
     assert_eq!(config.pipeline.name, "test-pipeline");
@@ -43,7 +43,7 @@ fn fixture_minimal_config_loads_and_validates() {
 #[test]
 fn fixture_sasl_config_loads_and_validates() {
     let path = Path::new(FIXTURE_CONFIGS).join("with_sasl.yaml");
-    let config = Config::load(Some(path.to_str().unwrap())).expect("with_sasl.yaml should load");
+    let config = load_config(Some(path.to_str().unwrap())).expect("with_sasl.yaml should load");
     config.validate().expect("with_sasl.yaml should be valid");
 
     assert!(config.source.sasl.enabled);
@@ -71,8 +71,8 @@ fn fixture_sasl_config_loads_and_validates() {
 #[test]
 fn fixture_with_transforms_config_assembles_full_chain() {
     let config_path = Path::new(FIXTURE_CONFIGS).join("with_transforms.yaml");
-    let config = Config::load(Some(config_path.to_str().unwrap()))
-        .expect("with_transforms.yaml should load");
+    let config =
+        load_config(Some(config_path.to_str().unwrap())).expect("with_transforms.yaml should load");
     config
         .validate()
         .expect("with_transforms.yaml should be valid");

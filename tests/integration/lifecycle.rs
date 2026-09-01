@@ -179,7 +179,7 @@ async fn a_subprocess_that_exits_immediately_never_reports_running() {
     use std::time::Duration;
 
     use dfe_transform_vector::config::VectorConfig;
-    use dfe_transform_vector::vector::{BackoffConfig, run_lifecycle};
+    use dfe_transform_vector::vector::{BackoffConfig, SPAWN_SETTLE, run_lifecycle};
 
     let work = tempfile::TempDir::new().expect("work dir");
     let binary = write_instant_exit_binary(work.path());
@@ -227,8 +227,28 @@ async fn a_subprocess_that_exits_immediately_never_reports_running() {
         .await;
     });
 
-    // Long enough for two spawn -> settle -> crash cycles.
-    tokio::time::sleep(Duration::from_millis(1_400)).await;
+    // Wait for two spawn -> settle -> crash cycles by watching for them, not by
+    // sizing a sleep: a fixed wait is coupled to `SPAWN_SETTLE` with no compile
+    // error to catch a change to it, and flakes on a loaded runner.
+    let deadline = std::time::Instant::now() + SPAWN_SETTLE * 12;
+    loop {
+        let crashes = seen
+            .lock()
+            .expect("state log")
+            .iter()
+            .filter(|s| **s == State::Crashed)
+            .count();
+        if crashes >= 2 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected two crash cycles within {:?}, saw: {:?}",
+            SPAWN_SETTLE * 12,
+            seen.lock().expect("state log")
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let _ = shutdown_tx.send(true);
     let _ = tokio::time::timeout(Duration::from_secs(3), task).await;
     watcher.abort();
