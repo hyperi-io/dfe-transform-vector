@@ -291,6 +291,35 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     );
 }
 
+/// The chart's expected Vector version must match the one the Dockerfile bakes.
+///
+/// They drifted by nine minor versions once already -- the chart said 0.48.0
+/// against a 0.57.0 binary -- and only `version_check: warn` kept pods
+/// starting. Under `strict` that combination refuses to start at all.
+#[test]
+fn chart_expects_the_vector_version_the_image_ships() {
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let values: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+
+    let charted = values
+        .get("config")
+        .and_then(|c| c.get("vector"))
+        .and_then(|v| v.get("version"))
+        .and_then(serde_yaml_ng::Value::as_str)
+        .expect("chart values define config.vector.version");
+
+    assert_eq!(
+        charted,
+        deployment::VECTOR_VERSION,
+        "chart/values.yaml expects Vector {charted}, the image ships {}",
+        deployment::VECTOR_VERSION
+    );
+}
+
 #[test]
 fn emit_compose_generates_without_panic() {
     let contract = deployment::contract();
