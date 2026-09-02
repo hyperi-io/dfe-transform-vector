@@ -41,8 +41,14 @@ spec:
         {{- end }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         activationLagThreshold: {{ .Values.keda.kafka.activationLagThreshold | quote }}
-        saslType: scram_sha512
-        tls: disable
+        {{- /* KEDA reads `sasl`, not `saslType`, and its enum spells the
+            mechanisms without the underscore the app config uses. Both track
+            the app's own source config so the scaler dials the broker the way
+            the app does. */}}
+        {{- $mechanisms := dict "plain" "plaintext" "scram_sha_256" "scram_sha256" "scram_sha_512" "scram_sha512" }}
+        {{- $configured := .Values.config.source.sasl.mechanism }}
+        sasl: {{ if .Values.config.source.sasl.enabled }}{{ required (printf "keda: no KEDA sasl mechanism for %q" $configured) (get $mechanisms $configured) }}{{ else }}none{{ end }}
+        tls: {{ if .Values.config.source.tls.enabled }}enable{{ else }}disable{{ end }}
     {{- if .Values.keda.cpu.enabled }}
     # CPU utilisation (secondary scaler)
     - type: cpu

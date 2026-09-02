@@ -6,8 +6,10 @@ metadata:
   labels:
     {{- include "dfe-transform-vector.labels" . | nindent 4 }}
 spec:
+  # KEDA's kafka scaler takes the principal as `username`; `sasl` is the
+  # mechanism enum and lives in the trigger metadata.
   secretTargetRef:
-    - parameter: sasl
+    - parameter: username
       name: {{ include "dfe-transform-vector.kafkaSecretName" . }}
       key: {{ .Values.kafka.secretKeys.username }}
     - parameter: password
