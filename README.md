@@ -52,15 +52,20 @@ cargo build --release
 # Run with config file
 ./target/release/dfe-transform-vector run --config config.example.yaml
 
-# Generate deployment artifacts
+# Generate deployment artefacts
 ./target/release/dfe-transform-vector emit-dockerfile
-./target/release/dfe-transform-vector emit-chart
 ./target/release/dfe-transform-vector emit-compose
+
+# emit-chart overwrites whatever directory you point it at. The committed
+# chart/ carries KEDA hand-edits the generator does not produce, so render
+# somewhere scratch and diff rather than regenerating over it.
+./target/release/dfe-transform-vector emit-chart /tmp/dfe-transform-vector-chart
 ```
 
 ## Configuration
 
-See [config.example.yaml](config.example.yaml) for a full annotated configuration.
+See [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vector/blob/main/config.example.yaml)
+for a full annotated configuration.
 
 Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 
@@ -124,7 +129,7 @@ cargo nextest run --test e2e --run-ignored all
 cargo nextest run -E 'test(vector_validate)' --run-ignored all
 ```
 
-The WS21 acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
+The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
 its own broker container. It grades the filebeat corpus against elastic's
 golden events, and both live in dfe-transform-vrl, so it skips with a message
 unless that repo is checked out beside this one or `DFE_TRANSFORM_VRL_DIR`
