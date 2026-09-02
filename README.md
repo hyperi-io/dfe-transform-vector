@@ -1,5 +1,12 @@
 # dfe-transform-vector
 
+[![Build Status](https://github.com/hyperi-io/dfe-transform-vector/actions/workflows/ci.yml/badge.svg)](https://github.com/hyperi-io/dfe-transform-vector/actions)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](https://github.com/hyperi-io/dfe-transform-vector/blob/main/LICENSE)
+
+> Vector.dev does the transform; everything around it -- config, credentials,
+> health, metrics, restarts -- is what a pipeline actually needs in production.
+> This wrapper supplies that half and keeps Vector as a subprocess.
+
 Rust wrapper that manages Vector.dev as a subprocess for Kafka-to-Kafka
 transform pipelines in the HyperI DFE (Data Fusion Engine) platform. The wrapper
 is built on the [scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime
@@ -125,16 +132,16 @@ points at it.
 
 ## Documentation
 
-- [docs/DESIGN.md](docs/DESIGN.md) -- Full architecture and design
-- [docs/MIGRATION.md](docs/MIGRATION.md) -- Migration from official Vector chart
-- [docs/LIBRDKAFKA.md](docs/LIBRDKAFKA.md) -- Kafka tuning reference
-- [RESEARCH.md](RESEARCH.md) -- Research findings and option analysis
+- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/DESIGN.md) -- Full architecture and design
+- [docs/MIGRATION.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/MIGRATION.md) -- Migration from official Vector chart
+- [docs/LIBRDKAFKA.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/LIBRDKAFKA.md) -- Kafka tuning reference
+- [RESEARCH.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/RESEARCH.md) -- Research findings and option analysis
 
 ## License
 
 This project is licensed under the Business Source License 1.1
-(BUSL-1.1). See [LICENSE](LICENSE) for details.
+(BUSL-1.1). See [LICENSE](https://github.com/hyperi-io/dfe-transform-vector/blob/main/LICENSE) for details.
 
 Copyright (c) 2026 HYPERI PTY LIMITED
 
-For commercial licensing options, see [COMMERCIAL.md](COMMERCIAL.md).
+For commercial licensing options, see [COMMERCIAL.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/COMMERCIAL.md).
