@@ -282,7 +282,11 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     }
     // The trigger dereferences these unguarded, so a missing one is a Helm
     // render error rather than a bad value.
-    for (block, key) in [("sasl", "enabled"), ("sasl", "mechanism"), ("tls", "enabled")] {
+    for (block, key) in [
+        ("sasl", "enabled"),
+        ("sasl", "mechanism"),
+        ("tls", "enabled"),
+    ] {
         assert!(
             source.get(block).and_then(|b| b.get(key)).is_some(),
             "chart values.yaml has no config.source.{block}.{key}; the ScaledObject trigger \
