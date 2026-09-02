@@ -244,9 +244,12 @@ pub fn generate_observability_yaml() -> Value {
 
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
-/// Vector's kafka source stores offsets and lets librdkafka flush them on
-/// commit_interval_ms; it never commits by hand, so the shared DFE baseline's
-/// enable.auto.commit=false leaves every offset stored and never committed.
+/// Vector's kafka source stores offsets on delivery and leaves the periodic
+/// flush to librdkafka's commit timer, which the shared DFE baseline's
+/// enable.auto.commit=false never arms. Vector does still commit directly on
+/// rebalance and clean shutdown, so the baseline stalled reported lag between
+/// those points rather than losing offsets outright -- and replayed everything
+/// back to the last one whenever a pod died without shutting down.
 const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "true")];
 
 /// Service-specific producer librdkafka overrides for transform-vector.
@@ -451,8 +454,8 @@ mod tests {
         assert!(text.contains("fetch.min.bytes: '1048576'"));
         assert!(text.contains("fetch.wait.max.ms: '100'"));
         assert!(text.contains("queued.min.messages: '20000'"));
-        // Overridden off the shared baseline: Vector never commits by hand, so
-        // false would store every offset and commit none.
+        // Overridden off the shared baseline: false arms no commit timer, so
+        // steady-state offsets stay stored and uncommitted.
         assert!(text.contains("enable.auto.commit: 'true'"));
         assert!(text.contains("statistics.interval.ms: '1000'"));
         // Removed settings — back to librdkafka defaults
@@ -520,8 +523,8 @@ mod tests {
         let source = SourceConfig::default();
         let text = serde_yaml_ng::to_string(&generate_source_yaml(&source)).unwrap();
 
-        // Asking for a commit interval while forbidding auto-commit stores every
-        // offset and commits none, which reads as a consumer that never advances.
+        // A commit interval with auto-commit off arms no timer, so the interval
+        // is inert and lag stops moving between rebalances.
         assert!(text.contains("enable.auto.commit: 'true'"));
         assert!(text.contains("commit_interval_ms: 5000"));
         assert!(!text.contains("enable.auto.commit: 'false'"));

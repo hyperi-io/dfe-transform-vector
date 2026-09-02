@@ -52,7 +52,7 @@ and any service consuming from Kafka in production.
 | `fetch.min.bytes` | `1048576` (1 MiB) | `1` | Batch fetches for throughput. Broker waits until 1 MiB of data is available before responding, reducing fetch round-trips. |
 | `fetch.wait.max.ms` | `100` | `500` | Upper bound on fetch latency when `fetch.min.bytes` threshold isn't met. Prevents 500 ms stalls on low-volume topics. |
 | `queued.min.messages` | `20000` | `100000` | Pre-fetch queue depth. 10-20K is the efficiency sweet spot — large enough for batching, small enough to avoid excessive memory and rebalance lag. |
-| `enable.auto.commit` | `false` | `true` | DFE services manage offset commits explicitly after processing (at-least-once guarantee). Auto-commit risks data loss on crash. |
+| `enable.auto.commit` | `false` | `true` | Suits a service that commits by hand after processing, which is how dfe-loader withholds offsets on a failed insert. transform-vector overrides this back to `true` -- see Service-Specific Overrides. |
 | `statistics.interval.ms` | `1000` | `0` (disabled) | Enable librdkafka internal metrics at 1-second granularity for Prometheus scraping. |
 
 **Settings intentionally left at default:**
@@ -164,9 +164,10 @@ baseline).
 
 ### dfe-transform-vector
 
-| Setting | Value | Reason |
-|---------|-------|--------|
-| `queue.buffering.max.kbytes` | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
+| Setting | Side | Value | Reason |
+|---------|------|-------|--------|
+| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
+| `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline stalled reported lag between those points rather than losing offsets. Lag is what KEDA scales on here. |
 
 ### dfe-loader
 
