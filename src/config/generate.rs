@@ -244,8 +244,10 @@ pub fn generate_observability_yaml() -> Value {
 
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
-/// Currently none — uses the shared DFE baseline from scalo as-is.
-const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[];
+/// Vector's kafka source stores offsets and lets librdkafka flush them on
+/// commit_interval_ms; it never commits by hand, so the shared DFE baseline's
+/// enable.auto.commit=false leaves every offset stored and never committed.
+const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "true")];
 
 /// Service-specific producer librdkafka overrides for transform-vector.
 ///
@@ -449,7 +451,9 @@ mod tests {
         assert!(text.contains("fetch.min.bytes: '1048576'"));
         assert!(text.contains("fetch.wait.max.ms: '100'"));
         assert!(text.contains("queued.min.messages: '20000'"));
-        assert!(text.contains("enable.auto.commit: 'false'"));
+        // Overridden off the shared baseline: Vector never commits by hand, so
+        // false would store every offset and commit none.
+        assert!(text.contains("enable.auto.commit: 'true'"));
         assert!(text.contains("statistics.interval.ms: '1000'"));
         // Removed settings — back to librdkafka defaults
         assert!(!text.contains("queued.max.messages.kbytes"));
@@ -509,6 +513,30 @@ mod tests {
         assert!(text.contains("fetch.max.bytes: '52428800'"));
         // Custom option included
         assert!(text.contains("custom.option: value"));
+    }
+
+    #[test]
+    fn source_commits_offsets_and_says_how_often() {
+        let source = SourceConfig::default();
+        let text = serde_yaml_ng::to_string(&generate_source_yaml(&source)).unwrap();
+
+        // Asking for a commit interval while forbidding auto-commit stores every
+        // offset and commits none, which reads as a consumer that never advances.
+        assert!(text.contains("enable.auto.commit: 'true'"));
+        assert!(text.contains("commit_interval_ms: 5000"));
+        assert!(!text.contains("enable.auto.commit: 'false'"));
+    }
+
+    #[test]
+    fn a_user_can_still_turn_auto_commit_back_off() {
+        let mut source = SourceConfig::default();
+        source
+            .librdkafka_options
+            .insert("enable.auto.commit".into(), "false".into());
+
+        let text = serde_yaml_ng::to_string(&generate_source_yaml(&source)).unwrap();
+
+        assert!(text.contains("enable.auto.commit: 'false'"));
     }
 
     #[test]
