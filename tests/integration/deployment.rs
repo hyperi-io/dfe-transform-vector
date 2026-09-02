@@ -248,6 +248,7 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
         ("consumerGroup", ".Values.config.source.group_id"),
         ("sasl", ".Values.config.source.sasl"),
         ("tls", ".Values.config.source.tls"),
+        ("unsafeSsl", ".Values.config.source.tls"),
     ] {
         let line = directive(key);
         assert!(
