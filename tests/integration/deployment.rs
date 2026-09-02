@@ -220,10 +220,12 @@ fn emit_chart_generates_without_panic() {
 /// The committed KEDA ScaledObject is a deliberate hand-edit of the generated
 /// one, and a fresh `emit-chart` over `chart/` silently clobbers it.
 ///
-/// The generator addresses `.Values.config.kafka.*`. This app has no
-/// `config.kafka` block, so a regenerated ScaledObject renders empty
-/// `bootstrapServers`, `consumerGroup` and `topic` — valid YAML that KEDA
-/// accepts and then never scales on, with nothing logged.
+/// The generator addresses `.Values.config.kafka.*`, which this app has no
+/// block for, and hardcodes the broker's SASL mechanism and TLS mode. A
+/// regenerated ScaledObject therefore renders empty `bootstrapServers`,
+/// `consumerGroup` and `topic`, and describes an auth posture the app may not
+/// be using — all valid YAML that KEDA accepts and then never scales on, with
+/// nothing logged.
 #[test]
 fn checked_in_keda_scaledobject_survives_emit_chart() {
     let committed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -244,14 +246,16 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     for (key, expected) in [
         ("bootstrapServers", ".Values.config.source.brokers"),
         ("consumerGroup", ".Values.config.source.group_id"),
+        ("sasl", ".Values.config.source.sasl"),
+        ("tls", ".Values.config.source.tls"),
     ] {
         let line = directive(key);
         assert!(
             line.contains(expected),
             "chart/templates/keda-scaledobject.yaml has been overwritten by `emit-chart`: \
              `{line}` does not read {expected}. The generator addresses config.kafka.*, which \
-             this chart does not define, so KEDA would get an empty value here and stop \
-             scaling with nothing logged."
+             this chart does not define, and hardcodes the mechanism and TLS mode, so KEDA \
+             would get an empty or wrong value here and stop scaling with nothing logged."
         );
     }
     assert!(
@@ -275,6 +279,15 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
             "chart values.yaml has no config.source.{key} for the ScaledObject to read"
         );
     }
+    // The trigger dereferences these unguarded, so a missing one is a Helm
+    // render error rather than a bad value.
+    for (block, key) in [("sasl", "enabled"), ("sasl", "mechanism"), ("tls", "enabled")] {
+        assert!(
+            source.get(block).and_then(|b| b.get(key)).is_some(),
+            "chart values.yaml has no config.source.{block}.{key}; the ScaledObject trigger \
+             dereferences it and Helm fails to render the chart at all"
+        );
+    }
 
     // The divergence itself: if scalo's generator ever converges on this shape,
     // the hand-edit and its note in the template are stale.
@@ -288,6 +301,58 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
         committed.trim(),
         "the generator now emits the committed ScaledObject verbatim — drop the hand-edit \
          note from chart/templates/keda-scaledobject.yaml and this divergence assertion"
+    );
+}
+
+/// The committed KEDA TriggerAuthentication is a deliberate hand-edit of the
+/// generated one, and a fresh `emit-chart` over `chart/` silently clobbers it.
+///
+/// The generator binds the username to the `sasl` parameter. KEDA's kafka
+/// scaler reads `sasl` as the mechanism enum and takes the principal in
+/// `username`, so a regenerated TriggerAuthentication supplies no username and
+/// the scaler answers "no username given" instead of a lag metric.
+#[test]
+fn checked_in_keda_triggerauth_survives_emit_chart() {
+    let committed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("chart/templates/keda-triggerauth.yaml");
+    let committed =
+        std::fs::read_to_string(&committed_path).expect("read committed TriggerAuthentication");
+
+    // Assert on the secretTargetRef entries, not on a substring anywhere in the
+    // file, so the explanatory note at the top cannot satisfy or trip it.
+    let parameters: Vec<String> = committed
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("- parameter: "))
+        .map(str::to_string)
+        .collect();
+
+    assert!(
+        parameters.iter().any(|p| p == "username"),
+        "chart/templates/keda-triggerauth.yaml has been overwritten by `emit-chart`: its \
+         secretTargetRef binds {parameters:?} and not `username`, so KEDA's kafka scaler \
+         answers \"no username given\" and returns no lag metric."
+    );
+    assert!(
+        !parameters.iter().any(|p| p == "sasl"),
+        "chart/templates/keda-triggerauth.yaml binds a secret to `sasl`, which KEDA parses as \
+         the mechanism enum (none, plaintext, scram_sha256, scram_sha512, oauthbearer, \
+         gssapi) and rejects. The mechanism belongs in the ScaledObject trigger metadata."
+    );
+
+    // The divergence itself: if scalo's generator ever converges on this shape,
+    // the hand-edit and its note in the template are stale.
+    let dir = tempfile::tempdir().expect("create temp dir");
+    scalo::deployment::generate_chart(&deployment::contract(), dir.path().to_str().unwrap(), None)
+        .expect("chart generation");
+    let generated = std::fs::read_to_string(dir.path().join("templates/keda-triggerauth.yaml"))
+        .expect("read generated TriggerAuthentication");
+    assert_ne!(
+        generated.trim(),
+        committed.trim(),
+        "the generator now emits the committed TriggerAuthentication verbatim — drop the \
+         hand-edit note from chart/templates/keda-triggerauth.yaml and this divergence \
+         assertion"
     );
 }
 
