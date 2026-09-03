@@ -320,6 +320,109 @@ fn chart_expects_the_vector_version_the_image_ships() {
     );
 }
 
+/// The chart's `config` block must deserialise and validate.
+///
+/// The ConfigMap is `toYaml .Values.config` verbatim, so that block is the
+/// config the pod reads, and anything `validate()` rejects is a crash-loop
+/// before Vector starts. Going through the real validator rather than
+/// asserting on substrings covers every rule it enforces, not just today's.
+///
+/// It does NOT prove a stock install can authenticate: `kafka.username` is
+/// empty until an operator sets it, so the placeholders below expand to
+/// nothing. This is the config-shape half only.
+#[test]
+fn chart_default_values_are_a_config_the_app_accepts() {
+    use dfe_transform_vector::config::loader::Config;
+
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let values: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+    let block = values
+        .get("config")
+        .expect("chart values define a config block")
+        .clone();
+
+    let config: Config = serde_yaml_ng::from_value(block)
+        .expect("the chart's config block must deserialise into the app's Config");
+
+    config.validate().expect(
+        "chart/values.yaml does not validate -- `helm install` with stock values would \
+         crash-loop the pod before Vector starts",
+    );
+}
+
+/// The same check one level up, on the contract the generator reads.
+///
+/// `chart/values.yaml` is emitted from `default_config`, so a chart generated
+/// anywhere -- a fresh `emit-chart`, a sibling repo's tooling -- is only as
+/// good as this. Guarding the committed file alone would let the next
+/// regeneration ship a broken chart and pass.
+#[test]
+fn the_contract_default_config_is_one_the_app_accepts() {
+    use dfe_transform_vector::config::loader::Config;
+
+    let default_config = deployment::contract()
+        .default_config
+        .expect("contract carries a default config");
+    let config: Config = serde_json::from_value(default_config)
+        .expect("the contract's default config must deserialise into the app's Config");
+
+    config
+        .validate()
+        .expect("deployment::contract()'s default_config does not validate");
+}
+
+/// SASL credentials reach Vector only as `${VAR}` placeholders it expands from
+/// the pod environment, so both ends of that wiring have to agree.
+///
+/// A literal credential in `config.source.sasl` would land in the ConfigMap
+/// instead of the Secret. Renaming either env var in the Deployment, or
+/// dropping either placeholder, leaves the pod authenticating as nobody.
+#[test]
+fn the_sasl_placeholders_name_the_env_vars_the_deployment_injects() {
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let parsed: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+
+    for side in ["source", "sink"] {
+        let sasl = parsed
+            .get("config")
+            .and_then(|c| c.get(side))
+            .and_then(|s| s.get("sasl"))
+            .unwrap_or_else(|| panic!("chart values have no config.{side}.sasl"));
+        for (key, expected) in [
+            ("username", "${KAFKA_SASL_USERNAME}"),
+            ("password", "${KAFKA_SASL_PASSWORD}"),
+        ] {
+            assert_eq!(
+                sasl.get(key).and_then(serde_yaml_ng::Value::as_str),
+                Some(expected),
+                "chart values.yaml config.{side}.sasl.{key} must be the placeholder {expected}, \
+                 not a literal -- `toYaml .Values.config` puts it in the ConfigMap"
+            );
+        }
+    }
+
+    // The other end: the Deployment must still set the vars they name.
+    let deployment_yaml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/templates/deployment.yaml"),
+    )
+    .expect("read deployment template");
+    for env_var in ["KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD"] {
+        assert!(
+            deployment_yaml.contains(env_var),
+            "chart/templates/deployment.yaml no longer sets {env_var}, which the values.yaml \
+             placeholders expand from -- Vector would get an empty credential"
+        );
+    }
+}
+
 #[test]
 fn emit_compose_generates_without_panic() {
     let contract = deployment::contract();
