@@ -41,7 +41,7 @@ tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
 # `health` is REQUIRED for a truthful `/readyz`: the metrics listener only
 # consults `HealthRegistry` under that feature, and its other readiness hook
 # is snapshotted before the app can set one.
-scalo = { version = ">=2.10.14, <3", features = [
+scalo = { version = ">=2.11.1, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -106,7 +106,7 @@ tar = ">=0.4.44, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.10.14, <3", features = [
+scalo = { version = ">=2.11.1, <3", features = [
     "transport-kafka",
 ] }
 
