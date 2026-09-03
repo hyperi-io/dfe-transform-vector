@@ -12,32 +12,44 @@ easier debugging, and automatic benefit from upstream librdkafka improvements.
 
 ## Configuration Cascade
 
-Settings merge in priority order (highest wins):
+Three layers merge in priority order (highest wins):
 
 | Layer | Source | Who Manages |
 |-------|--------|-------------|
-| 4. User config YAML | `librdkafka_options:` in service config | Platform operator |
-| 3. Central config file | `librdkafka.yaml` in git-managed config repo (dfe-devex) | Platform team |
+| 3. User config YAML | `librdkafka_options:` in service config | Platform operator |
 | 2. Service-specific | Hardcoded in each service's generator | Service developer |
-| 1. DFE baseline | `scalo::kafka_config` constants | Shared library |
+| 1. Baseline profile | The central config file if it defines the profile, else `scalo::kafka_config` constants | Platform team / shared library |
 
-**Layer 1** provides the coded-in fallback -- always available, even without a
-config repo. **Layer 3** is the primary management point for production tuning.
-**Layer 4** allows per-instance emergency overrides.
+**Layer 1 is one layer, not two, and the two sources are mutually exclusive.**
+A profile named in `librdkafka.yaml` REPLACES the matching scalo constant set
+outright -- it does not merge over it. A central profile that names only
+`linger.ms` therefore ships only `linger.ms`, and every other baseline setting
+reverts to the librdkafka default. Restate the whole profile in the central
+file, or leave the profile out and let the constants stand.
+
+**A service override beats the central file.** Layer 2 is applied on top of
+whichever layer-1 source won, so a platform-wide central setting cannot undo a
+service's hardcoded one -- see Service-Specific Overrides for what each service
+pins. Only layer 3, the per-instance `librdkafka_options:`, is above it.
 
 ### Example
 
-A transform-vector pod producing to Kafka:
+A transform-vector pod producing to Kafka, with no central config file:
 
 1. scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`, `compression.type=zstd`,
    `socket.nagle.disable=true`, `statistics.interval.ms=1000`
 2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
-3. Central config file could override `linger.ms=50` for the whole platform
-4. User config YAML could set `compression.type=lz4` for a specific pipeline
+3. User config YAML sets `compression.type=lz4` for this pipeline
 
-Result: `linger.ms=50`, `compression.type=lz4`,
+Result: `linger.ms=100`, `compression.type=lz4`,
 `queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
 `statistics.interval.ms=1000`
+
+Add a central `producer.production` naming only `linger.ms=50` and the result
+becomes `linger.ms=50`, `compression.type=lz4`,
+`queue.buffering.max.kbytes=262144` -- `socket.nagle.disable` and
+`statistics.interval.ms` are gone, because the central profile replaced the
+constants rather than merging over them.
 
 ## Consumer Profiles
 

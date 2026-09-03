@@ -244,12 +244,9 @@ pub fn generate_observability_yaml() -> Value {
 
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
-/// Vector's kafka source stores offsets on delivery and leaves the periodic
-/// flush to librdkafka's commit timer, which the shared DFE baseline's
-/// enable.auto.commit=false never arms. Vector does still commit directly on
-/// rebalance and clean shutdown, so the baseline stalled reported lag between
-/// those points rather than losing offsets outright -- and replayed everything
-/// back to the last one whenever a pod died without shutting down.
+/// Vector arms its offset-commit timer only with auto-commit on, and the shared
+/// DFE baseline turns it off -- see docs/LIBRDKAFKA.md, Service-Specific
+/// Overrides.
 const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "true")];
 
 /// Service-specific producer librdkafka overrides for transform-vector.
@@ -454,8 +451,8 @@ mod tests {
         assert!(text.contains("fetch.min.bytes: '1048576'"));
         assert!(text.contains("fetch.wait.max.ms: '100'"));
         assert!(text.contains("queued.min.messages: '20000'"));
-        // Overridden off the shared baseline: false arms no commit timer, so
-        // steady-state offsets stay stored and uncommitted.
+        // Overridden off the shared baseline's `false` -- see
+        // SERVICE_CONSUMER_OVERRIDES.
         assert!(text.contains("enable.auto.commit: 'true'"));
         assert!(text.contains("statistics.interval.ms: '1000'"));
         // Removed settings — back to librdkafka defaults
