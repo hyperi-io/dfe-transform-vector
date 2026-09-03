@@ -246,6 +246,63 @@ pub fn generate_observability_yaml(metrics: &MetricsConfig) -> Value {
     Value::Mapping(root)
 }
 
+/// librdkafka options the generator derives from the big dials, with the
+/// config path that owns each.
+///
+/// These are written AFTER `librdkafka_options` is merged in, so a user entry
+/// for one of them is overwritten. [`crate::config::Config::validate`] reads
+/// this same list and refuses such a config, rather than letting the discard
+/// happen in silence -- `librdkafka_options` is documented as the layer above
+/// everything, and for these keys it is not.
+///
+/// Condition-aware on purpose: with SASL off nothing derives `sasl.mechanism`,
+/// so setting it by hand is legitimate and stays allowed.
+#[must_use]
+pub fn derived_source_options(source: &SourceConfig) -> Vec<(&'static str, &'static str)> {
+    let mut derived = Vec::new();
+    if source.sasl.enabled || source.tls.enabled {
+        derived.push((
+            "security.protocol",
+            "source.sasl.enabled and source.tls.enabled",
+        ));
+    }
+    if source.sasl.enabled {
+        derived.push(("sasl.mechanism", "source.sasl.mechanism"));
+    }
+    if source.tls.enabled && source.tls.skip_verify {
+        derived.push((
+            "enable.ssl.certificate.verification",
+            "source.tls.skip_verify",
+        ));
+    }
+    derived
+}
+
+/// Sink counterpart of [`derived_source_options`].
+///
+/// `compression.type` is unconditional: the sink always writes it from
+/// `sink.compression`.
+#[must_use]
+pub fn derived_sink_options(sink: &SinkConfig) -> Vec<(&'static str, &'static str)> {
+    let mut derived = vec![("compression.type", "sink.compression")];
+    if sink.sasl.enabled || sink.tls.enabled {
+        derived.push((
+            "security.protocol",
+            "sink.sasl.enabled and sink.tls.enabled",
+        ));
+    }
+    if sink.sasl.enabled {
+        derived.push(("sasl.mechanism", "sink.sasl.mechanism"));
+    }
+    if sink.tls.enabled && sink.tls.skip_verify {
+        derived.push((
+            "enable.ssl.certificate.verification",
+            "sink.tls.skip_verify",
+        ));
+    }
+    derived
+}
+
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
 /// Currently none — uses the shared DFE baseline from scalo as-is.

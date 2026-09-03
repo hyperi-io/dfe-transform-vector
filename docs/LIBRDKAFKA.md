@@ -28,8 +28,24 @@ also hardcodes is overwritten by the service.
 
 That last part matters when tuning: `queue.buffering.max.kbytes` is a
 transform-vector service override, and setting it centrally will NOT take
-effect. Set it per-instance in `sink.librdkafka_options` instead -- layer 3 is
-above everything.
+effect. Set it per-instance in `sink.librdkafka_options` instead.
+
+### The big dials sit above all three
+
+A handful of librdkafka keys are DERIVED from the big-dial config and written
+after the whole merge, so `librdkafka_options` cannot reach them:
+
+| Key | Owned by | Applies when |
+|---|---|---|
+| `compression.type` | `sink.compression` | always, on the sink |
+| `security.protocol` | `{source,sink}.sasl.enabled` + `.tls.enabled` | either is on |
+| `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
+| `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
+
+Setting one of these in `librdkafka_options` used to be discarded in silence.
+`config-check` now refuses the config and names the big dial that owns the key.
+The conditions above are part of the rule: with SASL off nothing derives
+`sasl.mechanism`, so setting it by hand there is still allowed.
 
 ### Example
 
@@ -40,9 +56,10 @@ A transform-vector pod producing to Kafka:
    `statistics.interval.ms=1000` -- or, if `librdkafka.yaml` defines
    `producer.production`, exactly what that profile lists and nothing else
 2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
-3. User config YAML sets `compression.type=lz4` for a specific pipeline
+3. User config YAML sets `linger.ms=20` for a specific pipeline
+4. The big dial `sink.compression: lz4` is applied last
 
-Result: `linger.ms=100`, `compression.type=lz4`,
+Result: `linger.ms=20`, `compression.type=lz4`,
 `queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
 `statistics.interval.ms=1000`
 
@@ -257,12 +274,13 @@ source:
 
 sink:
   librdkafka_options:
-    compression.type: "lz4"       # LZ4 instead of zstd
     queue.buffering.max.kbytes: "524288"  # 512 MiB
 ```
 
 These are layer 3 (highest priority) and override everything below, including
-the service-specific constants.
+the service-specific constants -- but NOT the derived keys in the table above.
+`compression.type` belongs to `sink.compression`, and putting it here is a
+config error rather than a silent no-op.
 
 ## Source Code References
 

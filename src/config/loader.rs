@@ -775,6 +775,11 @@ impl Config {
             ));
         }
         self.validate_sasl("source.sasl", &self.source.sasl)?;
+        Self::validate_librdkafka_options(
+            "source",
+            &self.source.librdkafka_options,
+            &super::generate::derived_source_options(&self.source),
+        )?;
 
         // Source codec
         let valid_codecs = ["json", "raw_bytes", "protobuf"];
@@ -817,6 +822,11 @@ impl Config {
         }
         self.validate_sasl("sink.sasl", &self.sink.sasl)?;
         self.validate_buffer(&self.sink.buffer)?;
+        Self::validate_librdkafka_options(
+            "sink",
+            &self.sink.librdkafka_options,
+            &super::generate::derived_sink_options(&self.sink),
+        )?;
 
         // Sink encoding
         let valid_encodings = ["json", "raw_bytes"];
@@ -907,6 +917,30 @@ impl Config {
             )));
         }
 
+        Ok(())
+    }
+
+    /// Refuse a `librdkafka_options` entry the generator is going to overwrite.
+    ///
+    /// The generator writes the big-dial-derived options after merging this
+    /// map, so `sink.librdkafka_options: {compression.type: lz4}` alongside
+    /// `sink.compression: zstd` produced zstd and said nothing -- while the
+    /// docs called this map the layer above everything. The derived list lives
+    /// in the generator that applies it, so the two cannot drift apart.
+    fn validate_librdkafka_options(
+        side: &str,
+        options: &BTreeMap<String, String>,
+        derived: &[(&str, &str)],
+    ) -> Result<()> {
+        for (key, owner) in derived {
+            if options.contains_key(*key) {
+                return Err(crate::Error::Validation(format!(
+                    "{side}.librdkafka_options sets '{key}', which is derived from \
+                     {owner} and overwritten when the Vector config is generated. \
+                     Set it through {owner}, or remove the librdkafka_options entry."
+                )));
+            }
+        }
         Ok(())
     }
 

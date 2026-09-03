@@ -35,6 +35,25 @@ fn bare_args() -> CommonArgs {
     }
 }
 
+/// The smallest config `validate()` accepts, for tests that then break one
+/// thing and expect a named error.
+fn valid_config() -> Config {
+    Config {
+        source: dfe_transform_vector::config::SourceConfig {
+            brokers: vec!["kafka:9092".into()],
+            topics: vec!["input".into()],
+            group_id: "grp".into(),
+            ..Default::default()
+        },
+        sink: dfe_transform_vector::config::SinkConfig {
+            brokers: vec!["kafka:9092".into()],
+            topic: "output".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The app's own config keys must reach scalo's arg resolvers
 // ---------------------------------------------------------------------------
@@ -131,24 +150,8 @@ fn verbose_outranks_the_config_level() {
 #[test]
 fn the_assembled_exporter_binds_the_configured_address() {
     let out = tempfile::tempdir().expect("tempdir");
-    let config = Config {
-        source: dfe_transform_vector::config::SourceConfig {
-            brokers: vec!["kafka:9092".into()],
-            topics: vec!["input".into()],
-            group_id: "grp".into(),
-            ..Default::default()
-        },
-        sink: dfe_transform_vector::config::SinkConfig {
-            brokers: vec!["kafka:9092".into()],
-            topic: "output".into(),
-            ..Default::default()
-        },
-        metrics: dfe_transform_vector::config::MetricsConfig {
-            vector_metrics_address: "127.0.0.1:19598".into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let mut config = valid_config();
+    config.metrics.vector_metrics_address = "127.0.0.1:19598".into();
     assembler::assemble(&config, out.path()).expect("assemble");
 
     let observability =
@@ -176,24 +179,8 @@ fn the_assembled_exporter_binds_the_configured_address() {
 #[test]
 fn a_version_source_the_runtime_cannot_honour_is_refused() {
     for source in ["latest", "stable", "0.56", "0.56.0"] {
-        let config = Config {
-            source: dfe_transform_vector::config::SourceConfig {
-                brokers: vec!["kafka:9092".into()],
-                topics: vec!["input".into()],
-                group_id: "grp".into(),
-                ..Default::default()
-            },
-            sink: dfe_transform_vector::config::SinkConfig {
-                brokers: vec!["kafka:9092".into()],
-                topic: "output".into(),
-                ..Default::default()
-            },
-            vector: dfe_transform_vector::config::VectorConfig {
-                version_source: source.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let mut config = valid_config();
+        config.vector.version_source = source.into();
         let err = config
             .validate()
             .expect_err("a version_source nothing acts on must be refused");
@@ -213,24 +200,9 @@ fn a_misspelt_logging_value_is_named_as_a_config_error() {
         ("infp", "auto", "logging.level"),
         ("info", "jsonn", "logging.format"),
     ] {
-        let config = Config {
-            source: dfe_transform_vector::config::SourceConfig {
-                brokers: vec!["kafka:9092".into()],
-                topics: vec!["input".into()],
-                group_id: "grp".into(),
-                ..Default::default()
-            },
-            sink: dfe_transform_vector::config::SinkConfig {
-                brokers: vec!["kafka:9092".into()],
-                topic: "output".into(),
-                ..Default::default()
-            },
-            logging: dfe_transform_vector::config::LoggingConfig {
-                level: level.into(),
-                format: format.into(),
-            },
-            ..Default::default()
-        };
+        let mut config = valid_config();
+        config.logging.level = level.into();
+        config.logging.format = format.into();
         let err = config.validate().expect_err("a bad enum must be refused");
         assert!(
             err.to_string().contains(expected),
@@ -239,22 +211,67 @@ fn a_misspelt_logging_value_is_named_as_a_config_error() {
     }
 }
 
+/// `librdkafka_options` is documented as the layer above everything, and for
+/// the keys the generator derives from the big dials it is the opposite: those
+/// are written after the merge. Setting `compression.type: lz4` next to
+/// `sink.compression: zstd` produced zstd and logged nothing.
+#[test]
+fn a_librdkafka_option_the_generator_overwrites_is_refused() {
+    let cases: [(&str, &str, &str); 3] = [
+        ("sink", "compression.type", "sink.compression"),
+        ("sink", "security.protocol", "sink.sasl.enabled"),
+        ("source", "sasl.mechanism", "source.sasl.mechanism"),
+    ];
+
+    for (side, key, owner) in cases {
+        let mut config = valid_config();
+        // Both sides carry SASL so the conditional derivations are live.
+        for sasl in [&mut config.source.sasl, &mut config.sink.sasl] {
+            sasl.enabled = true;
+            sasl.mechanism = "scram_sha_512".into();
+            sasl.username = "u".into();
+            sasl.password = "p".into();
+        }
+        let options = if side == "sink" {
+            &mut config.sink.librdkafka_options
+        } else {
+            &mut config.source.librdkafka_options
+        };
+        options.insert(key.into(), "whatever".into());
+
+        let err = config
+            .validate()
+            .expect_err("an option the generator overwrites must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(key) && msg.contains(owner),
+            "error should name both {key} and {owner}, got: {msg}"
+        );
+    }
+}
+
+/// The check tracks what the generator actually derives, so it must not turn
+/// into a blanket denylist: with SASL off nothing writes `sasl.mechanism`, and
+/// setting it by hand is legitimate.
+#[test]
+fn a_librdkafka_option_the_generator_leaves_alone_is_accepted() {
+    let mut config = valid_config();
+    config
+        .source
+        .librdkafka_options
+        .insert("sasl.mechanism".into(), "GSSAPI".into());
+    config
+        .source
+        .librdkafka_options
+        .insert("fetch.min.bytes".into(), "2097152".into());
+    config
+        .validate()
+        .expect("SASL is off, so nothing derives sasl.mechanism");
+}
+
 #[test]
 fn preshipped_is_the_version_source_that_validates() {
-    let config = Config {
-        source: dfe_transform_vector::config::SourceConfig {
-            brokers: vec!["kafka:9092".into()],
-            topics: vec!["input".into()],
-            group_id: "grp".into(),
-            ..Default::default()
-        },
-        sink: dfe_transform_vector::config::SinkConfig {
-            brokers: vec!["kafka:9092".into()],
-            topic: "output".into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let config = valid_config();
     assert_eq!(config.vector.version_source, "preshipped");
     config.validate().expect("the default must validate");
 }
