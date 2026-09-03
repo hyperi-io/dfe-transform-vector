@@ -177,10 +177,9 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
 
 /// Merge a base profile with user overrides.
 ///
-/// This is the full 3-layer merge for a single component:
-/// 1. Central config (or scalo fallback) baseline
-/// 2. Service-specific overrides (only if not already set by user)
-/// 3. User config YAML `librdkafka_options` (highest priority)
+/// Applied in order, so the last writer wins: the central config (or its scalo
+/// fallback) baseline, then service-specific overrides, then the user's
+/// `librdkafka_options` from config YAML.
 #[must_use]
 pub fn merge_layers(
     base: &HashMap<String, String>,
@@ -189,14 +188,10 @@ pub fn merge_layers(
 ) -> HashMap<String, String> {
     let mut merged = base.clone();
 
-    // Service overrides — only if not already set by user
     for (k, v) in service_overrides {
-        if !user_overrides.contains_key(*k) {
-            merged.insert((*k).to_string(), (*v).to_string());
-        }
+        merged.insert((*k).to_string(), (*v).to_string());
     }
 
-    // User overrides — highest priority
     for (k, v) in user_overrides {
         merged.insert(k.clone(), v.clone());
     }
