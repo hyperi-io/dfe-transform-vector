@@ -18,6 +18,18 @@ pipeline:
   name: "my-pipeline"
 
 # -----------------------------------------------------------------------------
+# DFE source name
+# -----------------------------------------------------------------------------
+# The one setting a working config cannot go without. It derives the platform
+# topic names and the consumer group. With pipeline.name "my-pipeline" above:
+#   source.topics   -> ["my_source_land"]
+#   sink.topic      -> "my_source_load"
+#   source.group_id -> "dfe-transform-vector-my-pipeline"
+# Anything set explicitly below wins over the derived value. Without it,
+# sink.topic has no default and startup stops at "sink.topic must not be empty".
+dfe_source: "my_source"
+
+# -----------------------------------------------------------------------------
 # Kafka source (input)
 # -----------------------------------------------------------------------------
 # source:
@@ -98,43 +110,46 @@ pipeline:
 #   # Version pinning — prevents silent version drift
 #   version: "0.57.0"
 #   version_check: "strict"           # strict, warn, disabled
+#   # The supervisor runs `binary` and never fetches one, so `preshipped` is
+#   # the only value accepted. To run a different Vector, point `binary` at it
+#   # and set `version` to match.
+#   version_source: "preshipped"
 
 # -----------------------------------------------------------------------------
 # Metrics endpoint
 # -----------------------------------------------------------------------------
-# Also serves /livez and /readyz -- the whole probe surface is on this port.
+# `address` also serves /livez and /readyz -- the whole probe surface is on that
+# port. `--metrics-addr` and METRICS_ADDR outrank it.
+#
+# `vector_metrics_address` is where Vector's own prometheus_exporter binds.
+# Prometheus scrapes it as a second target on the pod IP, so loopback makes it
+# unreachable from outside the pod.
 # metrics:
 #   address: "0.0.0.0:9090"
+#   vector_metrics_address: "0.0.0.0:9598"
 
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
+# --log-level/LOG_LEVEL and --log-format/LOG_FORMAT outrank these;
+# --verbose/--quiet outrank everything.
 logging:
   level: "info"                        # trace, debug, info, warn, error
-  format: "json"                       # json, text
+  format: "auto"                       # json, text, auto (text on a tty)
 
 # -----------------------------------------------------------------------------
 # Scaling pressure
 # -----------------------------------------------------------------------------
-# The `scaling:` block is shared by TWO readers on the same key:
-#   - rustlib's horizontal ScalingEngine (enabled / interval_secs /
-#     transport / params) -- read from the cascade at startup.
-#   - this wrapper's legacy KEDA knob (pressure_threshold).
-# Each ignores the other's fields.
+# NOTHING IN THIS PROCESS READS THIS BLOCK. It is accepted for parity with the
+# `scaling:` block every DFE service takes, and `pressure_threshold` is
+# range-checked, but no code consumes either half:
+#   - the engine keys (enabled / interval_secs / transport / params) belong to
+#     scalo's ScalingEngine, which reads them from scalo's own config cascade.
+#     This app does not initialise that cascade, so they never arrive.
+#   - `pressure_threshold` has no reader here at all.
 #
-# This is a Vector SUPERVISOR: Vector owns the Kafka consumer, not this
-# process, so inbound transport is `other` and the smart default reduces
-# to CPU-driven, gated by Vector subprocess health (circuit opens when
-# Vector is down). Kafka consumer-group lag is still seen externally by
-# the KEDA kafka trigger. Relaying Vector-internal backlog as a domain
-# scaling signal is a follow-up.
+# What actually scales this app is the chart's KEDA triggers -- consumer-group
+# lag and CPU -- gated by the Vector subprocess circuit, which pins pressure to
+# 0 while the subprocess is down (more pods cannot help a dead subprocess).
 # scaling:
-#   enabled: true
-#   interval_secs: 15
-#   transport:
-#     inbound: other
-#     outbound: other
-#   params:
-#     cpu_target: 0.70
-#   # legacy KEDA knob (this wrapper only):
 #   pressure_threshold: 0.8

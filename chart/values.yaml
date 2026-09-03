@@ -115,7 +115,7 @@ config:
     version_check: warn
   metrics:
     address: 0.0.0.0:9090
-    vector_metrics_address: 127.0.0.1:9598
+    vector_metrics_address: 0.0.0.0:9598
   logging:
     level: info
     format: json

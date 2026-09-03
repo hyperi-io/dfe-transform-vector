@@ -16,10 +16,12 @@
 //!
 //! Vector's own metrics (transport, records, internal counters) are
 //! exposed by Vector's `prometheus_exporter` sink on
-//! `config.metrics.vector_metrics_address` (default `127.0.0.1:9598`).
-//! Prometheus scrapes that endpoint directly as a separate target — the
-//! wrapper does NOT proxy-merge it any more. The chart's `extraPorts`
-//! plus a PodMonitor selector handles the second target.
+//! `config.metrics.vector_metrics_address` (default `0.0.0.0:9598`),
+//! which the assembler writes into `99_observability.yaml`. Prometheus
+//! scrapes that endpoint directly as a separate target -- the wrapper does
+//! NOT proxy-merge it any more. The chart declares no container port for
+//! it, so the second target needs a PodMonitor (or scrape annotation)
+//! naming the port number.
 
 use std::time::{Duration, Instant};
 

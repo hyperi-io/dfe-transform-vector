@@ -97,9 +97,12 @@ pub fn contract() -> DeploymentContract {
                 "version": VECTOR_VERSION,
                 "version_check": "warn"
             },
+            // vector_metrics_address is where Vector's own prometheus_exporter
+            // binds. Prometheus scrapes it as a second target on the pod IP, so
+            // loopback would make it unreachable.
             "metrics": {
                 "address": "0.0.0.0:9090",
-                "vector_metrics_address": "127.0.0.1:9598"
+                "vector_metrics_address": "0.0.0.0:9598"
             },
             "logging": {
                 "level": "info",

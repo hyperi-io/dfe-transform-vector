@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use serde_yaml_ng::Value;
 
 use super::kafka_defaults;
-use super::loader::{BufferConfig, SinkConfig, SourceConfig, VectorConfig};
+use super::loader::{BufferConfig, MetricsConfig, SinkConfig, SourceConfig, VectorConfig};
 
 /// Canonical label for the generated Kafka source component.
 pub const SOURCE_LABEL: &str = "dfe_source";
@@ -216,8 +216,12 @@ pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
 }
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
+///
+/// The exporter binds `metrics.vector_metrics_address`. Hard-coding it here
+/// instead left that config key accepted, validated and inert: Prometheus and
+/// the operator disagreed about where Vector's metrics were, and nothing said so.
 #[must_use]
-pub fn generate_observability_yaml() -> Value {
+pub fn generate_observability_yaml(metrics: &MetricsConfig) -> Value {
     let mut metrics_source = serde_yaml_ng::Mapping::new();
     metrics_source.insert(val("type"), val("internal_metrics"));
 
@@ -230,7 +234,7 @@ pub fn generate_observability_yaml() -> Value {
         val("inputs"),
         Value::Sequence(vec![val("internal_metrics")]),
     );
-    prom_sink.insert(val("address"), val("0.0.0.0:9598"));
+    prom_sink.insert(val("address"), val(&metrics.vector_metrics_address));
 
     let mut sinks = serde_yaml_ng::Mapping::new();
     sinks.insert(val("prometheus_exporter"), Value::Mapping(prom_sink));
@@ -667,12 +671,33 @@ mod tests {
 
     #[test]
     fn observability_yaml() {
-        let yaml = generate_observability_yaml();
+        let yaml = generate_observability_yaml(&crate::config::MetricsConfig::default());
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("internal_metrics"));
         assert!(text.contains("prometheus_exporter"));
         assert!(text.contains("0.0.0.0:9598"));
+    }
+
+    /// The exporter has to land where the config says, or Prometheus scrapes a
+    /// port nothing is listening on and the pod reports no Vector metrics.
+    #[test]
+    fn observability_yaml_binds_the_configured_address() {
+        let metrics = crate::config::MetricsConfig {
+            vector_metrics_address: "127.0.0.1:19598".into(),
+            ..Default::default()
+        };
+        let yaml = generate_observability_yaml(&metrics);
+        let address = yaml
+            .get("sinks")
+            .and_then(|s| s.get("prometheus_exporter"))
+            .and_then(|e| e.get("address"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            address,
+            Some("127.0.0.1:19598"),
+            "metrics.vector_metrics_address must reach the generated exporter"
+        );
     }
 
     #[test]

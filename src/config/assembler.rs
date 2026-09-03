@@ -78,7 +78,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_yaml(output_dir, "90_sink.yaml", &sink_yaml)?;
 
     // Generate observability YAML
-    let obs_yaml = generate_observability_yaml();
+    let obs_yaml = generate_observability_yaml(&config.metrics);
     write_yaml(output_dir, "99_observability.yaml", &obs_yaml)?;
 
     info!(dir = %output_dir.display(), "assembled Vector config directory");
