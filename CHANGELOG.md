@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.36](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.35...v1.0.36) (2026-09-07)
+
+### Bug Fixes
+
+* **metrics:** cap the vector exposition read and expire merged series ([405b641](https://github.com/hyperi-io/dfe-transform-vector/commit/405b641b43c065554e84cc7a2b3f14a5e757b9fd)), closes [#70](https://github.com/hyperi-io/dfe-transform-vector/issues/70)
+
 ## [1.0.35](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.34...v1.0.35) (2026-09-07)
 
 ### Bug Fixes
