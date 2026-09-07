@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.35](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.34...v1.0.35) (2026-09-07)
+
+### Bug Fixes
+
+* **metrics:** merge vector's internal metrics into the scalo registry ([5e538d5](https://github.com/hyperi-io/dfe-transform-vector/commit/5e538d53e19ffbfe76224b6963c1fb46df70488e))
+* **pipelines:** ship the filebeat pipeline with the vrl embedded and kafka in and out ([2227cda](https://github.com/hyperi-io/dfe-transform-vector/commit/2227cdaa022b88f9858550d02287c2781117376d))
+
 ## [1.0.34](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.33...v1.0.34) (2026-09-01)
 
 ### Bug Fixes
