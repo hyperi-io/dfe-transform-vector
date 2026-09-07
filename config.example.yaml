@@ -110,6 +110,8 @@ pipeline:
 #   # Where Vector's prometheus_exporter binds. Loopback -- the wrapper is its
 #   # only reader, so nothing outside the pod needs the port.
 #   vector_metrics_address: "127.0.0.1:9598"
+#   # Scrape ticks a merged vector_* gauge may go unseen before it is zeroed.
+#   vector_metrics_expiry_ticks: 4
 
 # -----------------------------------------------------------------------------
 # Logging

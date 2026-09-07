@@ -122,7 +122,13 @@ because Vector, not the wrapper, owns the Kafka client:
 
 An unreachable exporter is not fatal: the scrape warns at most once every five
 minutes, counts `transform_vector_scrape_failures_total`, and leaves readiness
-alone.
+alone. So is an oversized one -- a response past 4 MiB is a failed scrape, not
+a partial merge.
+
+A component Vector drops stops appearing in the exposition. Its gauges are
+zeroed after `metrics.vector_metrics_expiry_ticks` scrapes without it (default
+4), rather than reading their last value until the pod restarts. Its counters
+are left flat, which already rates to zero.
 
 `/readyz` reports whether the Vector subprocess EXISTS, not whether it is
 carrying traffic. The gate is that the child was still alive 500ms after spawn,

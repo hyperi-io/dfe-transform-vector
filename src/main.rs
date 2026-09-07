@@ -312,6 +312,7 @@ async fn run_transform_service(
         metrics.clone(),
         config.metrics.vector_metrics_address.clone(),
         scalo::metrics::MetricsConfig::default().update_interval,
+        config.metrics.vector_metrics_expiry_ticks,
     );
 
     // Keep uptime_seconds fresh between scrapes.

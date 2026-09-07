@@ -840,6 +840,7 @@ fn config_with_all_fields_populated_validates() {
         metrics: MetricsConfig {
             address: "0.0.0.0:9090".into(),
             vector_metrics_address: "127.0.0.1:9598".into(),
+            ..Default::default()
         },
         logging: LoggingConfig {
             level: "debug".into(),
