@@ -17,6 +17,10 @@ paths = [
     # Git submodules (have their own scanning)
     '''(^|/)ci/''',
     '''(^|/)ai/''',
+    # The bundled filebeat pipeline is ported public Vector templates, not
+    # credentials: the Meraki event subtype '8021x_eap_failure' matches a key
+    # rule. Allowlisted the same way in dfe-transform-vrl, where it is maintained.
+    '''pipelines/filebeat/filebeat\.yaml''',
     # Uncomment and customise as needed
     # '''tests/.*\.py''',
     # '''tests/fixtures/.*''',
