@@ -132,6 +132,7 @@ properties:
     default:
       address: 0.0.0.0:9090
       vector_metrics_address: 127.0.0.1:9598
+      vector_metrics_expiry_ticks: 4
   logging:
     description: Logging. **Requires restart** (subscriber configured at startup).
     $ref: '#/$defs/LoggingConfig'
@@ -544,6 +545,14 @@ $defs:
           outside the pod needs this port. Keep it on loopback.
         type: string
         default: 127.0.0.1:9598
+      vector_metrics_expiry_ticks:
+        description: |-
+          Scrape ticks a merged `vector_*` gauge may go unseen before it is
+          zeroed, so a component Vector drops stops reporting its last value.
+        type: integer
+        format: uint32
+        minimum: 0
+        default: 4
   LoggingConfig:
     description: Logging configuration.
     type: object

@@ -409,6 +409,9 @@ pub struct MetricsConfig {
     /// merging every `vector_*` sample into the scalo registry, so nothing
     /// outside the pod needs this port. Keep it on loopback.
     pub vector_metrics_address: String,
+    /// Scrape ticks a merged `vector_*` gauge may go unseen before it is
+    /// zeroed, so a component Vector drops stops reporting its last value.
+    pub vector_metrics_expiry_ticks: u32,
 }
 
 impl Default for MetricsConfig {
@@ -416,6 +419,7 @@ impl Default for MetricsConfig {
         Self {
             address: "0.0.0.0:9090".to_string(),
             vector_metrics_address: "127.0.0.1:9598".to_string(),
+            vector_metrics_expiry_ticks: crate::metrics::scrape::DEFAULT_EXPIRY_TICKS,
         }
     }
 }

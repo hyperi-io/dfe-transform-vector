@@ -99,7 +99,8 @@ pub fn contract() -> DeploymentContract {
             },
             "metrics": {
                 "address": "0.0.0.0:9090",
-                "vector_metrics_address": "127.0.0.1:9598"
+                "vector_metrics_address": "127.0.0.1:9598",
+                "vector_metrics_expiry_ticks": 4
             },
             "logging": {
                 "level": "info",

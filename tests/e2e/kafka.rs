@@ -374,11 +374,12 @@ async fn run_pipeline_assertions(
     // until the exposition carries the delivered events.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut derived = dfe_transform_vector::metrics::scrape::Derived::default();
+    let mut merger = dfe_transform_vector::metrics::scrape::ExpositionMerger::default();
     let mut last_err = String::new();
     while Instant::now() < deadline {
         match dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await {
             Ok(body) => {
-                derived = dfe_transform_vector::metrics::scrape::merge_exposition(&body);
+                derived = merger.merge(&body);
                 if derived.received >= 1.0 && derived.sent >= 1.0 {
                     break;
                 }
