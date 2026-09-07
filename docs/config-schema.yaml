@@ -536,7 +536,12 @@ $defs:
         type: string
         default: 0.0.0.0:9090
       vector_metrics_address:
-        description: Vector's prometheus_exporter address to proxy (host:port).
+        description: |-
+          Vector's `prometheus_exporter` bind address (host:port).
+
+          The wrapper writes it into the assembled Vector config AND scrapes it,
+          merging every `vector_*` sample into the scalo registry, so nothing
+          outside the pod needs this port. Keep it on loopback.
         type: string
         default: 127.0.0.1:9598
   LoggingConfig:

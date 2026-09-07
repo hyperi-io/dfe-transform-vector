@@ -258,23 +258,31 @@ dfe_transform_vector_config_reloads_total{result="failure"} 0
 dfe_transform_vector_config_validation_errors_total 0
 ```
 
-Transport-level metrics (`dfe_transport_*`, `dfe_records_*`) come from Vector's
-internal prometheus_exporter via the metrics proxy — the wrapper doesn't handle
-Kafka I/O directly.
+Vector, not the wrapper, owns the Kafka client, so the record counters
+(`records_received_total`, `records_processed_total`, `records_delivered_total`)
+are derived from Vector's own component counters by the scrape below.
 
-**Proxied Vector metrics** (from Vector's `prometheus_exporter` sink on :9598, merged into our :9090 endpoint):
+**Merged Vector metrics** (scraped from Vector's `prometheus_exporter` on
+loopback `metrics.vector_metrics_address`, registered on the same registry
+:9090 serves and scalo pushes over OTLP):
 
 ```
-# These come from Vector's internal_metrics source — passed through as-is
-vector_events_in_total{component_id="dfe_source"} 150000
-vector_events_out_total{component_id="dfe_sink"} 149950
+# Names and labels as Vector emits them
+vector_component_received_events_total{component_id="dfe_source",component_type="kafka"} 150000
+vector_component_sent_events_total{component_id="dfe_sink",component_kind="sink"} 149950
 vector_component_errors_total{component_id="parse"} 50
 vector_buffer_byte_size{component_id="dfe_sink"} 1048576
-vector_kafka_consumer_offset_lag{...} 200
-# ... all other Vector internal metrics
+# ... every other Vector internal metric
 ```
 
-The combined `/metrics` endpoint gives Prometheus a single scrape target that shows both wrapper state and Vector pipeline state.
+Counters register as counters via `absolute`, so a Vector restart holds the
+totals rather than reporting a reset the pod did not have. A histogram arrives
+pre-aggregated, so each cumulative `_bucket` re-registers as a counter carrying
+its `le` label: the metrics crate's `Histogram` takes observations, and
+replaying buckets through it would change the numbers.
+
+One scrape of :9090 therefore carries wrapper state and Vector pipeline state,
+and 9598 stays a loopback debug surface with no reader outside the pod.
 
 ### 4.4 Scaling
 
@@ -410,7 +418,7 @@ sinks:
     type: prometheus_exporter
     inputs:
       - internal_metrics
-    address: "0.0.0.0:9598"
+    address: "127.0.0.1:9598"   # metrics.vector_metrics_address
 ```
 
 ### 5.3 DAG Auto-Wiring

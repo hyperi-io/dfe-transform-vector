@@ -589,7 +589,7 @@
           "default": "0.0.0.0:9090"
         },
         "vector_metrics_address": {
-          "description": "Vector's prometheus_exporter address to proxy (host:port).",
+          "description": "Vector's `prometheus_exporter` bind address (host:port).\n\nThe wrapper writes it into the assembled Vector config AND scrapes it,\nmerging every `vector_*` sample into the scalo registry, so nothing\noutside the pod needs this port. Keep it on loopback.",
           "type": "string",
           "default": "127.0.0.1:9598"
         }

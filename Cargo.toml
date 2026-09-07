@@ -87,6 +87,7 @@ nix = { version = ">=0.31.3, <0.32", features = ["signal", "process"] }
 
 # Allocator (Tier 1 release-track optimisation; CI opts in per channel)
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
+prometheus-parse = ">=0.2.5, <0.3"
 
 [features]
 # CI (hyperi-ci) opts in via --features jemalloc per release channel.

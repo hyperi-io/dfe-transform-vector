@@ -8,7 +8,5 @@
 
 mod filebeat_kafka;
 mod kafka;
-// metrics_proxy module removed — wrapper no longer proxies Vector's
-// /metrics. Vector exposes its own prometheus_exporter on
-// `config.metrics.vector_metrics_address`; Prometheus scrapes that
-// endpoint directly as a separate target.
+// The Vector metrics merge is asserted inside `kafka` against a real Vector,
+// and against a fake exporter in `tests/integration/metrics.rs`.

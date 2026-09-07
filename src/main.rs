@@ -34,6 +34,7 @@ use dfe_transform_vector::config::validate::{
 };
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health;
+use dfe_transform_vector::metrics::scrape::spawn_vector_scrape_task;
 use dfe_transform_vector::metrics::{
     WrapperMetrics, spawn_circuit_gate_task, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
 };
@@ -304,6 +305,14 @@ async fn run_transform_service(
     // `runtime.scaling` is `None` when the scaling engine is disabled/absent;
     // the gate task skips itself in that case.
     spawn_circuit_gate_task(&lifecycle, runtime.scaling.clone());
+
+    // Merge Vector's loopback exporter into this registry on scalo's own
+    // metrics interval, so vector_* rides /metrics and the OTLP push.
+    spawn_vector_scrape_task(
+        metrics.clone(),
+        config.metrics.vector_metrics_address.clone(),
+        scalo::metrics::MetricsConfig::default().update_interval,
+    );
 
     // Keep uptime_seconds fresh between scrapes.
     spawn_uptime_tick_task(

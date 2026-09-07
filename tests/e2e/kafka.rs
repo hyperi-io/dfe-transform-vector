@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
-    Config, DecodingConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig,
-    TransformConfig, VectorConfig,
+    Config, DecodingConfig, MetricsConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig,
+    TlsConfig, TransformConfig, VectorConfig,
 };
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
 use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
@@ -74,6 +74,16 @@ fn write_enrich_transform(dir: &std::path::Path) {
 }
 
 /// Build a `dfe-transform-vector` Config that mirrors a scalo `KafkaConfig`.
+/// Claim an ephemeral loopback address for Vector's `prometheus_exporter`.
+///
+/// The default 9598 collides with anything else running on the host, and the
+/// wrapper now drives the exporter address from config.
+fn free_loopback_addr() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    format!("127.0.0.1:{}", addr.port())
+}
+
 fn config_from_kafka_test_config(
     kf: &KafkaConfig,
     source_topic: &str,
@@ -81,6 +91,7 @@ fn config_from_kafka_test_config(
     group_id: &str,
     transforms_dir: &str,
     data_dir: &str,
+    vector_metrics_address: &str,
 ) -> Config {
     let protocol = kf.security_protocol.to_lowercase();
     let sasl_enabled = protocol.starts_with("sasl");
@@ -151,6 +162,10 @@ fn config_from_kafka_test_config(
             version_check: "disabled".into(),
             ..Default::default()
         },
+        metrics: MetricsConfig {
+            vector_metrics_address: vector_metrics_address.into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -193,6 +208,7 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
     write_enrich_transform(&transforms_dir);
 
     let config_dir = work.path().join("cfg");
+    let exporter_addr = free_loopback_addr();
     let dfe_config = config_from_kafka_test_config(
         &kf_base,
         &source_topic,
@@ -200,6 +216,7 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
         &group_id,
         &transforms_dir.to_string_lossy(),
         &data_dir.to_string_lossy(),
+        &exporter_addr,
     );
     dfe_config.validate().expect("config validates");
     assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
@@ -236,6 +253,7 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
         &group_id,
         &suffix,
         &config_dir,
+        &exporter_addr,
     )
     .await;
 
@@ -265,6 +283,7 @@ async fn run_pipeline_assertions(
     group_id: &str,
     suffix: &str,
     config_dir: &std::path::Path,
+    exporter_addr: &str,
 ) -> Result<(), String> {
     // Give Vector time to wire up consumer group / join partitions.
     sleep(Duration::from_secs(3)).await;
@@ -348,6 +367,30 @@ async fn run_pipeline_assertions(
     if !payload.contains(suffix) {
         return Err(format!(
             "payload id does not match — received wrong message: {payload}"
+        ));
+    }
+
+    // Vector publishes internal metrics on its own flush interval, so poll
+    // until the exposition carries the delivered events.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut derived = dfe_transform_vector::metrics::scrape::Derived::default();
+    let mut last_err = String::new();
+    while Instant::now() < deadline {
+        match dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await {
+            Ok(body) => {
+                derived = dfe_transform_vector::metrics::scrape::merge_exposition(&body);
+                if derived.received >= 1.0 && derived.sent >= 1.0 {
+                    break;
+                }
+                last_err = format!("exposition carried {derived:?}");
+            }
+            Err(e) => last_err = e,
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+    if derived.received < 1.0 || derived.sent < 1.0 {
+        return Err(format!(
+            "Vector metrics did not merge into throughput counters ({derived:?}): {last_err}"
         ));
     }
 

@@ -216,8 +216,12 @@ pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
 }
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
+///
+/// `address` is `metrics.vector_metrics_address`; the wrapper scrapes the same
+/// address and merges the samples into the scalo registry, so it stays on
+/// loopback rather than being published.
 #[must_use]
-pub fn generate_observability_yaml() -> Value {
+pub fn generate_observability_yaml(address: &str) -> Value {
     let mut metrics_source = serde_yaml_ng::Mapping::new();
     metrics_source.insert(val("type"), val("internal_metrics"));
 
@@ -230,7 +234,7 @@ pub fn generate_observability_yaml() -> Value {
         val("inputs"),
         Value::Sequence(vec![val("internal_metrics")]),
     );
-    prom_sink.insert(val("address"), val("0.0.0.0:9598"));
+    prom_sink.insert(val("address"), val(address));
 
     let mut sinks = serde_yaml_ng::Mapping::new();
     sinks.insert(val("prometheus_exporter"), Value::Mapping(prom_sink));
@@ -667,12 +671,21 @@ mod tests {
 
     #[test]
     fn observability_yaml() {
-        let yaml = generate_observability_yaml();
+        let yaml = generate_observability_yaml("127.0.0.1:9598");
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("internal_metrics"));
         assert!(text.contains("prometheus_exporter"));
-        assert!(text.contains("0.0.0.0:9598"));
+        assert!(text.contains("127.0.0.1:9598"));
+    }
+
+    #[test]
+    fn observability_yaml_honours_configured_address() {
+        let yaml = generate_observability_yaml("127.0.0.1:19598");
+        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+
+        assert!(text.contains("127.0.0.1:19598"));
+        assert!(!text.contains(":9598"), "hardcoded default leaked: {text}");
     }
 
     #[test]
