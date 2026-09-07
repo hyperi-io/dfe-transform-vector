@@ -115,6 +115,9 @@ config:
     version_check: warn
   metrics:
     address: 0.0.0.0:9090
+    # -- Where Vector's prometheus_exporter binds. The wrapper scrapes it and
+    # merges vector_* into the 9090 registry, so keep it on loopback: it is a
+    # debug surface, not a scrape target, and needs no container port.
     vector_metrics_address: 127.0.0.1:9598
   logging:
     level: info

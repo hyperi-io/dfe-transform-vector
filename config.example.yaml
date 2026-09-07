@@ -102,9 +102,14 @@ pipeline:
 # -----------------------------------------------------------------------------
 # Metrics endpoint
 # -----------------------------------------------------------------------------
-# Also serves /livez and /readyz -- the whole probe surface is on this port.
+# Also serves /livez and /readyz -- the whole probe surface is on this port,
+# and it carries Vector's own vector_* as well: the wrapper scrapes the
+# exporter below and merges the samples into this registry.
 # metrics:
 #   address: "0.0.0.0:9090"
+#   # Where Vector's prometheus_exporter binds. Loopback -- the wrapper is its
+#   # only reader, so nothing outside the pod needs the port.
+#   vector_metrics_address: "127.0.0.1:9598"
 
 # -----------------------------------------------------------------------------
 # Logging

@@ -15,7 +15,9 @@ flowchart TB
         CE["Config engine<br/>big-dial YAML -> Vector config dir"]
         PM["Process manager<br/>spawn / signal / crash recovery"]
         VEC["Vector.dev<br/>subprocess (--config-dir)"]
-        OPS["Ops :9090<br/>/metrics /livez /readyz<br/>wrapper + proxied Vector"]
+        OPS["Ops :9090<br/>/metrics /livez /readyz<br/>wrapper + merged Vector"]
+        EXP["Vector exporter :9598<br/>loopback only"]
+        VEC --> EXP --> OPS
         CE --> VEC
         PM --> VEC
     end
@@ -33,7 +35,8 @@ flowchart TB
   then SIGHUPs Vector (source/sink changes require pod restart)
 - **Version pinning**: Config-level Vector version check (strict/warn/disabled)
 - **Production Kafka tuning**: librdkafka defaults baked in with 4-layer cascade
-- **Metrics**: Wrapper metrics + proxied Vector internal metrics on single endpoint
+- **Metrics**: Vector's own `vector_*` merged into the wrapper's registry, so one
+  endpoint and one OTLP push carry both
 - **Helm chart**: Generated Deployment-based chart with KEDA, HPA, ConfigMap
 
 ## Quick Start
@@ -91,7 +94,35 @@ pod ready".
 |----------|------|---------|
 | `GET /livez` | 9090 | K8s liveness and startup probes (the supervisor is up) |
 | `GET /readyz` | 9090 | K8s readiness probe (200 only while the Vector subprocess is up -- see below) |
-| `GET /metrics` | 9090 | Prometheus scrape (wrapper + proxied Vector metrics) |
+| `GET /metrics` | 9090 | Prometheus scrape (wrapper + merged Vector metrics) |
+| `GET /metrics` | 9598 | Vector's own exporter, loopback only, for debugging |
+
+## Metrics
+
+9090 carries everything. The wrapper GETs Vector's `prometheus_exporter` on
+`metrics.vector_metrics_address` (default `127.0.0.1:9598`) at scalo's metrics
+interval, parses the exposition, and registers every sample on the same
+registry scalo serves and pushes over OTLP. `vector_*` names and labels are
+preserved, with the platform namespace and labels scalo applies to every other
+metric.
+
+9598 is a loopback debug surface, not a scrape target. Nothing outside the pod
+needs it: no second Prometheus target, no PodMonitor selector, no published
+container port. Change the port with
+`DFE_TRANSFORM_METRICS__VECTOR_METRICS_ADDRESS` (or `metrics.vector_metrics_address`
+in the config file) and both the Vector sink and the wrapper's scrape follow it.
+
+The merge also feeds the app's own throughput counters, which otherwise read 0
+because Vector, not the wrapper, owns the Kafka client:
+
+| Wrapper metric | Vector source |
+|----------------|---------------|
+| `records_received_total` | `vector_component_received_events_total{component_id="dfe_source"}` |
+| `records_processed_total`, `records_delivered_total` | `vector_component_sent_events_total{component_id="dfe_sink"}` |
+
+An unreachable exporter is not fatal: the scrape warns at most once every five
+minutes, counts `transform_vector_scrape_failures_total`, and leaves readiness
+alone.
 
 `/readyz` reports whether the Vector subprocess EXISTS, not whether it is
 carrying traffic. The gate is that the child was still alive 500ms after spawn,

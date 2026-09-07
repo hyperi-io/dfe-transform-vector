@@ -403,7 +403,11 @@ impl Default for VectorConfig {
 pub struct MetricsConfig {
     /// Metrics server bind address (host:port).
     pub address: String,
-    /// Vector's prometheus_exporter address to proxy (host:port).
+    /// Vector's `prometheus_exporter` bind address (host:port).
+    ///
+    /// The wrapper writes it into the assembled Vector config AND scrapes it,
+    /// merging every `vector_*` sample into the scalo registry, so nothing
+    /// outside the pod needs this port. Keep it on loopback.
     pub vector_metrics_address: String,
 }
 

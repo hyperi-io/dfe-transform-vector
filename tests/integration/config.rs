@@ -156,7 +156,9 @@ fn end_to_end_assembly_with_transforms() {
     let obs = fs::read_to_string(output_dir.path().join("99_observability.yaml")).unwrap();
     assert!(obs.contains("internal_metrics"));
     assert!(obs.contains("prometheus_exporter"));
-    assert!(obs.contains("0.0.0.0:9598"));
+    // The exporter binds where metrics.vector_metrics_address says, on
+    // loopback, because the wrapper is its only reader.
+    assert!(obs.contains("127.0.0.1:9598"));
 
     // Verify transform files were written flat (3 files, prefixed with 50_)
     let mut files: Vec<String> = fs::read_dir(output_dir.path())
