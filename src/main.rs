@@ -26,6 +26,7 @@ use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
 use scalo::version_check::VersionCheckConfig;
 use tracing::{debug, error, info};
 
+use dfe_transform_vector::bridge;
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
@@ -137,6 +138,10 @@ impl ServiceApp for App {
             .validate()
             .map_err(|e| CliError::Config(format!("validation failed: {e}")))?;
         Ok(config)
+    }
+
+    fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
+        config.work_state()
     }
 
     async fn run_service(
@@ -394,6 +399,15 @@ async fn run_transform_service(
             )
             .await;
         });
+    }
+
+    // Direct transport: carry records between DFE's Push protocol and Vector's.
+    // Bound before Vector is spawned, so a port that cannot be taken fails
+    // startup rather than surfacing once the pod is already Ready.
+    if bridge::is_enabled(&config) {
+        let bridge = bridge::Bridge::build(&config).await?;
+        let bridge_shutdown = shutdown_tx.subscribe();
+        tokio::spawn(bridge.run(bridge_shutdown));
     }
 
     // Run Vector subprocess lifecycle loop

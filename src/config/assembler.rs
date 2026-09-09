@@ -56,7 +56,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_yaml(output_dir, "00_global.yaml", &global_yaml)?;
 
     // Generate source YAML
-    let source_yaml = generate_source_yaml(&config.source);
+    let source_yaml = generate_source_yaml(&config.source, &config.bridge);
     write_yaml(output_dir, "00_source.yaml", &source_yaml)?;
 
     // Load user transform files
@@ -74,7 +74,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_transforms(output_dir, &transforms, &wiring)?;
 
     // Generate sink YAML with wired inputs
-    let sink_yaml = generate_sink_yaml(&config.sink, &wiring.sink_inputs);
+    let sink_yaml = generate_sink_yaml(&config.sink, &config.bridge, &wiring.sink_inputs);
     write_yaml(output_dir, "90_sink.yaml", &sink_yaml)?;
 
     // Generate observability YAML

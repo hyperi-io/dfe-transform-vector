@@ -11,8 +11,9 @@ description: |-
   - `transforms.files` — watcher switches to new file list after successful reload
 
   **Requires pod restart:**
-  - `source.*` — Kafka consumer connections established at Vector startup
-  - `sink.*` — Kafka producer connections established at Vector startup
+  - `source.*` — the consumer or the Push listener is established at startup
+  - `sink.*` — the producer or the Push client is established at startup
+  - `bridge.*` — the two supervisor-to-Vector legs bind at startup
   - `pipeline.name` — used in consumer group_id and metrics labels at startup
   - `vector.*` — binary path, data_dir, config_dir, API address, log level
     set at Vector spawn
@@ -47,9 +48,11 @@ properties:
     default:
       name: default
   source:
-    description: Kafka source (input). **Requires restart.**
+    description: Source (input), on either transport. **Requires restart.**
     $ref: '#/$defs/SourceConfig'
     default:
+      transport: bus
+      listen: 0.0.0.0:6000
       brokers:
       - localhost:9092
       topics:
@@ -75,9 +78,11 @@ properties:
       topic_lag_metric: true
       librdkafka_options: {}
   sink:
-    description: Kafka sink (output). **Requires restart.**
+    description: Sink (output), on either transport. **Requires restart.**
     $ref: '#/$defs/SinkConfig'
     default:
+      transport: bus
+      endpoint: http://dfe-loader:6000
       brokers:
       - localhost:9092
       topic: ''
@@ -107,6 +112,13 @@ properties:
       message_timeout_ms: 300000
       socket_timeout_ms: 60000
       librdkafka_options: {}
+  bridge:
+    description: The supervisor-to-Vector legs, direct transport only. **Requires restart.**
+    $ref: '#/$defs/BridgeConfig'
+    default:
+      to_vector: 127.0.0.1:6100
+      from_vector: 127.0.0.1:6101
+      batch_size: 500
   transforms:
     description: User-supplied transform YAML files. **Hot-reloaded.**
     $ref: '#/$defs/TransformConfig'
@@ -160,9 +172,19 @@ $defs:
         type: string
         default: default
   SourceConfig:
-    description: Kafka source configuration (input big dials).
+    description: |-
+      Source configuration: the bus topics to consume, or the Push listener to
+      accept records on.
     type: object
     properties:
+      transport:
+        description: '`bus` consumes `topics`; `direct` accepts pushes on `listen`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      listen:
+        description: Address the scalo Push listener binds on the direct transport.
+        type: string
+        default: 0.0.0.0:6000
       brokers:
         description: Kafka bootstrap servers.
         type: array
@@ -239,6 +261,20 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+  Transport:
+    description: |-
+      Which transport a stage uses.
+
+      One deployment runs one of them: `bus` is a broker between the stages,
+      `direct` is gRPC between them and needs no broker at all. The record and the
+      transform are identical either way -- only who hands the record over changes.
+    oneOf:
+    - description: Kafka topics.
+      type: string
+      const: bus
+    - description: A scalo Push listener (source) or client (sink), bridged to Vector.
+      type: string
+      const: direct
   DecodingConfig:
     description: Message decoding configuration.
     type: object
@@ -307,9 +343,19 @@ $defs:
         type: boolean
         default: false
   SinkConfig:
-    description: Kafka sink configuration (output big dials).
+    description: |-
+      Sink configuration: the bus topic to produce to, or the Push listener to
+      send the transformed records on to.
     type: object
     properties:
+      transport:
+        description: '`bus` produces to `topic`; `direct` pushes to `endpoint`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      endpoint:
+        description: Downstream Push listener on the direct transport, e.g. the loader.
+        type: string
+        default: http://dfe-loader:6000
       brokers:
         description: Kafka bootstrap servers.
         type: array
@@ -318,7 +364,9 @@ $defs:
         default:
         - localhost:9092
       topic:
-        description: Output topic name.
+        description: |-
+          Output topic name. On the direct transport it is still the routing key
+          the downstream stage picks its table by, so a source keeps its name.
         type: string
         default: ''
       key_field:
@@ -440,6 +488,37 @@ $defs:
         format: uint32
         minimum: 0
         default: 1
+  BridgeConfig:
+    description: |-
+      The two in-pod legs between the supervisor and Vector, on the direct
+      transport only.
+
+      Vector does not speak scalo's `Transport/Push`, so on `direct` the
+      supervisor translates: it accepts records from the rest of DFE on
+      `source.listen` and hands them to Vector over Vector's own protocol, then
+      takes them back and pushes them to `sink.endpoint`. Both legs stay on
+      loopback -- they exist inside one pod and nothing outside it may reach them.
+      On the bus neither address is bound.
+    type: object
+    properties:
+      to_vector:
+        description: |-
+          Where Vector accepts records from the supervisor -- Vector's own
+          `vector` source binds here, and the supervisor dials it.
+        type: string
+        default: 127.0.0.1:6100
+      from_vector:
+        description: |-
+          Where the supervisor accepts the transformed records back -- Vector's
+          `vector` sink dials here, and the supervisor's listener binds it.
+        type: string
+        default: 127.0.0.1:6101
+      batch_size:
+        description: Records moved per bridge hop. Bounds the batch a retry replays.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 500
   TransformConfig:
     description: Transform file loading configuration.
     type: object

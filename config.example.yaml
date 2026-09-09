@@ -18,9 +18,15 @@ pipeline:
   name: "my-pipeline"
 
 # -----------------------------------------------------------------------------
-# Kafka source (input)
+# Source: the bus (Kafka topics) or direct (a scalo Push listener)
 # -----------------------------------------------------------------------------
+# One deployment runs one transport. On `direct` there is no broker: the
+# receiver or the fetcher pushes records straight at `listen`, and the
+# brokers/topics/group_id below are unused. See templates/bus.yaml and
+# templates/direct.yaml for the Vector pipeline each one produces.
 # source:
+#   transport: "bus"                   # bus | direct
+#   listen: "0.0.0.0:6000"             # direct only: the Push listener address
 #   brokers:
 #     - "localhost:9092"
 #   topics:
@@ -46,9 +52,13 @@ pipeline:
 #   #   queued.min.messages: "100000"
 
 # -----------------------------------------------------------------------------
-# Kafka sink (output)
+# Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)
 # -----------------------------------------------------------------------------
+# `topic` still applies on direct: it is the routing key the next stage picks
+# its table by, so a source keeps its name across the hop.
 # sink:
+#   transport: "bus"                   # bus | direct
+#   endpoint: "http://dfe-loader:6000" # direct only: where the records go next
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
@@ -72,6 +82,19 @@ pipeline:
 #   # librdkafka_options:
 #   #   batch.size: "8388608"
 #   #   linger.ms: "20"
+
+# -----------------------------------------------------------------------------
+# The two supervisor-to-Vector legs (direct transport only)
+# -----------------------------------------------------------------------------
+# Vector does not speak scalo's Push protocol, so on `direct` the supervisor
+# translates: it hands records to Vector over `to_vector` and takes them back
+# over `from_vector`, then pushes them to sink.endpoint. Both live inside one
+# pod, so both stay on loopback. Change them only where something else on the
+# pod already holds a port.
+# bridge:
+#   to_vector: "127.0.0.1:6100"        # Vector's own `vector` source binds here
+#   from_vector: "127.0.0.1:6101"      # the supervisor's listener binds here
+#   batch_size: 500                    # records moved per hop
 
 # -----------------------------------------------------------------------------
 # Transform files (user-supplied Vector transform YAML)
