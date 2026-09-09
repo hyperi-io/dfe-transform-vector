@@ -1,0 +1,113 @@
+# Project:   dfe-transform-vector
+# File:      templates/bus.yaml
+# Purpose:   Copy-paste-modify Vector pipeline for the bus transport
+# Language:  YAML
+#
+# License:   BUSL-1.1
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+#
+# ============================================================================
+# A DFE transform on the BUS transport: <source>_land -> transform -> <source>_load
+# ============================================================================
+#
+# The whole topology, in one file, so there is nothing to guess about what the
+# supervisor builds. Copy it, replace the `dfe_transform` step with your own,
+# and you have the pipeline this app runs.
+#
+# WHAT YOU ACTUALLY AUTHOR. In a DFE deployment the supervisor GENERATES the
+# `sources:` and `sinks:` blocks below from the big dials in its own
+# config.yaml, and you supply only the `transforms:` block -- as a file in
+# `transforms.dir`, or as a library artefact the console links to the source.
+# Do NOT mount this whole file as a transform file: the supervisor would add its
+# own source and sink beside these and Vector would run two of each.
+#
+# Run it standalone -- with your own Kafka, outside DFE -- exactly as it is:
+#   vector --config bus.yaml
+#
+# PLACEHOLDERS the engine fills, and what to put there by hand:
+#   {source}   the DFE source name, e.g. `syslog`. The topic pair is always
+#              <source>_land in and <source>_load out; the consumer group is
+#              per app per source.
+#   kafka:9092 your broker list, comma-separated.
+#
+# The component LABELS `dfe_source` and `dfe_sink` are fixed. Your transform
+# reads from `dfe_source` and the supervisor wires the last transform in the
+# chain to `dfe_sink`, so those two names are the contract -- keep them.
+
+# Vector's default is the HOST's timezone, so a zone-less timestamp would parse
+# to a different instant on every pod. DFE events are UTC end to end.
+timezone: UTC
+
+sources:
+  # Fixed label. The supervisor generates this block from `source.*`.
+  dfe_source:
+    type: kafka
+    # Comma-separated broker list. In a deployment this comes from the chart,
+    # never from an authored file -- brokers are a deployment fact.
+    bootstrap_servers: "kafka:9092"
+    # The landing topic. One source per deployment of this app.
+    topics:
+      - "{source}_land"
+    # One consumer group per app per source, so two apps reading the same
+    # source each get every record.
+    group_id: "dfe-transform-vector-{source}"
+    decoding:
+      # DFE records are JSON on the wire.
+      codec: json
+    # Offsets are committed on this interval rather than per record; a rebalance
+    # replays at most this much, which is the at-least-once trade DFE takes.
+    session_timeout_ms: 30000
+    commit_interval_ms: 5000
+    # `largest` starts a NEW consumer group at the end of the topic. Use
+    # `smallest` to replay a topic from the beginning.
+    auto_offset_reset: largest
+    metrics:
+      # Publishes consumer lag per topic, which is what KEDA scales on.
+      topic_lag_metric: true
+
+transforms:
+  # THE STEP YOU REPLACE. A no-op: it takes the record and passes it on
+  # unchanged, so the pipeline is complete and runnable before you write
+  # anything. Put your VRL in `source:`.
+  dfe_transform:
+    type: remap
+    inputs:
+      - dfe_source
+    source: |
+      # Replace this with the transform. `.` is the record; whatever `.` holds
+      # at the end is what goes downstream. For example:
+      #   .severity = downcase(string!(.severity))
+      #   .parsed_at = now()
+      .
+
+sinks:
+  # Fixed label. The supervisor generates this block from `sink.*` and wires
+  # `inputs` to the last transform in the chain.
+  dfe_sink:
+    type: kafka
+    inputs:
+      - dfe_transform
+    bootstrap_servers: "kafka:9092"
+    # The loaded topic. The loader reads <source>_load when it exists and falls
+    # back to <source>_land, so a leftover _load topic with nothing writing to
+    # it starves the source -- delete the topic when you remove a transform.
+    topic: "{source}_load"
+    encoding:
+      codec: json
+    compression: zstd
+    acknowledgements:
+      # The source does not commit an offset until the sink has the record.
+      # Without this a broker outage loses whatever was in flight.
+      enabled: true
+    healthcheck:
+      enabled: true
+    batch:
+      max_events: 10000
+      timeout_secs: 1
+    buffer:
+      # `block` is what makes a slow broker back-pressure the source rather
+      # than the pipeline dropping records. `drop_newest` trades records for
+      # latency and is almost never what a DFE pipeline wants.
+      type: memory
+      max_events: 500
+      when_full: block

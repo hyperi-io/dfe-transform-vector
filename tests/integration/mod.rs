@@ -13,6 +13,7 @@ mod config_env;
 #[allow(clippy::panic)]
 mod container_hygiene;
 mod deployment;
+mod direct_transport;
 mod fixtures;
 mod lifecycle;
 mod metrics;

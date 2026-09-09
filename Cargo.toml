@@ -41,16 +41,25 @@ tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
 # `health` is REQUIRED for a truthful `/readyz`: the metrics listener only
 # consults `HealthRegistry` under that feature, and its other readiness hook
 # is snapshotted before the app can set one.
-scalo = { version = ">=2.10.14, <3", features = [
+#
+# `transport-grpc-vector-compat` carries the direct transport: the supervisor
+# speaks scalo's `Transport/Push` to the rest of DFE and Vector's own
+# `vector.Vector/PushEvents` to the subprocess, and scalo has both halves of the
+# Vector protocol (`VectorCompatClient`, `VectorCompatService`). `lifecycle`
+# carries the idle gate a transform with no source topics reports through.
+scalo = { version = ">=2.12.0, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
     "deployment",
     "expression",
     "health",
+    "lifecycle",
     "logger",
     "metrics",
     "service-metrics",
+    "transport-grpc",
+    "transport-grpc-vector-compat",
     "version-check",
 ] }
 
@@ -58,6 +67,10 @@ scalo = { version = ">=2.10.14, <3", features = [
 figment = { version = ">=0.10, <0.11", features = ["env"] }
 clap = { version = ">=4.5, <5", features = ["derive", "env"] }
 dotenvy = ">=0.15, <0.16"
+
+# Record payloads across the direct-transport bridge, which moves bytes rather
+# than copying them between the two gRPC legs.
+bytes = ">=1.11, <2"
 
 # Serialisation
 serde = { version = ">=1.0, <2", features = ["derive"] }
@@ -98,7 +111,6 @@ jemalloc = ["dep:tikv-jemallocator"]
 [dev-dependencies]
 tempfile = ">=3.10, <4"
 tokio-test = ">=0.4, <0.5"
-bytes = ">=1.11, <2"
 # The WS21 filebeat corpus (tests/common/filebeat.rs) is read in memory from
 # dfe-transform-vrl's committed tar.gz; chrono compares transformed timestamps
 # against the elastic golden outputs.
@@ -107,7 +119,7 @@ tar = ">=0.4.44, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.10.14, <3", features = [
+scalo = { version = ">=2.12.0, <3", features = [
     "transport-kafka",
 ] }
 
