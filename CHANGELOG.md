@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.37](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.36...v1.0.37) (2026-09-09)
+
+### Bug Fixes
+
+* direct transport through a supervisor bridge, and copy-paste templates ([bcfcfbf](https://github.com/hyperi-io/dfe-transform-vector/commit/bcfcfbff357f90c028fb10382f15939d0d6a0033))
+
 ## [1.0.36](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.35...v1.0.36) (2026-09-07)
 
 ### Bug Fixes
