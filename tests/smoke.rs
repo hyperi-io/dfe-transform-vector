@@ -259,6 +259,73 @@ fn cli_config_check_with_valid_fixture() {
     );
 }
 
+/// The whole path, through the real binary: a config file names a metrics
+/// address and a log level, and the process reports the ones it will use.
+///
+/// `main` has to hand those keys to `CommonArgs` before `run_app` reads them.
+/// Miss that and the listener binds `0.0.0.0:9090` and the logger runs at
+/// `info` no matter what the ConfigMap says -- silently, which is how it went
+/// unnoticed. The unit tests cover `fill_common_args`; this covers the call.
+#[test]
+fn cli_config_check_reports_the_config_files_metrics_and_log_settings() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("config.yaml");
+    std::fs::write(
+        &path,
+        "pipeline:\n  name: smoke\ndfe_source: smoke_source\n\
+         vector:\n  version_check: disabled\n\
+         metrics:\n  address: \"0.0.0.0:19099\"\n\
+         logging:\n  level: warn\n  format: text\n",
+    )
+    .expect("write config");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
+        .args([
+            "--config",
+            path.to_str().expect("utf8 path"),
+            "config-check",
+        ])
+        .output()
+        .expect("failed to run binary");
+
+    assert!(
+        output.status.success(),
+        "config-check failed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Match the REPORTED key, not the string anywhere in the output:
+    // config-check also dumps the parsed struct, so a substring search finds
+    // `address: "0.0.0.0:19099"` there and passes while the resolver still
+    // says 9090.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let reported = |key: &str| -> String {
+        stderr
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("config-check reported no `{key}`:\n{stderr}"))
+            .trim_start_matches(key)
+            .trim()
+            .to_string()
+    };
+
+    assert_eq!(
+        reported("metrics_addr"),
+        "0.0.0.0:19099",
+        "metrics.address never reached the address the process binds"
+    );
+    assert_eq!(
+        reported("log_level"),
+        "warn",
+        "logging.level never reached the logger"
+    );
+    assert_eq!(
+        reported("log_format"),
+        "text",
+        "logging.format never reached the logger"
+    );
+}
+
 #[test]
 fn cli_emit_dockerfile_produces_output() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))

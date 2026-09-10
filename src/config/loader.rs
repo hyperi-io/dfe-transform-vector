@@ -18,6 +18,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use scalo::cli::CommonArgs;
 use scalo::kafka_config::{KafkaSource, ServiceRole};
 
 use crate::Result;
@@ -93,8 +94,8 @@ impl Default for DecodingConfig {
 ///
 /// **Hot-reloaded (takes effect on next poll cycle / SIGHUP):**
 /// - Transform YAML file contents (modified/added/removed in watched directory)
-/// - `transforms.dir` — watcher switches to new directory after successful reload
-/// - `transforms.files` — watcher switches to new file list after successful reload
+/// - `transforms.dir` -- watcher switches to new directory after successful reload
+/// - `transforms.files` -- watcher switches to new file list after successful reload
 ///
 /// **Requires pod restart:**
 /// - `source.*` — the consumer or the Push listener is established at startup
@@ -103,14 +104,17 @@ impl Default for DecodingConfig {
 /// - `pipeline.name` — used in consumer group_id and metrics labels at startup
 /// - `vector.*` — binary path, data_dir, config_dir, API address, log level
 ///   set at Vector spawn
-/// - `metrics.*` — HTTP server binds at startup
-/// - `logging.*` — tracing subscriber configured at startup
-/// - `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block
-///   from the cascade at startup (via run_app's `config::setup()`); the
-///   app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.
-///   Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are
-///   honoured by scalo and ignored by this struct (and vice-versa).
-/// - `reload.poll_interval_secs` — captured at reload loop start
+/// - `metrics.address` -- the HTTP server binds at startup
+/// - `logging.*` -- tracing subscriber configured at startup
+/// - `reload.poll_interval_secs` -- captured at reload loop start
+///
+/// **Read by nothing in this process:**
+/// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
+///   chart's KEDA triggers (consumer-group lag and CPU), gated by the
+///   subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
+///   scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
+///   which this app does not initialise, so the engine keys
+///   (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
@@ -468,22 +472,19 @@ pub struct VectorConfig {
     pub version: String,
     /// Version check mode: strict, warn, disabled.
     pub version_check: String,
-    /// Where the Vector version comes from: `preshipped`, `latest`, `stable`,
-    /// a minor line (`0.56`), or an exact version (`0.56.0`).
+    /// Where the Vector binary comes from. `preshipped` is the only value the
+    /// runtime can honour.
     ///
-    /// Defaults to `preshipped` -- the binary baked into the image. It needs no
-    /// network, is the version this build was tested against, and is the only
-    /// mode that works on a cold airgapped deploy.
+    /// This process never acquires a binary: it runs [`binary`](Self::binary)
+    /// and nothing else. The selection rules in [`crate::vector::binary`]
+    /// (`latest`, `stable`, a minor line, an exact version) have no caller on
+    /// the run path, so any other value here would resolve to the pre-shipped
+    /// binary anyway -- silently, and while reporting success. `validate()`
+    /// rejects them rather than substituting.
     ///
-    /// See [`crate::vector::VersionSource`].
+    /// To run a different Vector, point [`binary`](Self::binary) at it and set
+    /// [`version`](Self::version) to match.
     pub version_source: String,
-    /// Persistent cache directory for Vector binaries.
-    ///
-    /// Deliberately OUTSIDE the container's writable layer -- mount a k8s
-    /// volume or a docker bind here so it survives pod restarts and image
-    /// pulls. Pre-populate it to run a non-pre-shipped version in an airgapped
-    /// environment.
-    pub cache_dir: String,
 }
 
 impl Default for VectorConfig {
@@ -497,7 +498,6 @@ impl Default for VectorConfig {
             version: crate::deployment::VECTOR_VERSION.to_string(),
             version_check: "strict".to_string(),
             version_source: "preshipped".to_string(),
-            cache_dir: "/var/cache/vector".to_string(),
         }
     }
 }
@@ -506,7 +506,10 @@ impl Default for VectorConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MetricsConfig {
-    /// Metrics server bind address (host:port).
+    /// Bind address for `/metrics`, `/livez` and `/readyz` (host:port).
+    ///
+    /// Reaches the listener through [`Config::fill_common_args`]; `--metrics-addr`
+    /// and `METRICS_ADDR` both outrank it.
     pub address: String,
     /// Vector's `prometheus_exporter` bind address (host:port).
     ///
@@ -534,8 +537,14 @@ impl Default for MetricsConfig {
 #[serde(default)]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
+    ///
+    /// Reaches the subscriber through [`Config::fill_common_args`];
+    /// `--log-level`, `LOG_LEVEL`, `--verbose` and `--quiet` all outrank it.
     pub level: String,
-    /// Log format (json, text).
+    /// Log format (json, text, auto).
+    ///
+    /// `auto` -- the default -- is text on a terminal and JSON everywhere else,
+    /// so a pod ships structured logs and a developer reads them.
     pub format: String,
 }
 
@@ -543,7 +552,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: "info".to_string(),
-            format: "json".to_string(),
+            format: "auto".to_string(),
         }
     }
 }
@@ -568,10 +577,14 @@ impl Default for ReloadConfig {
 }
 
 /// KEDA scaling pressure configuration.
+///
+/// Present for parity with the `scaling:` block every DFE service accepts.
+/// Nothing in this process reads it -- see the "read by nothing" note on
+/// [`Config`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ScalingConfig {
-    /// Scaling pressure threshold (0.0–1.0).
+    /// Scaling pressure threshold (0.0–1.0). Range-checked, not consumed.
     pub pressure_threshold: f64,
 }
 
@@ -714,9 +727,6 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_VERSION_SOURCE") {
             self.vector.version_source = v;
         }
-        if let Some(v) = flat_env::flat_env_string(prefix, "VECTOR_CACHE_DIR") {
-            self.vector.cache_dir = v;
-        }
 
         // Metrics
         if let Some(v) = flat_env::flat_env_string(prefix, "METRICS_ADDRESS") {
@@ -846,6 +856,30 @@ impl Config {
         Ok(())
     }
 
+    /// Hand `metrics.address` and `logging.*` to the resolvers that read them.
+    ///
+    /// `ServiceRuntime` binds [`CommonArgs::effective_metrics_addr`] and the
+    /// logger is built from `effective_log_level`/`effective_log_format`. Those
+    /// fall through to scalo's OWN config cascade, which this app never
+    /// initialises -- so a value set in this app's config file reaches nothing
+    /// unless it is put where the resolvers look.
+    ///
+    /// Only fills a slot the CLI flag and its environment variable both left
+    /// empty, so the documented precedence still holds: flag, then environment,
+    /// then this config, then the hard-coded default. `--verbose`/`--quiet` are
+    /// checked ahead of the level either way.
+    pub fn fill_common_args(&self, args: &mut CommonArgs) {
+        if args.metrics_addr.is_none() && !self.metrics.address.is_empty() {
+            args.metrics_addr = Some(self.metrics.address.clone());
+        }
+        if args.log_level.is_none() && !self.logging.level.is_empty() {
+            args.log_level = Some(self.logging.level.clone());
+        }
+        if args.log_format.is_none() && !self.logging.format.is_empty() {
+            args.log_format = Some(self.logging.format.clone());
+        }
+    }
+
     /// Validate the configuration.
     pub fn validate(&self) -> Result<()> {
         // Pipeline
@@ -879,6 +913,11 @@ impl Config {
             }
         }
         self.validate_sasl("source.sasl", &self.source.sasl)?;
+        Self::validate_librdkafka_options(
+            "source",
+            &self.source.librdkafka_options,
+            &super::generate::derived_source_options(&self.source),
+        )?;
 
         // Vector stores an offset only once the sink has acknowledged the
         // event, which is what makes the commit timer safe to run. Hand that
@@ -948,6 +987,11 @@ impl Config {
         }
         self.validate_sasl("sink.sasl", &self.sink.sasl)?;
         self.validate_buffer(&self.sink.buffer)?;
+        Self::validate_librdkafka_options(
+            "sink",
+            &self.sink.librdkafka_options,
+            &super::generate::derived_sink_options(&self.sink),
+        )?;
 
         // Sink encoding
         let valid_encodings = ["json", "raw_bytes"];
@@ -994,16 +1038,40 @@ impl Config {
         // Reject a bad version_source HERE rather than at first use. A typo
         // that only surfaces when the binary is acquired means the pod starts,
         // passes config validation, and then fails somewhere less obvious.
-        crate::vector::VersionSource::parse(&self.vector.version_source)
+        let version_source = crate::vector::VersionSource::parse(&self.vector.version_source)
             .map_err(|e| crate::Error::Validation(e.to_string()))?;
 
-        if self.vector.cache_dir.is_empty() {
-            return Err(crate::Error::Validation(
-                "vector.cache_dir must not be empty -- it is where the binary \
-                 cache lives, and an empty path silently resolves to the \
-                 working directory"
-                    .to_string(),
-            ));
+        // Refuse a source the runtime cannot act on. Nothing on the run path
+        // resolves a version or downloads a binary -- `spawn_vector` runs
+        // `vector.binary` -- so every other value would quietly get the
+        // pre-shipped binary while the config says otherwise.
+        if version_source != crate::vector::VersionSource::Preshipped {
+            return Err(crate::Error::Validation(format!(
+                "vector.version_source must be 'preshipped', got '{}'. This \
+                 process runs vector.binary and never acquires one, so any \
+                 other source would silently resolve to the pre-shipped \
+                 binary. Point vector.binary at the Vector you want and set \
+                 vector.version to match.",
+                self.vector.version_source
+            )));
+        }
+
+        // Logging level and format reach scalo's logger via
+        // `fill_common_args`, which parses them and aborts startup on a bad
+        // value. Catch it here so the message names the config key.
+        let valid_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_levels.contains(&self.logging.level.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "logging.level must be one of: {}",
+                valid_levels.join(", ")
+            )));
+        }
+        let valid_formats = ["json", "text", "auto"];
+        if !valid_formats.contains(&self.logging.format.as_str()) {
+            return Err(crate::Error::Validation(format!(
+                "logging.format must be one of: {}",
+                valid_formats.join(", ")
+            )));
         }
 
         // Scaling pressure threshold must be in [0.0, 1.0]
@@ -1014,6 +1082,30 @@ impl Config {
             )));
         }
 
+        Ok(())
+    }
+
+    /// Refuse a `librdkafka_options` entry the generator is going to overwrite.
+    ///
+    /// The generator writes the big-dial-derived options after merging this
+    /// map, so `sink.librdkafka_options: {compression.type: lz4}` alongside
+    /// `sink.compression: zstd` produced zstd and said nothing -- while the
+    /// docs called this map the layer above everything. The derived list lives
+    /// in the generator that applies it, so the two cannot drift apart.
+    fn validate_librdkafka_options(
+        side: &str,
+        options: &BTreeMap<String, String>,
+        derived: &[(&str, &str)],
+    ) -> Result<()> {
+        for (key, owner) in derived {
+            if options.contains_key(*key) {
+                return Err(crate::Error::Validation(format!(
+                    "{side}.librdkafka_options sets '{key}', which is derived from \
+                     {owner} and overwritten when the Vector config is generated. \
+                     Set it through {owner}, or remove the librdkafka_options entry."
+                )));
+            }
+        }
         Ok(())
     }
 

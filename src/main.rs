@@ -170,7 +170,7 @@ impl ServiceApp for App {
 
 #[tokio::main]
 async fn main() {
-    let app = App::parse();
+    let mut app = App::parse();
 
     // Handle deployment artefact and assemble commands before entering the
     // ServiceApp lifecycle (these don't need the full logging/config/run pipeline)
@@ -223,6 +223,20 @@ async fn main() {
                 // fall through to run_app
             }
         }
+    }
+
+    // `run_app` binds the metrics listener on `CommonArgs::effective_metrics_addr()`
+    // and builds the logger from `effective_log_level()`/`effective_log_format()`.
+    // Unset, those fall through to scalo's OWN config cascade -- which this app
+    // never initialises -- so `metrics.address` and `logging.*` from THIS app's
+    // config file reached nothing: the listener bound 0.0.0.0:9090 whatever the
+    // ConfigMap said. Fill the args from the loaded config first; the flags and
+    // their env vars are already set by then, so they still win.
+    //
+    // A load error is swallowed here on purpose: `run_app` loads the same config
+    // again and reports the failure with its own message.
+    if let Ok(config) = Config::load(app.common.config.as_deref()) {
+        config.fill_common_args(&mut app.common);
     }
 
     // Delegate to standard ServiceApp lifecycle (logging → config → run_service)

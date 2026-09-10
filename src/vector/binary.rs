@@ -8,7 +8,12 @@
 
 //! Which Vector binary to run, and where it comes from.
 //!
-//! Three things have to hold at once:
+//! **Nothing here is on the run path yet.** The supervisor executes
+//! `vector.binary` and never resolves a version, downloads an archive or reads
+//! a cache. [`crate::config::Config::validate`] therefore accepts only
+//! `vector.version_source: preshipped`, so the config surface cannot promise a
+//! selection this module is not wired to make. Everything below is the pure,
+//! tested half of that capability, kept ready for the acquisition step:
 //!
 //! - **An airgapped deploy works cold.** The image pre-ships a binary, so there
 //!   is always something to run without a network.

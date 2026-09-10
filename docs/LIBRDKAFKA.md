@@ -30,18 +30,40 @@ file, or leave the profile out and let the constants stand.
 **A service override beats the central file.** Layer 2 is applied on top of
 whichever layer-1 source won, so a platform-wide central setting cannot undo a
 service's hardcoded one -- see Service-Specific Overrides for what each service
-pins. Only layer 3, the per-instance `librdkafka_options:`, is above it.
+pins. Only layer 3, the per-instance `librdkafka_options:`, is above it. That
+matters when tuning: `queue.buffering.max.kbytes` is a transform-vector service
+override, so setting it centrally will NOT take effect.
+
+### The big dials sit above all three
+
+A handful of librdkafka keys are DERIVED from the big-dial config and written
+after the whole merge, so `librdkafka_options` cannot reach them:
+
+| Key | Owned by | Applies when |
+|---|---|---|
+| `compression.type` | `sink.compression` | always, on the sink |
+| `security.protocol` | `{source,sink}.sasl.enabled` + `.tls.enabled` | either is on |
+| `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
+| `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
+
+Setting one of these in `librdkafka_options` used to be discarded in silence.
+`config-check` now refuses the config and names the big dial that owns the key.
+The conditions above are part of the rule: with SASL off nothing derives
+`sasl.mechanism`, so setting it by hand there is still allowed.
 
 ### Example
 
 A transform-vector pod producing to Kafka, with no central config file:
 
-1. scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`, `compression.type=zstd`,
-   `socket.nagle.disable=true`, `statistics.interval.ms=1000`
+1. Baseline: scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`,
+   `compression.type=zstd`, `socket.nagle.disable=true`,
+   `statistics.interval.ms=1000` -- or, if `librdkafka.yaml` defines
+   `producer.production`, exactly what that profile lists and nothing else
 2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
-3. User config YAML sets `compression.type=lz4` for this pipeline
+3. User config YAML sets `linger.ms=20` for a specific pipeline
+4. The big dial `sink.compression: lz4` is applied last
 
-Result: `linger.ms=100`, `compression.type=lz4`,
+Result: `linger.ms=20`, `compression.type=lz4`,
 `queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
 `statistics.interval.ms=1000`
 
@@ -192,9 +214,10 @@ No service-specific overrides currently. Uses production baseline as-is.
 ## Central Config File
 
 A single `librdkafka.yaml` in the git-managed config repo (`dfe-devex`)
-is the primary management point for production tuning. All DFE services
+is the management point for the platform-wide baseline. All DFE services
 read this file at startup and fall back to scalo coded-in constants if
-it isn't present.
+it isn't present. It is layer 1, so service-specific constants (layer 2)
+still override any key it sets.
 
 **Location:** `dfe-devex/shared/librdkafka.yaml`
 
@@ -262,16 +285,17 @@ source:
 
 sink:
   librdkafka_options:
-    compression.type: "lz4"       # LZ4 instead of zstd
     queue.buffering.max.kbytes: "524288"  # 512 MiB
 ```
 
-These are layer 4 (highest priority) and override everything below.
+These are layer 3 (highest priority) and override everything below, including
+the service-specific constants -- but NOT the derived keys in the table above.
+`compression.type` belongs to `sink.compression`, and putting it here is a
+config error rather than a silent no-op.
 
 ## Source Code References
 
 - **Shared baseline constants:** `scalo/src/kafka_config.rs`
-- **Merge helper:** `kafka_config::merge_with_overrides()`
 - **Central config loader:** `src/config/kafka_defaults.rs` (YAML loading, `OnceLock` cache, fallback)
 - **Profile accessors:** `kafka_defaults::consumer_profile()`, `kafka_defaults::producer_profile()`
 - **3-layer merge:** `kafka_defaults::merge_layers()` (base + service overrides + user overrides)
