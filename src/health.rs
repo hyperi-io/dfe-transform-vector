@@ -16,10 +16,10 @@
 //! so the wrapper must publish the subprocess state or a dead Vector advertises
 //! healthy to Kubernetes and KEDA.
 //!
-//! Publishing goes through scalo's `HealthRegistry` because the registry is
-//! evaluated on every probe request. The `MetricsManager` readiness callback
-//! cannot be used: `ServiceRuntime::build` starts the listener with a clone of
-//! whatever callback is set at that moment, which is before `run_service` runs.
+//! `/readyz` reads the `MetricsManager` readiness callback AND the
+//! `HealthRegistry` on every request, so either would answer the probe -- the
+//! registry is the one used because only it carries a component name, which puts
+//! Vector on the detailed health output as the reason the pod left the Service.
 
 use scalo::health::{HealthRegistry, HealthStatus};
 use tracing::debug;

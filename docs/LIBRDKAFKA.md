@@ -213,13 +213,13 @@ No service-specific overrides currently. Uses production baseline as-is.
 
 ## Central Config File
 
-A single `librdkafka.yaml` in the git-managed config repo (`dfe-devex`)
+A single `librdkafka.yaml` in the deployment's private config repo
 is the management point for the platform-wide baseline. All DFE services
 read this file at startup and fall back to scalo coded-in constants if
 it isn't present. It is layer 1, so service-specific constants (layer 2)
 still override any key it sets.
 
-**Location:** `dfe-devex/shared/librdkafka.yaml`
+**Location:** `<config-repo>/shared/librdkafka.yaml`
 
 **Discovery:** Via `DFE_CONFIG_DIR` environment variable. The service reads
 `$DFE_CONFIG_DIR/shared/librdkafka.yaml`. This follows the same pattern
@@ -228,7 +228,7 @@ dfe-engine uses for `services/`, `deployment/`, etc.
 **Activation:**
 
 ```bash
-cd /path/to/dfe-devex
+cd /path/to/config-repo
 cp shared/librdkafka.yaml.example shared/librdkafka.yaml
 # Edit as needed, then commit
 ```
@@ -301,7 +301,7 @@ config error rather than a silent no-op.
 - **3-layer merge:** `kafka_defaults::merge_layers()` (base + service overrides + user overrides)
 - **YAML generator:** `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`)
 - **Config schema:** `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
-- **Central config file:** `dfe-devex/shared/librdkafka.yaml.example`
+- **Central config file:** `<config-repo>/shared/librdkafka.yaml.example`
 
 ## Reference
 
