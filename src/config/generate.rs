@@ -599,7 +599,9 @@ mod tests {
     #[test]
     fn source_commits_offsets_and_says_how_often() {
         let source = SourceConfig::default();
-        let text = serde_yaml_ng::to_string(&generate_source_yaml(&source)).unwrap();
+        let text =
+            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+                .unwrap();
 
         // A commit interval with auto-commit off arms no timer, so the interval
         // is inert and lag stops moving between rebalances.
@@ -615,7 +617,9 @@ mod tests {
             .librdkafka_options
             .insert("enable.auto.commit".into(), "false".into());
 
-        let text = serde_yaml_ng::to_string(&generate_source_yaml(&source)).unwrap();
+        let text =
+            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+                .unwrap();
 
         assert!(text.contains("enable.auto.commit: 'false'"));
     }
