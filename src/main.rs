@@ -26,6 +26,7 @@ use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
 use scalo::version_check::VersionCheckConfig;
 use tracing::{debug, error, info};
 
+use dfe_transform_vector::bridge;
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
@@ -34,6 +35,7 @@ use dfe_transform_vector::config::validate::{
 };
 use dfe_transform_vector::deployment;
 use dfe_transform_vector::health;
+use dfe_transform_vector::metrics::scrape::spawn_vector_scrape_task;
 use dfe_transform_vector::metrics::{
     WrapperMetrics, spawn_circuit_gate_task, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
 };
@@ -136,6 +138,10 @@ impl ServiceApp for App {
             .validate()
             .map_err(|e| CliError::Config(format!("validation failed: {e}")))?;
         Ok(config)
+    }
+
+    fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
+        config.work_state()
     }
 
     async fn run_service(
@@ -319,6 +325,15 @@ async fn run_transform_service(
     // the gate task skips itself in that case.
     spawn_circuit_gate_task(&lifecycle, runtime.scaling.clone());
 
+    // Merge Vector's loopback exporter into this registry on scalo's own
+    // metrics interval, so vector_* rides /metrics and the OTLP push.
+    spawn_vector_scrape_task(
+        metrics.clone(),
+        config.metrics.vector_metrics_address.clone(),
+        scalo::metrics::MetricsConfig::default().update_interval,
+        config.metrics.vector_metrics_expiry_ticks,
+    );
+
     // Keep uptime_seconds fresh between scrapes.
     spawn_uptime_tick_task(
         metrics.clone(),
@@ -398,6 +413,15 @@ async fn run_transform_service(
             )
             .await;
         });
+    }
+
+    // Direct transport: carry records between DFE's Push protocol and Vector's.
+    // Bound before Vector is spawned, so a port that cannot be taken fails
+    // startup rather than surfacing once the pod is already Ready.
+    if bridge::is_enabled(&config) {
+        let bridge = bridge::Bridge::build(&config).await?;
+        let bridge_shutdown = shutdown_tx.subscribe();
+        tokio::spawn(bridge.run(bridge_shutdown));
     }
 
     // Run Vector subprocess lifecycle loop

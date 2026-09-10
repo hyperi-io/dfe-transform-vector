@@ -51,6 +51,11 @@ spec:
             - name: vector-api
               containerPort: 8686
               protocol: TCP
+            {{- if eq (default "bus" ((.Values.config).source).transport) "direct" }}
+            - name: push
+              containerPort: {{ .Values.service.pushPort | default 6000 }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: OTEL_SERVICE_NAME
               value: "dfe-transform-vector"

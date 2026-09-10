@@ -30,9 +30,15 @@ pipeline:
 dfe_source: "my_source"
 
 # -----------------------------------------------------------------------------
-# Kafka source (input)
+# Source: the bus (Kafka topics) or direct (a scalo Push listener)
 # -----------------------------------------------------------------------------
+# One deployment runs one transport. On `direct` there is no broker: the
+# receiver or the fetcher pushes records straight at `listen`, and the
+# brokers/topics/group_id below are unused. See templates/bus.yaml and
+# templates/direct.yaml for the Vector pipeline each one produces.
 # source:
+#   transport: "bus"                   # bus | direct
+#   listen: "0.0.0.0:6000"             # direct only: the Push listener address
 #   brokers:
 #     - "localhost:9092"
 #   topics:
@@ -58,9 +64,13 @@ dfe_source: "my_source"
 #   #   queued.min.messages: "100000"
 
 # -----------------------------------------------------------------------------
-# Kafka sink (output)
+# Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)
 # -----------------------------------------------------------------------------
+# `topic` still applies on direct: it is the routing key the next stage picks
+# its table by, so a source keeps its name across the hop.
 # sink:
+#   transport: "bus"                   # bus | direct
+#   endpoint: "http://dfe-loader:6000" # direct only: where the records go next
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
@@ -84,6 +94,19 @@ dfe_source: "my_source"
 #   # librdkafka_options:
 #   #   batch.size: "8388608"
 #   #   linger.ms: "20"
+
+# -----------------------------------------------------------------------------
+# The two supervisor-to-Vector legs (direct transport only)
+# -----------------------------------------------------------------------------
+# Vector does not speak scalo's Push protocol, so on `direct` the supervisor
+# translates: it hands records to Vector over `to_vector` and takes them back
+# over `from_vector`, then pushes them to sink.endpoint. Both live inside one
+# pod, so both stay on loopback. Change them only where something else on the
+# pod already holds a port.
+# bridge:
+#   to_vector: "127.0.0.1:6100"        # Vector's own `vector` source binds here
+#   from_vector: "127.0.0.1:6101"      # the supervisor's listener binds here
+#   batch_size: 500                    # records moved per hop
 
 # -----------------------------------------------------------------------------
 # Transform files (user-supplied Vector transform YAML)
@@ -118,15 +141,17 @@ dfe_source: "my_source"
 # -----------------------------------------------------------------------------
 # Metrics endpoint
 # -----------------------------------------------------------------------------
-# `address` also serves /livez and /readyz -- the whole probe surface is on that
-# port. `--metrics-addr` and METRICS_ADDR outrank it.
-#
-# `vector_metrics_address` is where Vector's own prometheus_exporter binds.
-# Prometheus scrapes it as a second target on the pod IP, so loopback makes it
-# unreachable from outside the pod.
+# Also serves /livez and /readyz -- the whole probe surface is on this port,
+# and it carries Vector's own vector_* as well: the wrapper scrapes the
+# exporter below and merges the samples into this registry. `--metrics-addr`
+# and METRICS_ADDR outrank the address set here.
 # metrics:
 #   address: "0.0.0.0:9090"
-#   vector_metrics_address: "0.0.0.0:9598"
+#   # Where Vector's prometheus_exporter binds. Loopback -- the wrapper is its
+#   # only reader, so nothing outside the pod needs the port.
+#   vector_metrics_address: "127.0.0.1:9598"
+#   # Scrape ticks a merged vector_* gauge may go unseen before it is zeroed.
+#   vector_metrics_expiry_ticks: 4
 
 # -----------------------------------------------------------------------------
 # Logging

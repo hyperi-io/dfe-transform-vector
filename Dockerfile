@@ -77,7 +77,7 @@ LABEL io.hyperi.vector.version="0.57.0"
 
 USER appuser
 
-EXPOSE 9090 8686
+EXPOSE 9090 6000 8686
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:9090/livez > /dev/null || exit 1

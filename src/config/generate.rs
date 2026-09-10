@@ -12,6 +12,12 @@
 //! understands, using the canonical component labels `dfe_source` and
 //! `dfe_sink`.
 //!
+//! The labels and the file layout are the same on both transports, so a
+//! transform file authored against `dfe_source` runs unchanged whichever one
+//! the deployment is on. Only the component the label names changes: `kafka`
+//! on the bus, `vector` on direct -- where the supervisor's bridge is the peer
+//! at each end.
+//!
 //! Production librdkafka defaults come from `scalo::kafka_config`
 //! (shared DFE baseline). Service-specific overrides and user-supplied
 //! `librdkafka_options` from config YAML are merged on top.
@@ -21,12 +27,12 @@ use std::collections::HashMap;
 use serde_yaml_ng::Value;
 
 use super::kafka_defaults;
-use super::loader::{BufferConfig, MetricsConfig, SinkConfig, SourceConfig, VectorConfig};
+use super::loader::{BridgeConfig, BufferConfig, SinkConfig, SourceConfig, VectorConfig};
 
-/// Canonical label for the generated Kafka source component.
+/// Canonical label for the generated source component.
 pub const SOURCE_LABEL: &str = "dfe_source";
 
-/// Canonical label for the generated Kafka sink component.
+/// Canonical label for the generated sink component.
 pub const SINK_LABEL: &str = "dfe_sink";
 
 /// Generate Vector global config YAML (timezone, data_dir, api settings).
@@ -55,13 +61,41 @@ pub fn generate_global_yaml(vector: &VectorConfig) -> Value {
     Value::Mapping(root)
 }
 
-/// Generate Vector Kafka source YAML from big-dial config.
+/// Generate the `sources.dfe_source` YAML for this deployment's transport.
 ///
-/// Produces a `sources.dfe_source` block with production-tuned librdkafka
-/// options derived from DFE 2.1 templates. Includes fetch sizing, pre-fetch
-/// queuing, commit control, and cooperative-sticky rebalancing.
+/// On the bus that is a Kafka consumer with production-tuned librdkafka options
+/// derived from DFE 2.1 templates -- fetch sizing, pre-fetch queuing, commit
+/// control, cooperative-sticky rebalancing. On direct it is Vector's own
+/// `vector` source, which the supervisor's bridge pushes into over loopback.
 #[must_use]
-pub fn generate_source_yaml(source: &SourceConfig) -> Value {
+pub fn generate_source_yaml(source: &SourceConfig, bridge: &BridgeConfig) -> Value {
+    let component = if source.transport.is_direct() {
+        direct_source_component(bridge)
+    } else {
+        kafka_source_component(source)
+    };
+    wrap("sources", SOURCE_LABEL, component)
+}
+
+/// The `vector` source the supervisor's bridge delivers into.
+///
+/// `acknowledgements` is what makes the whole path hold rather than drop: the
+/// RPC does not return until the record has reached the sink, so a stalled
+/// downstream stalls the supervisor, which stops draining its own Push
+/// listener, which back-pressures whoever is sending to this transform.
+fn direct_source_component(bridge: &BridgeConfig) -> serde_yaml_ng::Mapping {
+    let mut component = serde_yaml_ng::Mapping::new();
+    component.insert(val("type"), val("vector"));
+    component.insert(val("address"), val(&bridge.to_vector));
+
+    let mut acks = serde_yaml_ng::Mapping::new();
+    acks.insert(val("enabled"), Value::Bool(true));
+    component.insert(val("acknowledgements"), Value::Mapping(acks));
+
+    component
+}
+
+fn kafka_source_component(source: &SourceConfig) -> serde_yaml_ng::Mapping {
     let mut component = serde_yaml_ng::Mapping::new();
     component.insert(val("type"), val("kafka"));
     component.insert(val("bootstrap_servers"), val(&source.brokers.join(",")));
@@ -113,28 +147,73 @@ pub fn generate_source_yaml(source: &SourceConfig) -> Value {
     let rdkafka = build_source_librdkafka(source);
     component.insert(val("librdkafka_options"), Value::Mapping(rdkafka));
 
-    // Wrap in sources.dfe_source
-    let mut sources = serde_yaml_ng::Mapping::new();
-    sources.insert(val(SOURCE_LABEL), Value::Mapping(component));
+    component
+}
+
+/// Wrap one component under its section and label, the shape every generated
+/// file takes.
+fn wrap(section: &str, label: &str, component: serde_yaml_ng::Mapping) -> Value {
+    let mut components = serde_yaml_ng::Mapping::new();
+    components.insert(val(label), Value::Mapping(component));
 
     let mut root = serde_yaml_ng::Mapping::new();
-    root.insert(val("sources"), Value::Mapping(sources));
+    root.insert(val(section), Value::Mapping(components));
 
     Value::Mapping(root)
 }
 
-/// Generate Vector Kafka sink YAML from big-dial config.
+/// Generate the `sinks.dfe_sink` YAML for this deployment's transport.
 ///
-/// Produces a `sinks.dfe_sink` block with production-tuned librdkafka
-/// options, Vector-level batching, buffer config, and acknowledgements.
+/// On the bus that is a Kafka producer with production-tuned librdkafka
+/// options, Vector-level batching, buffer config and acknowledgements. On
+/// direct it is Vector's own `vector` sink, dialling the supervisor's bridge,
+/// which pushes the records on to `sink.endpoint`.
 #[must_use]
-pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
+pub fn generate_sink_yaml(sink: &SinkConfig, bridge: &BridgeConfig, inputs: &[String]) -> Value {
+    let component = if sink.transport.is_direct() {
+        direct_sink_component(sink, bridge, inputs)
+    } else {
+        kafka_sink_component(sink, inputs)
+    };
+    wrap("sinks", SINK_LABEL, component)
+}
+
+/// The `vector` sink that hands the transformed records back to the supervisor.
+///
+/// The buffer is the operator's dial on both transports, so it is carried here
+/// too; `acknowledgements` completes the hold-rather-than-drop chain the
+/// `vector` source starts.
+fn direct_sink_component(
+    sink: &SinkConfig,
+    bridge: &BridgeConfig,
+    inputs: &[String],
+) -> serde_yaml_ng::Mapping {
+    let mut component = serde_yaml_ng::Mapping::new();
+    component.insert(val("type"), val("vector"));
+    component.insert(val("inputs"), input_list(inputs));
+    // A URI, not a bind address: this end dials the supervisor's listener.
+    component.insert(
+        val("address"),
+        val(&format!("http://{}", bridge.from_vector)),
+    );
+
+    let mut acks = serde_yaml_ng::Mapping::new();
+    acks.insert(val("enabled"), Value::Bool(true));
+    component.insert(val("acknowledgements"), Value::Mapping(acks));
+
+    let mut healthcheck = serde_yaml_ng::Mapping::new();
+    healthcheck.insert(val("enabled"), Value::Bool(true));
+    component.insert(val("healthcheck"), Value::Mapping(healthcheck));
+
+    component.insert(val("buffer"), build_buffer_block(&sink.buffer));
+
+    component
+}
+
+fn kafka_sink_component(sink: &SinkConfig, inputs: &[String]) -> serde_yaml_ng::Mapping {
     let mut component = serde_yaml_ng::Mapping::new();
     component.insert(val("type"), val("kafka"));
-    component.insert(
-        val("inputs"),
-        Value::Sequence(inputs.iter().map(|i| val(i)).collect()),
-    );
+    component.insert(val("inputs"), input_list(inputs));
     component.insert(val("bootstrap_servers"), val(&sink.brokers.join(",")));
     component.insert(val("topic"), val(&sink.topic));
 
@@ -205,23 +284,22 @@ pub fn generate_sink_yaml(sink: &SinkConfig, inputs: &[String]) -> Value {
     let rdkafka = build_sink_librdkafka(sink);
     component.insert(val("librdkafka_options"), Value::Mapping(rdkafka));
 
-    // Wrap in sinks.dfe_sink
-    let mut sinks = serde_yaml_ng::Mapping::new();
-    sinks.insert(val(SINK_LABEL), Value::Mapping(component));
+    component
+}
 
-    let mut root = serde_yaml_ng::Mapping::new();
-    root.insert(val("sinks"), Value::Mapping(sinks));
-
-    Value::Mapping(root)
+/// A component's wired `inputs` list.
+fn input_list(inputs: &[String]) -> Value {
+    Value::Sequence(inputs.iter().map(|i| val(i)).collect())
 }
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
 ///
-/// The exporter binds `metrics.vector_metrics_address`. Hard-coding it here
-/// instead left that config key accepted, validated and inert: Prometheus and
-/// the operator disagreed about where Vector's metrics were, and nothing said so.
+/// `address` is `metrics.vector_metrics_address`; the wrapper scrapes the same
+/// address and merges the samples into the scalo registry, so it stays on
+/// loopback rather than being published. Hard-coding it here instead left that
+/// config key accepted, validated and inert.
 #[must_use]
-pub fn generate_observability_yaml(metrics: &MetricsConfig) -> Value {
+pub fn generate_observability_yaml(address: &str) -> Value {
     let mut metrics_source = serde_yaml_ng::Mapping::new();
     metrics_source.insert(val("type"), val("internal_metrics"));
 
@@ -234,7 +312,7 @@ pub fn generate_observability_yaml(metrics: &MetricsConfig) -> Value {
         val("inputs"),
         Value::Sequence(vec![val("internal_metrics")]),
     );
-    prom_sink.insert(val("address"), val(&metrics.vector_metrics_address));
+    prom_sink.insert(val("address"), val(address));
 
     let mut sinks = serde_yaml_ng::Mapping::new();
     sinks.insert(val("prometheus_exporter"), Value::Mapping(prom_sink));
@@ -305,8 +383,10 @@ pub fn derived_sink_options(sink: &SinkConfig) -> Vec<(&'static str, &'static st
 
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
-/// Currently none — uses the shared DFE baseline from scalo as-is.
-const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[];
+/// Vector arms its offset-commit timer only with auto-commit on, and the shared
+/// DFE baseline turns it off -- see docs/LIBRDKAFKA.md, Service-Specific
+/// Overrides.
+const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "true")];
 
 /// Service-specific producer librdkafka overrides for transform-vector.
 ///
@@ -496,7 +576,7 @@ mod tests {
             group_id: "test-group".into(),
             ..Default::default()
         };
-        let yaml = generate_source_yaml(&source);
+        let yaml = generate_source_yaml(&source, &BridgeConfig::default());
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("dfe_source"));
@@ -510,7 +590,9 @@ mod tests {
         assert!(text.contains("fetch.min.bytes: '1048576'"));
         assert!(text.contains("fetch.wait.max.ms: '100'"));
         assert!(text.contains("queued.min.messages: '20000'"));
-        assert!(text.contains("enable.auto.commit: 'false'"));
+        // Overridden off the shared baseline's `false` -- see
+        // SERVICE_CONSUMER_OVERRIDES.
+        assert!(text.contains("enable.auto.commit: 'true'"));
         assert!(text.contains("statistics.interval.ms: '1000'"));
         // Removed settings — back to librdkafka defaults
         assert!(!text.contains("queued.max.messages.kbytes"));
@@ -544,7 +626,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_source_yaml(&source);
+        let yaml = generate_source_yaml(&source, &BridgeConfig::default());
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("SCRAM-SHA-512"));
@@ -563,13 +645,41 @@ mod tests {
             .librdkafka_options
             .insert("custom.option".into(), "value".into());
 
-        let yaml = generate_source_yaml(&source);
+        let yaml = generate_source_yaml(&source, &BridgeConfig::default());
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         // User override replaces default
         assert!(text.contains("fetch.max.bytes: '52428800'"));
         // Custom option included
         assert!(text.contains("custom.option: value"));
+    }
+
+    #[test]
+    fn source_commits_offsets_and_says_how_often() {
+        let source = SourceConfig::default();
+        let text =
+            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+                .unwrap();
+
+        // A commit interval with auto-commit off arms no timer, so the interval
+        // is inert and lag stops moving between rebalances.
+        assert!(text.contains("enable.auto.commit: 'true'"));
+        assert!(text.contains("commit_interval_ms: 5000"));
+        assert!(!text.contains("enable.auto.commit: 'false'"));
+    }
+
+    #[test]
+    fn a_user_can_still_turn_auto_commit_back_off() {
+        let mut source = SourceConfig::default();
+        source
+            .librdkafka_options
+            .insert("enable.auto.commit".into(), "false".into());
+
+        let text =
+            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+                .unwrap();
+
+        assert!(text.contains("enable.auto.commit: 'false'"));
     }
 
     #[test]
@@ -582,7 +692,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_source_yaml(&source);
+        let yaml = generate_source_yaml(&source, &BridgeConfig::default());
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         // Vector TLS block
@@ -602,7 +712,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["src".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         // Vector TLS block
@@ -622,7 +732,7 @@ mod tests {
             compression: "zstd".into(),
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["last_transform".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["last_transform".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("dfe_sink"));
@@ -666,7 +776,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["src".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: memory"));
@@ -685,7 +795,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["src".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: disk"));
@@ -703,7 +813,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["src".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("max_events: 5000"));
@@ -717,7 +827,7 @@ mod tests {
             compression: "none".into(),
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &["src".into()]);
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()]);
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         // Vector-level compression omitted
@@ -728,23 +838,28 @@ mod tests {
 
     #[test]
     fn observability_yaml() {
-        let yaml = generate_observability_yaml(&crate::config::MetricsConfig::default());
+        let yaml = generate_observability_yaml("127.0.0.1:9598");
         let text = serde_yaml_ng::to_string(&yaml).unwrap();
 
         assert!(text.contains("internal_metrics"));
         assert!(text.contains("prometheus_exporter"));
-        assert!(text.contains("0.0.0.0:9598"));
+        assert!(text.contains("127.0.0.1:9598"));
     }
 
-    /// The exporter has to land where the config says, or Prometheus scrapes a
+    #[test]
+    fn observability_yaml_honours_configured_address() {
+        let yaml = generate_observability_yaml("127.0.0.1:19598");
+        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+
+        assert!(text.contains("127.0.0.1:19598"));
+        assert!(!text.contains(":9598"), "hardcoded default leaked: {text}");
+    }
+
+    /// The exporter has to land where the config says, or the wrapper scrapes a
     /// port nothing is listening on and the pod reports no Vector metrics.
     #[test]
     fn observability_yaml_binds_the_configured_address() {
-        let metrics = crate::config::MetricsConfig {
-            vector_metrics_address: "127.0.0.1:19598".into(),
-            ..Default::default()
-        };
-        let yaml = generate_observability_yaml(&metrics);
+        let yaml = generate_observability_yaml("127.0.0.1:19598");
         let address = yaml
             .get("sinks")
             .and_then(|s| s.get("prometheus_exporter"))

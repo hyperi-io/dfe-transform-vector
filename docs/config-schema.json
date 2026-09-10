@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` -- Kafka consumer connections established at Vector startup\n- `sink.*` -- Kafka producer connections established at Vector startup\n- `pipeline.name` -- used in consumer group_id and metrics labels at startup\n- `vector.*` -- binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA triggers (consumer-group lag and CPU), gated by the\n  subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,\n  which this app does not initialise, so the engine keys\n  (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA triggers (consumer-group lag and CPU), gated by the\n  subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,\n  which this app does not initialise, so the engine keys\n  (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.",
   "type": "object",
   "properties": {
     "dfe_source": {
@@ -20,9 +20,11 @@
       }
     },
     "source": {
-      "description": "Kafka source (input). **Requires restart.**",
+      "description": "Source (input), on either transport. **Requires restart.**",
       "$ref": "#/$defs/SourceConfig",
       "default": {
+        "transport": "bus",
+        "listen": "0.0.0.0:6000",
         "brokers": [
           "localhost:9092"
         ],
@@ -55,9 +57,11 @@
       }
     },
     "sink": {
-      "description": "Kafka sink (output). **Requires restart.**",
+      "description": "Sink (output), on either transport. **Requires restart.**",
       "$ref": "#/$defs/SinkConfig",
       "default": {
+        "transport": "bus",
+        "endpoint": "http://dfe-loader:6000",
         "brokers": [
           "localhost:9092"
         ],
@@ -94,6 +98,15 @@
         "librdkafka_options": {}
       }
     },
+    "bridge": {
+      "description": "The supervisor-to-Vector legs, direct transport only. **Requires restart.**",
+      "$ref": "#/$defs/BridgeConfig",
+      "default": {
+        "to_vector": "127.0.0.1:6100",
+        "from_vector": "127.0.0.1:6101",
+        "batch_size": 500
+      }
+    },
     "transforms": {
       "description": "User-supplied transform YAML files. **Hot-reloaded.**",
       "$ref": "#/$defs/TransformConfig",
@@ -121,7 +134,8 @@
       "$ref": "#/$defs/MetricsConfig",
       "default": {
         "address": "0.0.0.0:9090",
-        "vector_metrics_address": "0.0.0.0:9598"
+        "vector_metrics_address": "127.0.0.1:9598",
+        "vector_metrics_expiry_ticks": 4
       }
     },
     "logging": {
@@ -161,9 +175,19 @@
       }
     },
     "SourceConfig": {
-      "description": "Kafka source configuration (input big dials).",
+      "description": "Source configuration: the bus topics to consume, or the Push listener to\naccept records on.",
       "type": "object",
       "properties": {
+        "transport": {
+          "description": "`bus` consumes `topics`; `direct` accepts pushes on `listen`.",
+          "$ref": "#/$defs/Transport",
+          "default": "bus"
+        },
+        "listen": {
+          "description": "Address the scalo Push listener binds on the direct transport.",
+          "type": "string",
+          "default": "0.0.0.0:6000"
+        },
         "brokers": {
           "description": "Kafka bootstrap servers.",
           "type": "array",
@@ -261,6 +285,21 @@
         }
       }
     },
+    "Transport": {
+      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and the\ntransform are identical either way -- only who hands the record over changes.",
+      "oneOf": [
+        {
+          "description": "Kafka topics.",
+          "type": "string",
+          "const": "bus"
+        },
+        {
+          "description": "A scalo Push listener (source) or client (sink), bridged to Vector.",
+          "type": "string",
+          "const": "direct"
+        }
+      ]
+    },
     "DecodingConfig": {
       "description": "Message decoding configuration.",
       "type": "object",
@@ -339,9 +378,19 @@
       }
     },
     "SinkConfig": {
-      "description": "Kafka sink configuration (output big dials).",
+      "description": "Sink configuration: the bus topic to produce to, or the Push listener to\nsend the transformed records on to.",
       "type": "object",
       "properties": {
+        "transport": {
+          "description": "`bus` produces to `topic`; `direct` pushes to `endpoint`.",
+          "$ref": "#/$defs/Transport",
+          "default": "bus"
+        },
+        "endpoint": {
+          "description": "Downstream Push listener on the direct transport, e.g. the loader.",
+          "type": "string",
+          "default": "http://dfe-loader:6000"
+        },
         "brokers": {
           "description": "Kafka bootstrap servers.",
           "type": "array",
@@ -353,7 +402,7 @@
           ]
         },
         "topic": {
-          "description": "Output topic name.",
+          "description": "Output topic name. On the direct transport it is still the routing key\nthe downstream stage picks its table by, so a source keeps its name.",
           "type": "string",
           "default": ""
         },
@@ -502,6 +551,29 @@
         }
       }
     },
+    "BridgeConfig": {
+      "description": "The two in-pod legs between the supervisor and Vector, on the direct\ntransport only.\n\nVector does not speak scalo's `Transport/Push`, so on `direct` the\nsupervisor translates: it accepts records from the rest of DFE on\n`source.listen` and hands them to Vector over Vector's own protocol, then\ntakes them back and pushes them to `sink.endpoint`. Both legs stay on\nloopback -- they exist inside one pod and nothing outside it may reach them.\nOn the bus neither address is bound.",
+      "type": "object",
+      "properties": {
+        "to_vector": {
+          "description": "Where Vector accepts records from the supervisor -- Vector's own\n`vector` source binds here, and the supervisor dials it.",
+          "type": "string",
+          "default": "127.0.0.1:6100"
+        },
+        "from_vector": {
+          "description": "Where the supervisor accepts the transformed records back -- Vector's\n`vector` sink dials here, and the supervisor's listener binds it.",
+          "type": "string",
+          "default": "127.0.0.1:6101"
+        },
+        "batch_size": {
+          "description": "Records moved per bridge hop. Bounds the batch a retry replays.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 500
+        }
+      }
+    },
     "TransformConfig": {
       "description": "Transform file loading configuration.",
       "type": "object",
@@ -583,9 +655,16 @@
           "default": "0.0.0.0:9090"
         },
         "vector_metrics_address": {
-          "description": "Bind address for Vector's own `prometheus_exporter` sink (host:port).\n\nWritten into the assembled `99_observability.yaml`, so Vector's internal\nmetrics are exposed here. Prometheus scrapes it as a second target --\nthe wrapper does not proxy it -- which is why it defaults to `0.0.0.0`\nrather than loopback.",
+          "description": "Vector's `prometheus_exporter` bind address (host:port).\n\nThe wrapper writes it into the assembled Vector config AND scrapes it,\nmerging every `vector_*` sample into the scalo registry, so nothing\noutside the pod needs this port. Keep it on loopback.",
           "type": "string",
-          "default": "0.0.0.0:9598"
+          "default": "127.0.0.1:9598"
+        },
+        "vector_metrics_expiry_ticks": {
+          "description": "Scrape ticks a merged `vector_*` gauge may go unseen before it is\nzeroed, so a component Vector drops stops reporting its last value.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 4
         }
       }
     },
