@@ -36,10 +36,10 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
-    // The probe paths above are all served on metrics_port; the only extra
-    // port is Vector's own API.
+    // The probe paths above are all served on metrics_port; the extra ports are
+    // the direct transport's Push listener and Vector's own API, and nothing else.
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(port_names, vec!["vector-api"]);
+    assert_eq!(port_names, vec!["push", "vector-api"]);
 
     let vector_api = c
         .extra_ports

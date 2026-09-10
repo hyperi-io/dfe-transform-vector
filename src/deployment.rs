@@ -40,12 +40,21 @@ pub fn contract() -> DeploymentContract {
         config_mount_path: "/etc/dfe-transform-vector/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         // No separate health port: `metrics_port` carries /livez, /readyz and
-        // /metrics, and is the only port the generated probes target.
-        extra_ports: vec![PortContract {
-            name: "vector-api".into(),
-            port: 8686,
-            protocol: "TCP".into(),
-        }],
+        // /metrics, and is the only port the generated probes target. `push` is
+        // the scalo Push listener the direct transport receives records on --
+        // 6000 is the platform convention every DFE stage's listener uses.
+        extra_ports: vec![
+            PortContract {
+                name: "push".into(),
+                port: 6000,
+                protocol: "TCP".into(),
+            },
+            PortContract {
+                name: "vector-api".into(),
+                port: 8686,
+                protocol: "TCP".into(),
+            },
+        ],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vector/config.yaml".into(),
@@ -70,6 +79,8 @@ pub fn contract() -> DeploymentContract {
                 "name": "default"
             },
             "source": {
+                "transport": "bus",
+                "listen": "0.0.0.0:6000",
                 "brokers": ["kafka:9092"],
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vector-default",
@@ -87,6 +98,8 @@ pub fn contract() -> DeploymentContract {
                 "tls": { "enabled": false }
             },
             "sink": {
+                "transport": "bus",
+                "endpoint": "http://dfe-loader:6000",
                 "brokers": ["kafka:9092"],
                 "topic": "enriched_events",
                 "key_field": ".org_id",
@@ -100,6 +113,13 @@ pub fn contract() -> DeploymentContract {
                 },
                 "tls": { "enabled": false }
             },
+            // The two loopback legs between the supervisor and Vector, used on
+            // the direct transport only.
+            "bridge": {
+                "to_vector": "127.0.0.1:6100",
+                "from_vector": "127.0.0.1:6101",
+                "batch_size": 500
+            },
             "transforms": {
                 "dir": "/etc/dfe-transform-vector/transforms"
             },
@@ -111,9 +131,13 @@ pub fn contract() -> DeploymentContract {
                 "version": VECTOR_VERSION,
                 "version_check": "warn"
             },
+            // vector_metrics_address is where Vector's own prometheus_exporter
+            // binds. The wrapper scrapes it and merges vector_* into the 9090
+            // registry, so it stays on loopback and needs no container port.
             "metrics": {
                 "address": "0.0.0.0:9090",
-                "vector_metrics_address": "127.0.0.1:9598"
+                "vector_metrics_address": "127.0.0.1:9598",
+                "vector_metrics_expiry_ticks": 4
             },
             "logging": {
                 "level": "info",
@@ -287,6 +311,20 @@ mod tests {
             !c.extra_ports.iter().any(|p| p.name == "health"),
             "a second health port is a second answer to readiness"
         );
+    }
+
+    /// The direct transport needs a listener the chart can put a Service in
+    /// front of, and the engine reads the port from apps.yaml `endpoints.push`.
+    /// Both must be 6000, the convention every DFE stage's listener follows.
+    #[test]
+    fn test_contract_advertises_the_push_listener() {
+        let c = contract();
+        let push = c
+            .extra_ports
+            .iter()
+            .find(|p| p.name == "push")
+            .expect("the direct transport's Push listener must be a declared port");
+        assert_eq!(push.port, 6000);
     }
 
     /// The committed reflectable artefacts under docs/ must not drift from a

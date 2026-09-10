@@ -14,12 +14,16 @@
 //! longer runs its own HTTP server, eliminating the previous double-bind
 //! against the same port.
 //!
-//! Vector's own metrics (transport, records, internal counters) are
-//! exposed by Vector's `prometheus_exporter` sink on
-//! `config.metrics.vector_metrics_address` (default `127.0.0.1:9598`).
-//! Prometheus scrapes that endpoint directly as a separate target — the
-//! wrapper does NOT proxy-merge it any more. The chart's `extraPorts`
-//! plus a PodMonitor selector handles the second target.
+//! Vector's own metrics (transport, records, internal counters) are exposed
+//! by Vector's `prometheus_exporter` sink on
+//! `config.metrics.vector_metrics_address` (default `127.0.0.1:9598`). That
+//! port is a LOOPBACK DEBUG surface, not a scrape target: [`scrape`] pulls it
+//! on scalo's metrics interval and merges every sample into this registry, so
+//! `/metrics` on the ops port and the OTLP push both carry `vector_*`
+//! alongside the wrapper's own metrics. Nothing outside the pod needs 9598,
+//! and no second Prometheus target or PodMonitor selector is involved.
+
+pub mod scrape;
 
 use std::time::{Duration, Instant};
 
@@ -49,6 +53,7 @@ pub struct WrapperMetrics {
     pub crashes_total: Counter,
     pub restarts_total: Counter,
     pub config_validation_errors_total: Counter,
+    pub scrape_failures_total: Counter,
     pub uptime_seconds: Gauge,
     pub app: AppMetrics,
     pub service: ServiceMetrics,
@@ -79,6 +84,12 @@ impl WrapperMetrics {
             "config_validation_errors_total",
             "Total config validation errors",
         );
+        // App-segment name: the manager's namespace prepends the platform
+        // prefix, giving `dfe_transform_vector_scrape_failures_total`.
+        let scrape_failures_total = manager.counter(
+            "transform_vector_scrape_failures_total",
+            "Failed scrapes of Vector's prometheus_exporter",
+        );
         let uptime_seconds = manager.gauge("uptime_seconds", "Vector subprocess uptime in seconds");
 
         // Describe the labelled metrics (recorded via macros in
@@ -100,6 +111,7 @@ impl WrapperMetrics {
             crashes_total,
             restarts_total,
             config_validation_errors_total,
+            scrape_failures_total,
             uptime_seconds,
             app,
             service,

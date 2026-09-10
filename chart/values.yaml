@@ -70,16 +70,22 @@ resources:
     cpu: "2"
     memory: 1Gi
 
-# -- Metrics and health endpoint service
+# -- Metrics service; /livez and /readyz are on this port too
 service:
   type: ClusterIP
   port: 9090
+  # -- The scalo Push listener, used on the direct transport only. 6000 is the
+  # platform convention every DFE stage's listener follows.
+  pushPort: 6000
 
 # -- Application configuration (mounted as /etc/dfe-transform-vector/config.yaml)
 config:
   pipeline:
     name: default
   source:
+    # -- bus consumes topics; direct accepts pushes on listen
+    transport: bus
+    listen: 0.0.0.0:6000
     brokers:
     - kafka:9092
     topics:
@@ -95,6 +101,10 @@ config:
     tls:
       enabled: false
   sink:
+    # -- bus produces to topic; direct pushes to endpoint. topic still applies
+    # on direct: it is the routing key the next stage picks its table by.
+    transport: bus
+    endpoint: http://dfe-loader:6000
     brokers:
     - kafka:9092
     topic: enriched_events
@@ -108,6 +118,12 @@ config:
       password: ${KAFKA_SASL_PASSWORD}
     tls:
       enabled: false
+  # -- The two supervisor-to-Vector legs, used on the direct transport only.
+  # Both live inside the pod, so both stay on loopback.
+  bridge:
+    to_vector: 127.0.0.1:6100
+    from_vector: 127.0.0.1:6101
+    batch_size: 500
   transforms:
     dir: /etc/dfe-transform-vector/transforms
   vector:
@@ -119,7 +135,13 @@ config:
     version_check: warn
   metrics:
     address: 0.0.0.0:9090
+    # -- Where Vector's prometheus_exporter binds. The wrapper scrapes it and
+    # merges vector_* into the 9090 registry, so keep it on loopback: it is a
+    # debug surface, not a scrape target, and needs no container port.
     vector_metrics_address: 127.0.0.1:9598
+    # -- Scrape ticks a merged vector_* gauge may go unseen before it is zeroed,
+    # so a component Vector drops stops reporting its last value.
+    vector_metrics_expiry_ticks: 4
   logging:
     level: info
     format: json

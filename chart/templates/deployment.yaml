@@ -51,6 +51,11 @@ spec:
             - name: vector-api
               containerPort: 8686
               protocol: TCP
+            {{- if eq (default "bus" ((.Values.config).source).transport) "direct" }}
+            - name: push
+              containerPort: {{ .Values.service.pushPort | default 6000 }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: OTEL_SERVICE_NAME
               value: "dfe-transform-vector"
@@ -78,7 +83,11 @@ spec:
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: {{ .Values.otel.protocol | quote }}
             {{- end }}
-            # kafka credentials via Secret (figment env cascade overrides file config)
+            # Kafka credentials via Secret. These are NOT config overrides: the
+            # env cascade strips DFE_TRANSFORM_, so these names match no config
+            # key. Vector expands the ${KAFKA_SASL_*} placeholders in
+            # .Values.config.{source,sink}.sasl from the child process
+            # environment, which it inherits from this container.
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
