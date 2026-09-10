@@ -63,6 +63,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
             },
             ..Default::default()
         },
+        bridge: BridgeConfig::default(),
         transforms: TransformConfig {
             dir: transforms_dir,
             files: None,
@@ -156,7 +157,9 @@ fn end_to_end_assembly_with_transforms() {
     let obs = fs::read_to_string(output_dir.path().join("99_observability.yaml")).unwrap();
     assert!(obs.contains("internal_metrics"));
     assert!(obs.contains("prometheus_exporter"));
-    assert!(obs.contains("0.0.0.0:9598"));
+    // The exporter binds where metrics.vector_metrics_address says, on
+    // loopback, because the wrapper is its only reader.
+    assert!(obs.contains("127.0.0.1:9598"));
 
     // Verify transform files were written flat (3 files, prefixed with 50_)
     let mut files: Vec<String> = fs::read_dir(output_dir.path())
@@ -818,8 +821,12 @@ fn config_with_all_fields_populated_validates() {
             drain_timeout_ms: Some(20000),
             topic_lag_metric: false,
             librdkafka_options: [("debug".into(), "consumer".into())].into(),
+            transport: Transport::Bus,
+            listen: "0.0.0.0:6000".into(),
         },
         sink: SinkConfig {
+            transport: Transport::Bus,
+            endpoint: "http://dfe-loader:6000".into(),
             brokers: vec!["kafka-1:9092".into()],
             topic: "enriched_load".into(),
             key_field: ".org_id".into(),
@@ -851,6 +858,11 @@ fn config_with_all_fields_populated_validates() {
             socket_timeout_ms: 30_000,
             librdkafka_options: [("queue.buffering.max.kbytes".into(), "1048576".into())].into(),
         },
+        bridge: BridgeConfig {
+            to_vector: "127.0.0.1:16100".into(),
+            from_vector: "127.0.0.1:16101".into(),
+            batch_size: 250,
+        },
         transforms: TransformConfig {
             dir: Some("/etc/dfe-transform-vector/transforms".into()),
             files: None,
@@ -867,6 +879,7 @@ fn config_with_all_fields_populated_validates() {
         metrics: MetricsConfig {
             address: "0.0.0.0:9090".into(),
             vector_metrics_address: "127.0.0.1:9598".into(),
+            ..Default::default()
         },
         logging: LoggingConfig {
             level: "debug".into(),

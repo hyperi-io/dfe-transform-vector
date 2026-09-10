@@ -8,8 +8,9 @@
 
 //! Configuration structures and loading.
 //!
-//! Big-dial config schema for Kafka source/sink, user-supplied transforms,
-//! Vector subprocess, health/metrics endpoints, and scaling pressure.
+//! Big-dial config schema for the source/sink on either transport,
+//! user-supplied transforms, the Vector subprocess, the metrics endpoint, and
+//! scaling pressure.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -96,8 +97,9 @@ impl Default for DecodingConfig {
 /// - `transforms.files` — watcher switches to new file list after successful reload
 ///
 /// **Requires pod restart:**
-/// - `source.*` — Kafka consumer connections established at Vector startup
-/// - `sink.*` — Kafka producer connections established at Vector startup
+/// - `source.*` — the consumer or the Push listener is established at startup
+/// - `sink.*` — the producer or the Push client is established at startup
+/// - `bridge.*` — the two supervisor-to-Vector legs bind at startup
 /// - `pipeline.name` — used in consumer group_id and metrics labels at startup
 /// - `vector.*` — binary path, data_dir, config_dir, API address, log level
 ///   set at Vector spawn
@@ -124,10 +126,12 @@ pub struct Config {
     pub dfe_source: Option<String>,
     /// Pipeline identity. **Requires restart.**
     pub pipeline: PipelineConfig,
-    /// Kafka source (input). **Requires restart.**
+    /// Source (input), on either transport. **Requires restart.**
     pub source: SourceConfig,
-    /// Kafka sink (output). **Requires restart.**
+    /// Sink (output), on either transport. **Requires restart.**
     pub sink: SinkConfig,
+    /// The supervisor-to-Vector legs, direct transport only. **Requires restart.**
+    pub bridge: BridgeConfig,
     /// User-supplied transform YAML files. **Hot-reloaded.**
     pub transforms: TransformConfig,
     /// Vector subprocess settings. **Requires restart.**
@@ -170,10 +174,69 @@ impl PipelineConfig {
     }
 }
 
-/// Kafka source configuration (input big dials).
+/// Which transport a stage uses.
+///
+/// One deployment runs one of them: `bus` is a broker between the stages,
+/// `direct` is gRPC between them and needs no broker at all. The record and the
+/// transform are identical either way -- only who hands the record over changes.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// Kafka topics.
+    #[default]
+    Bus,
+    /// A scalo Push listener (source) or client (sink), bridged to Vector.
+    Direct,
+}
+
+impl Transport {
+    /// Whether this stage is on the direct transport.
+    #[must_use]
+    pub const fn is_direct(self) -> bool {
+        matches!(self, Self::Direct)
+    }
+}
+
+/// Reject a bind address the listener would fail on at startup.
+///
+/// A hostname is not a bind address: it resolves at socket-bind time and the
+/// failure surfaces after readiness has already been published.
+fn validate_bind(field: &str, value: &str) -> Result<()> {
+    if value.parse::<std::net::SocketAddr>().is_ok() {
+        return Ok(());
+    }
+    Err(crate::Error::Validation(format!(
+        "{field} must be a host:port bind address on the direct transport (got '{value}')"
+    )))
+}
+
+/// Parse a transport name from the environment, keeping `current` on anything
+/// unrecognised so a typo cannot silently move a deployment off its transport.
+fn parse_transport(value: &str, current: Transport) -> Transport {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "bus" | "kafka" => Transport::Bus,
+        "direct" | "grpc" => Transport::Direct,
+        other => {
+            tracing::warn!(
+                value = other,
+                "unknown transport, keeping the configured one"
+            );
+            current
+        }
+    }
+}
+
+/// Source configuration: the bus topics to consume, or the Push listener to
+/// accept records on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
+    /// `bus` consumes `topics`; `direct` accepts pushes on `listen`.
+    pub transport: Transport,
+    /// Address the scalo Push listener binds on the direct transport.
+    pub listen: String,
     /// Kafka bootstrap servers.
     pub brokers: Vec<String>,
     /// Topics to consume from.
@@ -204,6 +267,8 @@ pub struct SourceConfig {
 impl Default for SourceConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            listen: "0.0.0.0:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topics: vec!["events".to_string()],
             group_id: "dfe-transform-vector".to_string(),
@@ -220,13 +285,19 @@ impl Default for SourceConfig {
     }
 }
 
-/// Kafka sink configuration (output big dials).
+/// Sink configuration: the bus topic to produce to, or the Push listener to
+/// send the transformed records on to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
+    /// `bus` produces to `topic`; `direct` pushes to `endpoint`.
+    pub transport: Transport,
+    /// Downstream Push listener on the direct transport, e.g. the loader.
+    pub endpoint: String,
     /// Kafka bootstrap servers.
     pub brokers: Vec<String>,
-    /// Output topic name.
+    /// Output topic name. On the direct transport it is still the routing key
+    /// the downstream stage picks its table by, so a source keeps its name.
     pub topic: String,
     /// Event field path for Kafka partition key (e.g., ".org_id").
     pub key_field: String,
@@ -253,6 +324,8 @@ pub struct SinkConfig {
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            endpoint: "http://dfe-loader:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topic: String::new(),
             key_field: String::new(),
@@ -331,6 +404,38 @@ pub struct TransformConfig {
     pub files: Option<Vec<String>>,
 }
 
+/// The two in-pod legs between the supervisor and Vector, on the direct
+/// transport only.
+///
+/// Vector does not speak scalo's `Transport/Push`, so on `direct` the
+/// supervisor translates: it accepts records from the rest of DFE on
+/// `source.listen` and hands them to Vector over Vector's own protocol, then
+/// takes them back and pushes them to `sink.endpoint`. Both legs stay on
+/// loopback -- they exist inside one pod and nothing outside it may reach them.
+/// On the bus neither address is bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct BridgeConfig {
+    /// Where Vector accepts records from the supervisor -- Vector's own
+    /// `vector` source binds here, and the supervisor dials it.
+    pub to_vector: String,
+    /// Where the supervisor accepts the transformed records back -- Vector's
+    /// `vector` sink dials here, and the supervisor's listener binds it.
+    pub from_vector: String,
+    /// Records moved per bridge hop. Bounds the batch a retry replays.
+    pub batch_size: usize,
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            to_vector: "127.0.0.1:6100".to_string(),
+            from_vector: "127.0.0.1:6101".to_string(),
+            batch_size: 500,
+        }
+    }
+}
+
 /// Vector subprocess configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -403,8 +508,15 @@ impl Default for VectorConfig {
 pub struct MetricsConfig {
     /// Metrics server bind address (host:port).
     pub address: String,
-    /// Vector's prometheus_exporter address to proxy (host:port).
+    /// Vector's `prometheus_exporter` bind address (host:port).
+    ///
+    /// The wrapper writes it into the assembled Vector config AND scrapes it,
+    /// merging every `vector_*` sample into the scalo registry, so nothing
+    /// outside the pod needs this port. Keep it on loopback.
     pub vector_metrics_address: String,
+    /// Scrape ticks a merged `vector_*` gauge may go unseen before it is
+    /// zeroed, so a component Vector drops stops reporting its last value.
+    pub vector_metrics_expiry_ticks: u32,
 }
 
 impl Default for MetricsConfig {
@@ -412,6 +524,7 @@ impl Default for MetricsConfig {
         Self {
             address: "0.0.0.0:9090".to_string(),
             vector_metrics_address: "127.0.0.1:9598".to_string(),
+            vector_metrics_expiry_ticks: crate::metrics::scrape::DEFAULT_EXPIRY_TICKS,
         }
     }
 }
@@ -506,6 +619,12 @@ impl ApplyFlatEnv for Config {
         }
 
         // Source
+        if let Some(v) = flat_env::flat_env_string(prefix, "SOURCE_TRANSPORT") {
+            self.source.transport = parse_transport(&v, self.source.transport);
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SOURCE_LISTEN") {
+            self.source.listen = v;
+        }
         if let Some(v) = flat_env::flat_env_list(prefix, "SOURCE_BROKERS") {
             self.source.brokers = v;
         }
@@ -526,6 +645,12 @@ impl ApplyFlatEnv for Config {
         }
 
         // Sink
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_TRANSPORT") {
+            self.sink.transport = parse_transport(&v, self.sink.transport);
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_ENDPOINT") {
+            self.sink.endpoint = v;
+        }
         if let Some(v) = flat_env::flat_env_list(prefix, "SINK_BROKERS") {
             self.sink.brokers = v;
         }
@@ -549,6 +674,17 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env::flat_env_string(prefix, "SINK_SASL_MECHANISM") {
             self.sink.sasl.mechanism = v;
+        }
+
+        // Bridge
+        if let Some(v) = flat_env::flat_env_string(prefix, "BRIDGE_TO_VECTOR") {
+            self.bridge.to_vector = v;
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "BRIDGE_FROM_VECTOR") {
+            self.bridge.from_vector = v;
+        }
+        if let Some(v) = flat_env::flat_env_parsed::<usize>(prefix, "BRIDGE_BATCH_SIZE") {
+            self.bridge.batch_size = v;
         }
 
         // Transforms
@@ -719,21 +855,28 @@ impl Config {
             ));
         }
 
-        // Source
-        if self.source.brokers.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.brokers must have at least one broker".into(),
-            ));
-        }
-        if self.source.topics.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.topics must have at least one topic".into(),
-            ));
-        }
-        if self.source.group_id.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.group_id must not be empty".into(),
-            ));
+        // The two ends move independently: a stage may consume a topic and push
+        // the result onward, or the reverse.
+        let direct_in = self.source.transport.is_direct();
+        let direct_out = self.sink.transport.is_direct();
+        self.validate_bridge(direct_in, direct_out)?;
+
+        // Source. Structural problems refuse; a valid config with no topics is a
+        // transform whose source has not been written yet, which idles instead
+        // (see `work_state`).
+        if direct_in {
+            validate_bind("source.listen", &self.source.listen)?;
+        } else {
+            if self.source.brokers.is_empty() {
+                return Err(crate::Error::Validation(
+                    "source.brokers must have at least one broker".into(),
+                ));
+            }
+            if self.source.group_id.is_empty() {
+                return Err(crate::Error::Validation(
+                    "source.group_id must not be empty".into(),
+                ));
+            }
         }
         self.validate_sasl("source.sasl", &self.source.sasl)?;
 
@@ -785,15 +928,23 @@ impl Config {
         }
 
         // Sink
-        if self.sink.brokers.is_empty() {
-            return Err(crate::Error::Validation(
-                "sink.brokers must have at least one broker".into(),
-            ));
-        }
-        if self.sink.topic.is_empty() {
-            return Err(crate::Error::Validation(
-                "sink.topic must not be empty".into(),
-            ));
+        if direct_out {
+            if self.sink.endpoint.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.endpoint must not be empty on the direct transport".into(),
+                ));
+            }
+        } else {
+            if self.sink.brokers.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.brokers must have at least one broker".into(),
+                ));
+            }
+            if self.sink.topic.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.topic must not be empty".into(),
+                ));
+            }
         }
         self.validate_sasl("sink.sasl", &self.sink.sasl)?;
         self.validate_buffer(&self.sink.buffer)?;
@@ -863,6 +1014,48 @@ impl Config {
             )));
         }
 
+        Ok(())
+    }
+
+    /// Does this configuration give the transform work?
+    ///
+    /// On the bus a transform with no topics has nothing to consume: it starts,
+    /// stays Ready, holds no consumer group, and picks up the first config that
+    /// names a topic. On the direct transport the listener IS the work.
+    #[must_use]
+    pub fn work_state(&self) -> scalo::lifecycle::WorkState {
+        scalo::lifecycle::WorkState::idle_if(
+            !self.source.transport.is_direct() && self.source.topics.is_empty(),
+            "no source topics configured",
+        )
+    }
+
+    /// Check the supervisor-to-Vector legs each direct end actually binds.
+    ///
+    /// A leg only exists where its end of the pipeline is on the direct
+    /// transport, so a bus-in/direct-out stage is judged on `from_vector` alone.
+    fn validate_bridge(&self, direct_in: bool, direct_out: bool) -> Result<()> {
+        if !direct_in && !direct_out {
+            return Ok(());
+        }
+        if direct_in {
+            validate_bind("bridge.to_vector", &self.bridge.to_vector)?;
+        }
+        if direct_out {
+            validate_bind("bridge.from_vector", &self.bridge.from_vector)?;
+        }
+        if direct_in && direct_out && self.bridge.to_vector == self.bridge.from_vector {
+            return Err(crate::Error::Validation(
+                "bridge.to_vector and bridge.from_vector must differ -- they are the \
+                 two ends of the loop through Vector, and one address cannot be both"
+                    .into(),
+            ));
+        }
+        if self.bridge.batch_size == 0 {
+            return Err(crate::Error::Validation(
+                "bridge.batch_size must be at least 1".into(),
+            ));
+        }
         Ok(())
     }
 
