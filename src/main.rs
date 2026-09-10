@@ -26,6 +26,7 @@ use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
 use scalo::version_check::VersionCheckConfig;
 use tracing::{debug, error, info};
 
+use dfe_transform_vector::bridge;
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
@@ -139,6 +140,10 @@ impl ServiceApp for App {
         Ok(config)
     }
 
+    fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
+        config.work_state()
+    }
+
     async fn run_service(
         &self,
         config: Config,
@@ -165,7 +170,7 @@ impl ServiceApp for App {
 
 #[tokio::main]
 async fn main() {
-    let app = App::parse();
+    let mut app = App::parse();
 
     // Handle deployment artefact and assemble commands before entering the
     // ServiceApp lifecycle (these don't need the full logging/config/run pipeline)
@@ -218,6 +223,20 @@ async fn main() {
                 // fall through to run_app
             }
         }
+    }
+
+    // `run_app` binds the metrics listener on `CommonArgs::effective_metrics_addr()`
+    // and builds the logger from `effective_log_level()`/`effective_log_format()`.
+    // Unset, those fall through to scalo's OWN config cascade -- which this app
+    // never initialises -- so `metrics.address` and `logging.*` from THIS app's
+    // config file reached nothing: the listener bound 0.0.0.0:9090 whatever the
+    // ConfigMap said. Fill the args from the loaded config first; the flags and
+    // their env vars are already set by then, so they still win.
+    //
+    // A load error is swallowed here on purpose: `run_app` loads the same config
+    // again and reports the failure with its own message.
+    if let Ok(config) = Config::load(app.common.config.as_deref()) {
+        config.fill_common_args(&mut app.common);
     }
 
     // Delegate to standard ServiceApp lifecycle (logging → config → run_service)
@@ -394,6 +413,15 @@ async fn run_transform_service(
             )
             .await;
         });
+    }
+
+    // Direct transport: carry records between DFE's Push protocol and Vector's.
+    // Bound before Vector is spawned, so a port that cannot be taken fails
+    // startup rather than surfacing once the pod is already Ready.
+    if bridge::is_enabled(&config) {
+        let bridge = bridge::Bridge::build(&config).await?;
+        let bridge_shutdown = shutdown_tx.subscribe();
+        tokio::spawn(bridge.run(bridge_shutdown));
     }
 
     // Run Vector subprocess lifecycle loop

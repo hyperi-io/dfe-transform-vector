@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` — watcher switches to new directory after successful reload\n- `transforms.files` — watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — Kafka consumer connections established at Vector startup\n- `sink.*` — Kafka producer connections established at Vector startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.*` — HTTP server binds at startup\n- `logging.*` — tracing subscriber configured at startup\n- `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block\n  from the cascade at startup (via run_app's `config::setup()`); the\n  app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.\n  Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are\n  honoured by scalo and ignored by this struct (and vice-versa).\n- `reload.poll_interval_secs` — captured at reload loop start",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA triggers (consumer-group lag and CPU), gated by the\n  subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,\n  which this app does not initialise, so the engine keys\n  (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.",
   "type": "object",
   "properties": {
     "dfe_source": {
@@ -20,9 +20,11 @@
       }
     },
     "source": {
-      "description": "Kafka source (input). **Requires restart.**",
+      "description": "Source (input), on either transport. **Requires restart.**",
       "$ref": "#/$defs/SourceConfig",
       "default": {
+        "transport": "bus",
+        "listen": "0.0.0.0:6000",
         "brokers": [
           "localhost:9092"
         ],
@@ -55,9 +57,11 @@
       }
     },
     "sink": {
-      "description": "Kafka sink (output). **Requires restart.**",
+      "description": "Sink (output), on either transport. **Requires restart.**",
       "$ref": "#/$defs/SinkConfig",
       "default": {
+        "transport": "bus",
+        "endpoint": "http://dfe-loader:6000",
         "brokers": [
           "localhost:9092"
         ],
@@ -94,6 +98,15 @@
         "librdkafka_options": {}
       }
     },
+    "bridge": {
+      "description": "The supervisor-to-Vector legs, direct transport only. **Requires restart.**",
+      "$ref": "#/$defs/BridgeConfig",
+      "default": {
+        "to_vector": "127.0.0.1:6100",
+        "from_vector": "127.0.0.1:6101",
+        "batch_size": 500
+      }
+    },
     "transforms": {
       "description": "User-supplied transform YAML files. **Hot-reloaded.**",
       "$ref": "#/$defs/TransformConfig",
@@ -113,8 +126,7 @@
         "log_level": "info",
         "version": "0.57.0",
         "version_check": "strict",
-        "version_source": "preshipped",
-        "cache_dir": "/var/cache/vector"
+        "version_source": "preshipped"
       }
     },
     "metrics": {
@@ -131,7 +143,7 @@
       "$ref": "#/$defs/LoggingConfig",
       "default": {
         "level": "info",
-        "format": "json"
+        "format": "auto"
       }
     },
     "scaling": {
@@ -163,9 +175,19 @@
       }
     },
     "SourceConfig": {
-      "description": "Kafka source configuration (input big dials).",
+      "description": "Source configuration: the bus topics to consume, or the Push listener to\naccept records on.",
       "type": "object",
       "properties": {
+        "transport": {
+          "description": "`bus` consumes `topics`; `direct` accepts pushes on `listen`.",
+          "$ref": "#/$defs/Transport",
+          "default": "bus"
+        },
+        "listen": {
+          "description": "Address the scalo Push listener binds on the direct transport.",
+          "type": "string",
+          "default": "0.0.0.0:6000"
+        },
         "brokers": {
           "description": "Kafka bootstrap servers.",
           "type": "array",
@@ -263,6 +285,21 @@
         }
       }
     },
+    "Transport": {
+      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and the\ntransform are identical either way -- only who hands the record over changes.",
+      "oneOf": [
+        {
+          "description": "Kafka topics.",
+          "type": "string",
+          "const": "bus"
+        },
+        {
+          "description": "A scalo Push listener (source) or client (sink), bridged to Vector.",
+          "type": "string",
+          "const": "direct"
+        }
+      ]
+    },
     "DecodingConfig": {
       "description": "Message decoding configuration.",
       "type": "object",
@@ -341,9 +378,19 @@
       }
     },
     "SinkConfig": {
-      "description": "Kafka sink configuration (output big dials).",
+      "description": "Sink configuration: the bus topic to produce to, or the Push listener to\nsend the transformed records on to.",
       "type": "object",
       "properties": {
+        "transport": {
+          "description": "`bus` produces to `topic`; `direct` pushes to `endpoint`.",
+          "$ref": "#/$defs/Transport",
+          "default": "bus"
+        },
+        "endpoint": {
+          "description": "Downstream Push listener on the direct transport, e.g. the loader.",
+          "type": "string",
+          "default": "http://dfe-loader:6000"
+        },
         "brokers": {
           "description": "Kafka bootstrap servers.",
           "type": "array",
@@ -355,7 +402,7 @@
           ]
         },
         "topic": {
-          "description": "Output topic name.",
+          "description": "Output topic name. On the direct transport it is still the routing key\nthe downstream stage picks its table by, so a source keeps its name.",
           "type": "string",
           "default": ""
         },
@@ -504,6 +551,29 @@
         }
       }
     },
+    "BridgeConfig": {
+      "description": "The two in-pod legs between the supervisor and Vector, on the direct\ntransport only.\n\nVector does not speak scalo's `Transport/Push`, so on `direct` the\nsupervisor translates: it accepts records from the rest of DFE on\n`source.listen` and hands them to Vector over Vector's own protocol, then\ntakes them back and pushes them to `sink.endpoint`. Both legs stay on\nloopback -- they exist inside one pod and nothing outside it may reach them.\nOn the bus neither address is bound.",
+      "type": "object",
+      "properties": {
+        "to_vector": {
+          "description": "Where Vector accepts records from the supervisor -- Vector's own\n`vector` source binds here, and the supervisor dials it.",
+          "type": "string",
+          "default": "127.0.0.1:6100"
+        },
+        "from_vector": {
+          "description": "Where the supervisor accepts the transformed records back -- Vector's\n`vector` sink dials here, and the supervisor's listener binds it.",
+          "type": "string",
+          "default": "127.0.0.1:6101"
+        },
+        "batch_size": {
+          "description": "Records moved per bridge hop. Bounds the batch a retry replays.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 500
+        }
+      }
+    },
     "TransformConfig": {
       "description": "Transform file loading configuration.",
       "type": "object",
@@ -569,14 +639,9 @@
           "default": "strict"
         },
         "version_source": {
-          "description": "Where the Vector version comes from: `preshipped`, `latest`, `stable`,\na minor line (`0.56`), or an exact version (`0.56.0`).\n\nDefaults to `preshipped` -- the binary baked into the image. It needs no\nnetwork, is the version this build was tested against, and is the only\nmode that works on a cold airgapped deploy.\n\nSee [`crate::vector::VersionSource`].",
+          "description": "Where the Vector binary comes from. `preshipped` is the only value the\nruntime can honour.\n\nThis process never acquires a binary: it runs [`binary`](Self::binary)\nand nothing else. The selection rules in [`crate::vector::binary`]\n(`latest`, `stable`, a minor line, an exact version) have no caller on\nthe run path, so any other value here would resolve to the pre-shipped\nbinary anyway -- silently, and while reporting success. `validate()`\nrejects them rather than substituting.\n\nTo run a different Vector, point [`binary`](Self::binary) at it and set\n[`version`](Self::version) to match.",
           "type": "string",
           "default": "preshipped"
-        },
-        "cache_dir": {
-          "description": "Persistent cache directory for Vector binaries.\n\nDeliberately OUTSIDE the container's writable layer -- mount a k8s\nvolume or a docker bind here so it survives pod restarts and image\npulls. Pre-populate it to run a non-pre-shipped version in an airgapped\nenvironment.",
-          "type": "string",
-          "default": "/var/cache/vector"
         }
       }
     },
@@ -585,7 +650,7 @@
       "type": "object",
       "properties": {
         "address": {
-          "description": "Metrics server bind address (host:port).",
+          "description": "Bind address for `/metrics`, `/livez` and `/readyz` (host:port).\n\nReaches the listener through [`Config::fill_common_args`]; `--metrics-addr`\nand `METRICS_ADDR` both outrank it.",
           "type": "string",
           "default": "0.0.0.0:9090"
         },
@@ -608,23 +673,23 @@
       "type": "object",
       "properties": {
         "level": {
-          "description": "Log level (trace, debug, info, warn, error).",
+          "description": "Log level (trace, debug, info, warn, error).\n\nReaches the subscriber through [`Config::fill_common_args`];\n`--log-level`, `LOG_LEVEL`, `--verbose` and `--quiet` all outrank it.",
           "type": "string",
           "default": "info"
         },
         "format": {
-          "description": "Log format (json, text).",
+          "description": "Log format (json, text, auto).\n\n`auto` -- the default -- is text on a terminal and JSON everywhere else,\nso a pod ships structured logs and a developer reads them.",
           "type": "string",
-          "default": "json"
+          "default": "auto"
         }
       }
     },
     "ScalingConfig": {
-      "description": "KEDA scaling pressure configuration.",
+      "description": "KEDA scaling pressure configuration.\n\nPresent for parity with the `scaling:` block every DFE service accepts.\nNothing in this process reads it -- see the \"read by nothing\" note on\n[`Config`].",
       "type": "object",
       "properties": {
         "pressure_threshold": {
-          "description": "Scaling pressure threshold (0.0–1.0).",
+          "description": "Scaling pressure threshold (0.0–1.0). Range-checked, not consumed.",
           "type": "number",
           "format": "double",
           "default": 0.8

@@ -44,29 +44,25 @@ pub enum ChangeKind {
 
 /// Classify the difference between old and new config.
 ///
-/// Uses an **allowlist** pattern: only `transforms` changes are safe for
-/// hot-reload. All other config fields require a pod restart because their
-/// values are consumed at startup and not re-read at runtime.
+/// Only `transforms` changes are safe for hot-reload. Everything else is bound
+/// at startup (servers, connections, labels) and needs a pod restart.
 ///
-/// This is intentionally conservative — any new config fields added in the
-/// future will default to "requires restart" until explicitly allowed here.
+/// Asks "is this the old config with a new `transforms` block?" rather than
+/// listing the siblings that must match. The list was the bug: it named the
+/// eight sibling structs and never mentioned `dfe_source`, so a `dfe_source`
+/// edit passed as transforms-only and the loop logged "config hot-reload
+/// completed successfully" for a change it had not applied. A field added to
+/// [`Config`] later joins the comparison for free, which is what the old
+/// comment claimed and the old code did the opposite of.
 pub fn classify_change(old: &Config, new: &Config) -> ChangeKind {
     if old == new {
         return ChangeKind::None;
     }
 
-    // Allowlist: only transform changes can be hot-reloaded.
-    // Everything else is bound at startup (servers, connections, labels).
-    let only_transforms_changed = old.source == new.source
-        && old.sink == new.sink
-        && old.pipeline == new.pipeline
-        && old.vector == new.vector
-        && old.metrics == new.metrics
-        && old.logging == new.logging
-        && old.scaling == new.scaling
-        && old.reload == new.reload;
+    let mut without_transforms = new.clone();
+    without_transforms.transforms = old.transforms.clone();
 
-    if only_transforms_changed {
+    if *old == without_transforms {
         ChangeKind::TransformsOnly
     } else {
         ChangeKind::Unsafe
@@ -406,6 +402,17 @@ mod tests {
         let old = base_config();
         let mut new = old.clone();
         new.vector.log_level = "debug".into();
+        assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
+    }
+
+    /// `dfe_source` is a top-level field, which the old sibling-by-sibling
+    /// allowlist never compared. It derives the topics and the consumer group,
+    /// all of which Vector binds at startup.
+    #[test]
+    fn classify_dfe_source_change_requires_restart() {
+        let old = base_config();
+        let mut new = old.clone();
+        new.dfe_source = Some("syslog".into());
         assert_eq!(classify_change(&old, &new), ChangeKind::Unsafe);
     }
 

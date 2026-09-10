@@ -27,8 +27,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Async runtime
-tokio = { version = ">=1.50, <2", features = ["full"] }
-tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
+tokio = { version = ">=1.53.1, <2", features = ["full"] }
+tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 
 # Shared library (CLI framework, deployment artefact generation, logging)
 #
@@ -41,43 +41,56 @@ tokio-util = { version = ">=0.7, <0.8", features = ["rt"] }
 # `health` is REQUIRED for a truthful `/readyz`: the metrics listener only
 # consults `HealthRegistry` under that feature, and its other readiness hook
 # is snapshotted before the app can set one.
-scalo = { version = ">=2.10.14, <3", features = [
+#
+# `transport-grpc-vector-compat` carries the direct transport: the supervisor
+# speaks scalo's `Transport/Push` to the rest of DFE and Vector's own
+# `vector.Vector/PushEvents` to the subprocess, and scalo has both halves of the
+# Vector protocol (`VectorCompatClient`, `VectorCompatService`). `lifecycle`
+# carries the idle gate a transform with no source topics reports through.
+scalo = { version = ">=2.12.1, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
     "deployment",
     "expression",
     "health",
+    "lifecycle",
     "logger",
     "metrics",
     "service-metrics",
+    "transport-grpc",
+    "transport-grpc-vector-compat",
     "version-check",
 ] }
 
 # Configuration
-figment = { version = ">=0.10, <0.11", features = ["env"] }
-clap = { version = ">=4.5, <5", features = ["derive", "env"] }
-dotenvy = ">=0.15, <0.16"
+figment = { version = ">=0.10.19, <0.11", features = ["env"] }
+clap = { version = ">=4.6.6, <5", features = ["derive", "env"] }
+dotenvy = ">=0.15.7, <0.16"
+
+# Record payloads across the direct-transport bridge, which moves bytes rather
+# than copying them between the two gRPC legs.
+bytes = ">=1.12.1, <2"
 
 # Serialisation
-serde = { version = ">=1.0, <2", features = ["derive"] }
-serde_json = ">=1.0, <2"
+serde = { version = ">=1.0.229, <2", features = ["derive"] }
+serde_json = ">=1.0.151, <2"
 serde_yaml_ng = ">=0.10, <0.11"
 
 # JSON Schema derivation for the reflectable config-schema capability
 # (scalo-rs#6). Same version range as scalo so cargo unifies to one schemars.
-schemars = { version = ">=1.2.1, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
+schemars = { version = ">=1.2.2, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # Error handling
-thiserror = ">=2.0, <3"
-anyhow = ">=1.0, <2"
+thiserror = ">=2.0.20, <3"
+anyhow = ">=1.0.104, <2"
 
 # Logging and tracing
-tracing = ">=0.1, <0.2"
-tracing-subscriber = { version = ">=0.3, <0.4", features = ["env-filter", "json"] }
+tracing = ">=0.1.44, <0.2"
+tracing-subscriber = { version = ">=0.3.23, <0.4", features = ["env-filter", "json"] }
 
 # Metrics
-metrics = ">=0.24, <0.25"
+metrics = ">=0.24.6, <0.25"
 
 # Note: Vector metrics proxy uses raw TcpStream (no HTTP client crate needed).
 # /metrics, /livez and /readyz are served by scalo's MetricsManager listener.
@@ -96,18 +109,17 @@ default = []
 jemalloc = ["dep:tikv-jemallocator"]
 
 [dev-dependencies]
-tempfile = ">=3.10, <4"
-tokio-test = ">=0.4, <0.5"
-bytes = ">=1.11, <2"
+tempfile = ">=3.27.0, <4"
+tokio-test = ">=0.4.5, <0.5"
 # The WS21 filebeat corpus (tests/common/filebeat.rs) is read in memory from
 # dfe-transform-vrl's committed tar.gz; chrono compares transformed timestamps
 # against the elastic golden outputs.
-flate2 = ">=1.1, <2"
-tar = ">=0.4.44, <0.5"
+flate2 = ">=1.1.10, <2"
+tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.10.14, <3", features = [
+scalo = { version = ">=2.12.1, <3", features = [
     "transport-kafka",
 ] }
 

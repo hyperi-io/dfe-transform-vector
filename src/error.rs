@@ -28,6 +28,9 @@ pub enum Error {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("transport error: {0}")]
+    Transport(String),
+
     #[error("shutdown requested")]
     Shutdown,
 }
