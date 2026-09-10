@@ -131,7 +131,7 @@ dfe_source: "my_source"
 #   api_address: "0.0.0.0:8686"
 #   log_level: "info"
 #   # Version pinning — prevents silent version drift
-#   version: "0.57.0"
+#   version: "0.58.0"
 #   version_check: "strict"           # strict, warn, disabled
 #   # The supervisor runs `binary` and never fetches one, so `preshipped` is
 #   # the only value accepted. To run a different Vector, point `binary` at it

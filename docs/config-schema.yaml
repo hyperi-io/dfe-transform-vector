@@ -137,7 +137,7 @@ properties:
       config_dir: /var/run/vector/config
       api_address: 0.0.0.0:8686
       log_level: info
-      version: 0.57.0
+      version: 0.58.0
       version_check: strict
       version_source: preshipped
   metrics:
@@ -582,7 +582,7 @@ $defs:
           Set it explicitly (or set `version_check` to `warn`/`disabled`) when
           deliberately running a different Vector to the pre-shipped one.
         type: string
-        default: 0.57.0
+        default: 0.58.0
       version_check:
         description: 'Version check mode: strict, warn, disabled.'
         type: string
