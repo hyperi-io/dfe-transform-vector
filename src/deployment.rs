@@ -203,7 +203,7 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// `default_config` both read this constant, so a deployment's expected
 /// version cannot drift from the shipped binary.
 // renovate: datasource=github-releases depName=vectordotdev/vector
-pub const VECTOR_VERSION: &str = "0.57.0";
+pub const VECTOR_VERSION: &str = "0.58.0";
 
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///

@@ -587,7 +587,7 @@ Dockerfile copies it into the runtime image alongside the Vector binary.
 ```dockerfile
 # Runtime image — CI builds the wrapper binary externally
 FROM debian:trixie-slim
-ARG VECTOR_VERSION=0.57.0
+ARG VECTOR_VERSION=0.58.0
 ARG TARGETARCH
 
 # Wrapper binary (built by CI, copied in)

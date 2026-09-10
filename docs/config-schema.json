@@ -124,7 +124,7 @@
         "config_dir": "/var/run/vector/config",
         "api_address": "0.0.0.0:8686",
         "log_level": "info",
-        "version": "0.57.0",
+        "version": "0.58.0",
         "version_check": "strict",
         "version_source": "preshipped"
       }
@@ -631,7 +631,7 @@
         "version": {
           "description": "Expected Vector version (semver).\n\nDefaults to the version the image was built with\n([`crate::deployment::VECTOR_VERSION`]) rather than empty:\n[`check_vector_version`](crate::config::validate::check_vector_version)\nskips the comparison on an empty pin, which would make the default\n`version_check: strict` a check that cannot fire. With the default pin,\nstrict means the binary on PATH must be the one this image shipped.\n\nSet it explicitly (or set `version_check` to `warn`/`disabled`) when\ndeliberately running a different Vector to the pre-shipped one.",
           "type": "string",
-          "default": "0.57.0"
+          "default": "0.58.0"
         },
         "version_check": {
           "description": "Version check mode: strict, warn, disabled.",
