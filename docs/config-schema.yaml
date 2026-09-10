@@ -7,23 +7,27 @@ description: |-
 
   **Hot-reloaded (takes effect on next poll cycle / SIGHUP):**
   - Transform YAML file contents (modified/added/removed in watched directory)
-  - `transforms.dir` — watcher switches to new directory after successful reload
-  - `transforms.files` — watcher switches to new file list after successful reload
+  - `transforms.dir` -- watcher switches to new directory after successful reload
+  - `transforms.files` -- watcher switches to new file list after successful reload
 
   **Requires pod restart:**
-  - `source.*` — Kafka consumer connections established at Vector startup
-  - `sink.*` — Kafka producer connections established at Vector startup
+  - `source.*` — the consumer or the Push listener is established at startup
+  - `sink.*` — the producer or the Push client is established at startup
+  - `bridge.*` — the two supervisor-to-Vector legs bind at startup
   - `pipeline.name` — used in consumer group_id and metrics labels at startup
   - `vector.*` — binary path, data_dir, config_dir, API address, log level
     set at Vector spawn
-  - `metrics.*` — HTTP server binds at startup
-  - `logging.*` — tracing subscriber configured at startup
-  - `scaling.*` — the scalo `ScalingEngine` reads the `scaling:` block
-    from the cascade at startup (via run_app's `config::setup()`); the
-    app's own `ScalingConfig.pressure_threshold` is the legacy KEDA knob.
-    Engine fields (`enabled`/`interval_secs`/`transport`/`params`) are
-    honoured by scalo and ignored by this struct (and vice-versa).
-  - `reload.poll_interval_secs` — captured at reload loop start
+  - `metrics.address` -- the HTTP server binds at startup
+  - `logging.*` -- tracing subscriber configured at startup
+  - `reload.poll_interval_secs` -- captured at reload loop start
+
+  **Read by nothing in this process:**
+  - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
+    chart's KEDA triggers (consumer-group lag and CPU), gated by the
+    subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
+    scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
+    which this app does not initialise, so the engine keys
+    (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
 type: object
 properties:
   dfe_source:
@@ -47,9 +51,11 @@ properties:
     default:
       name: default
   source:
-    description: Kafka source (input). **Requires restart.**
+    description: Source (input), on either transport. **Requires restart.**
     $ref: '#/$defs/SourceConfig'
     default:
+      transport: bus
+      listen: 0.0.0.0:6000
       brokers:
       - localhost:9092
       topics:
@@ -75,9 +81,11 @@ properties:
       topic_lag_metric: true
       librdkafka_options: {}
   sink:
-    description: Kafka sink (output). **Requires restart.**
+    description: Sink (output), on either transport. **Requires restart.**
     $ref: '#/$defs/SinkConfig'
     default:
+      transport: bus
+      endpoint: http://dfe-loader:6000
       brokers:
       - localhost:9092
       topic: ''
@@ -107,6 +115,13 @@ properties:
       message_timeout_ms: 300000
       socket_timeout_ms: 60000
       librdkafka_options: {}
+  bridge:
+    description: The supervisor-to-Vector legs, direct transport only. **Requires restart.**
+    $ref: '#/$defs/BridgeConfig'
+    default:
+      to_vector: 127.0.0.1:6100
+      from_vector: 127.0.0.1:6101
+      batch_size: 500
   transforms:
     description: User-supplied transform YAML files. **Hot-reloaded.**
     $ref: '#/$defs/TransformConfig'
@@ -125,19 +140,19 @@ properties:
       version: 0.57.0
       version_check: strict
       version_source: preshipped
-      cache_dir: /var/cache/vector
   metrics:
     description: Metrics endpoint. **Requires restart** (server binds at startup).
     $ref: '#/$defs/MetricsConfig'
     default:
       address: 0.0.0.0:9090
       vector_metrics_address: 127.0.0.1:9598
+      vector_metrics_expiry_ticks: 4
   logging:
     description: Logging. **Requires restart** (subscriber configured at startup).
     $ref: '#/$defs/LoggingConfig'
     default:
       level: info
-      format: json
+      format: auto
   scaling:
     description: KEDA scaling pressure. **Requires restart.**
     $ref: '#/$defs/ScalingConfig'
@@ -159,9 +174,19 @@ $defs:
         type: string
         default: default
   SourceConfig:
-    description: Kafka source configuration (input big dials).
+    description: |-
+      Source configuration: the bus topics to consume, or the Push listener to
+      accept records on.
     type: object
     properties:
+      transport:
+        description: '`bus` consumes `topics`; `direct` accepts pushes on `listen`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      listen:
+        description: Address the scalo Push listener binds on the direct transport.
+        type: string
+        default: 0.0.0.0:6000
       brokers:
         description: Kafka bootstrap servers.
         type: array
@@ -238,6 +263,20 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+  Transport:
+    description: |-
+      Which transport a stage uses.
+
+      One deployment runs one of them: `bus` is a broker between the stages,
+      `direct` is gRPC between them and needs no broker at all. The record and the
+      transform are identical either way -- only who hands the record over changes.
+    oneOf:
+    - description: Kafka topics.
+      type: string
+      const: bus
+    - description: A scalo Push listener (source) or client (sink), bridged to Vector.
+      type: string
+      const: direct
   DecodingConfig:
     description: Message decoding configuration.
     type: object
@@ -306,9 +345,19 @@ $defs:
         type: boolean
         default: false
   SinkConfig:
-    description: Kafka sink configuration (output big dials).
+    description: |-
+      Sink configuration: the bus topic to produce to, or the Push listener to
+      send the transformed records on to.
     type: object
     properties:
+      transport:
+        description: '`bus` produces to `topic`; `direct` pushes to `endpoint`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      endpoint:
+        description: Downstream Push listener on the direct transport, e.g. the loader.
+        type: string
+        default: http://dfe-loader:6000
       brokers:
         description: Kafka bootstrap servers.
         type: array
@@ -317,7 +366,9 @@ $defs:
         default:
         - localhost:9092
       topic:
-        description: Output topic name.
+        description: |-
+          Output topic name. On the direct transport it is still the routing key
+          the downstream stage picks its table by, so a source keeps its name.
         type: string
         default: ''
       key_field:
@@ -439,6 +490,37 @@ $defs:
         format: uint32
         minimum: 0
         default: 1
+  BridgeConfig:
+    description: |-
+      The two in-pod legs between the supervisor and Vector, on the direct
+      transport only.
+
+      Vector does not speak scalo's `Transport/Push`, so on `direct` the
+      supervisor translates: it accepts records from the rest of DFE on
+      `source.listen` and hands them to Vector over Vector's own protocol, then
+      takes them back and pushes them to `sink.endpoint`. Both legs stay on
+      loopback -- they exist inside one pod and nothing outside it may reach them.
+      On the bus neither address is bound.
+    type: object
+    properties:
+      to_vector:
+        description: |-
+          Where Vector accepts records from the supervisor -- Vector's own
+          `vector` source binds here, and the supervisor dials it.
+        type: string
+        default: 127.0.0.1:6100
+      from_vector:
+        description: |-
+          Where the supervisor accepts the transformed records back -- Vector's
+          `vector` sink dials here, and the supervisor's listener binds it.
+        type: string
+        default: 127.0.0.1:6101
+      batch_size:
+        description: Records moved per bridge hop. Bounds the batch a retry replays.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 500
   TransformConfig:
     description: Transform file loading configuration.
     type: object
@@ -507,56 +589,80 @@ $defs:
         default: strict
       version_source:
         description: |-
-          Where the Vector version comes from: `preshipped`, `latest`, `stable`,
-          a minor line (`0.56`), or an exact version (`0.56.0`).
+          Where the Vector binary comes from. `preshipped` is the only value the
+          runtime can honour.
 
-          Defaults to `preshipped` -- the binary baked into the image. It needs no
-          network, is the version this build was tested against, and is the only
-          mode that works on a cold airgapped deploy.
+          This process never acquires a binary: it runs [`binary`](Self::binary)
+          and nothing else. The selection rules in [`crate::vector::binary`]
+          (`latest`, `stable`, a minor line, an exact version) have no caller on
+          the run path, so any other value here would resolve to the pre-shipped
+          binary anyway -- silently, and while reporting success. `validate()`
+          rejects them rather than substituting.
 
-          See [`crate::vector::VersionSource`].
+          To run a different Vector, point [`binary`](Self::binary) at it and set
+          [`version`](Self::version) to match.
         type: string
         default: preshipped
-      cache_dir:
-        description: |-
-          Persistent cache directory for Vector binaries.
-
-          Deliberately OUTSIDE the container's writable layer -- mount a k8s
-          volume or a docker bind here so it survives pod restarts and image
-          pulls. Pre-populate it to run a non-pre-shipped version in an airgapped
-          environment.
-        type: string
-        default: /var/cache/vector
   MetricsConfig:
     description: Metrics endpoint configuration.
     type: object
     properties:
       address:
-        description: Metrics server bind address (host:port).
+        description: |-
+          Bind address for `/metrics`, `/livez` and `/readyz` (host:port).
+
+          Reaches the listener through [`Config::fill_common_args`]; `--metrics-addr`
+          and `METRICS_ADDR` both outrank it.
         type: string
         default: 0.0.0.0:9090
       vector_metrics_address:
-        description: Vector's prometheus_exporter address to proxy (host:port).
+        description: |-
+          Vector's `prometheus_exporter` bind address (host:port).
+
+          The wrapper writes it into the assembled Vector config AND scrapes it,
+          merging every `vector_*` sample into the scalo registry, so nothing
+          outside the pod needs this port. Keep it on loopback.
         type: string
         default: 127.0.0.1:9598
+      vector_metrics_expiry_ticks:
+        description: |-
+          Scrape ticks a merged `vector_*` gauge may go unseen before it is
+          zeroed, so a component Vector drops stops reporting its last value.
+        type: integer
+        format: uint32
+        minimum: 0
+        default: 4
   LoggingConfig:
     description: Logging configuration.
     type: object
     properties:
       level:
-        description: Log level (trace, debug, info, warn, error).
+        description: |-
+          Log level (trace, debug, info, warn, error).
+
+          Reaches the subscriber through [`Config::fill_common_args`];
+          `--log-level`, `LOG_LEVEL`, `--verbose` and `--quiet` all outrank it.
         type: string
         default: info
       format:
-        description: Log format (json, text).
+        description: |-
+          Log format (json, text, auto).
+
+          `auto` -- the default -- is text on a terminal and JSON everywhere else,
+          so a pod ships structured logs and a developer reads them.
         type: string
-        default: json
+        default: auto
   ScalingConfig:
-    description: KEDA scaling pressure configuration.
+    description: |-
+      KEDA scaling pressure configuration.
+
+      Present for parity with the `scaling:` block every DFE service accepts.
+      Nothing in this process reads it -- see the "read by nothing" note on
+      [`Config`].
     type: object
     properties:
       pressure_threshold:
-        description: Scaling pressure threshold (0.0–1.0).
+        description: Scaling pressure threshold (0.0–1.0). Range-checked, not consumed.
         type: number
         format: double
         default: 0.8
