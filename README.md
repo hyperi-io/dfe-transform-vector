@@ -1,5 +1,12 @@
 # dfe-transform-vector
 
+[![Build Status](https://github.com/hyperi-io/dfe-transform-vector/actions/workflows/ci.yml/badge.svg)](https://github.com/hyperi-io/dfe-transform-vector/actions)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](https://github.com/hyperi-io/dfe-transform-vector/blob/main/LICENSE)
+
+> Vector.dev does the transform; everything around it -- config, credentials,
+> health, metrics, restarts -- is what a pipeline actually needs in production.
+> This wrapper supplies that half and keeps Vector as a subprocess.
+
 Rust wrapper that manages Vector.dev as a subprocess, so a Vector pipeline is a
 transform stage in the HyperI DFE (Data Fusion Engine) platform. The wrapper is
 built on the [scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime
@@ -77,15 +84,20 @@ cargo build --release
 # Run with config file
 ./target/release/dfe-transform-vector run --config config.example.yaml
 
-# Generate deployment artifacts
+# Generate deployment artefacts
 ./target/release/dfe-transform-vector emit-dockerfile
-./target/release/dfe-transform-vector emit-chart
 ./target/release/dfe-transform-vector emit-compose
+
+# emit-chart overwrites whatever directory you point it at. The committed
+# chart/ carries KEDA hand-edits the generator does not produce, so render
+# somewhere scratch and diff rather than regenerating over it.
+./target/release/dfe-transform-vector emit-chart /tmp/dfe-transform-vector-chart
 ```
 
 ## Configuration
 
-See [config.example.yaml](config.example.yaml) for a full annotated configuration.
+See [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vector/blob/main/config.example.yaml)
+for a full annotated configuration.
 
 Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 
@@ -191,7 +203,7 @@ cargo nextest run --test e2e --run-ignored all
 cargo nextest run -E 'test(vector_validate)' --run-ignored all
 ```
 
-The WS21 acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
+The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
 its own broker container. It grades the filebeat corpus against elastic's
 golden events, and both live in dfe-transform-vrl, so it skips with a message
 unless that repo is checked out beside this one or `DFE_TRANSFORM_VRL_DIR`
@@ -199,16 +211,16 @@ points at it.
 
 ## Documentation
 
-- [docs/DESIGN.md](docs/DESIGN.md) -- Full architecture and design
-- [docs/MIGRATION.md](docs/MIGRATION.md) -- Migration from official Vector chart
-- [docs/LIBRDKAFKA.md](docs/LIBRDKAFKA.md) -- Kafka tuning reference
-- [RESEARCH.md](RESEARCH.md) -- Research findings and option analysis
+- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/DESIGN.md) -- Full architecture and design
+- [docs/MIGRATION.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/MIGRATION.md) -- Migration from official Vector chart
+- [docs/LIBRDKAFKA.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/LIBRDKAFKA.md) -- Kafka tuning reference
+- [RESEARCH.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/RESEARCH.md) -- Research findings and option analysis
 
 ## License
 
 This project is licensed under the Business Source License 1.1
-(BUSL-1.1). See [LICENSE](LICENSE) for details.
+(BUSL-1.1). See [LICENSE](https://github.com/hyperi-io/dfe-transform-vector/blob/main/LICENSE) for details.
 
 Copyright (c) 2026 HYPERI PTY LIMITED
 
-For commercial licensing options, see [COMMERCIAL.md](COMMERCIAL.md).
+For commercial licensing options, see [COMMERCIAL.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/COMMERCIAL.md).
