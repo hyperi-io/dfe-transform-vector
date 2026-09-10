@@ -290,6 +290,35 @@ fn config_validation_catches_missing_sink_topic() {
     assert!(err.to_string().contains("sink.topic"));
 }
 
+/// With the commit timer armed, handing offset-storing back to librdkafka
+/// turns an unclean pod death into skipped records rather than replayed ones.
+#[test]
+fn config_validation_catches_offset_store_handed_back_to_librdkafka() {
+    let mut config = full_config(None);
+    config
+        .source
+        .librdkafka_options
+        .insert("enable.auto.offset.store".into(), "true".into());
+    let err = config.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("enable.auto.offset.store"),
+        "validation rejected for the wrong reason: {err}"
+    );
+}
+
+/// Setting it to `false` is what Vector does anyway, so it must stay legal.
+#[test]
+fn config_validation_allows_offset_store_pinned_off() {
+    let mut config = full_config(None);
+    config
+        .source
+        .librdkafka_options
+        .insert("enable.auto.offset.store".into(), "false".into());
+    config
+        .validate()
+        .expect("pinning offset-store off matches what Vector already sets");
+}
+
 #[test]
 fn config_validation_catches_invalid_sasl_mechanism() {
     let mut config = full_config(None);

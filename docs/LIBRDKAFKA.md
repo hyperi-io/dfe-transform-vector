@@ -12,32 +12,44 @@ easier debugging, and automatic benefit from upstream librdkafka improvements.
 
 ## Configuration Cascade
 
-Settings merge in priority order (highest wins):
+Three layers merge in priority order (highest wins):
 
 | Layer | Source | Who Manages |
 |-------|--------|-------------|
-| 4. User config YAML | `librdkafka_options:` in service config | Platform operator |
-| 3. Central config file | `librdkafka.yaml` in git-managed config repo (dfe-devex) | Platform team |
+| 3. User config YAML | `librdkafka_options:` in service config | Platform operator |
 | 2. Service-specific | Hardcoded in each service's generator | Service developer |
-| 1. DFE baseline | `scalo::kafka_config` constants | Shared library |
+| 1. Baseline profile | The central config file if it defines the profile, else `scalo::kafka_config` constants | Platform team / shared library |
 
-**Layer 1** provides the coded-in fallback — always available, even without a
-config repo. **Layer 3** is the primary management point for production tuning.
-**Layer 4** allows per-instance emergency overrides.
+**Layer 1 is one layer, not two, and the two sources are mutually exclusive.**
+A profile named in `librdkafka.yaml` REPLACES the matching scalo constant set
+outright -- it does not merge over it. A central profile that names only
+`linger.ms` therefore ships only `linger.ms`, and every other baseline setting
+reverts to the librdkafka default. Restate the whole profile in the central
+file, or leave the profile out and let the constants stand.
+
+**A service override beats the central file.** Layer 2 is applied on top of
+whichever layer-1 source won, so a platform-wide central setting cannot undo a
+service's hardcoded one -- see Service-Specific Overrides for what each service
+pins. Only layer 3, the per-instance `librdkafka_options:`, is above it.
 
 ### Example
 
-A transform-vector pod producing to Kafka:
+A transform-vector pod producing to Kafka, with no central config file:
 
 1. scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`, `compression.type=zstd`,
    `socket.nagle.disable=true`, `statistics.interval.ms=1000`
 2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
-3. Central config file could override `linger.ms=50` for the whole platform
-4. User config YAML could set `compression.type=lz4` for a specific pipeline
+3. User config YAML sets `compression.type=lz4` for this pipeline
 
-Result: `linger.ms=50`, `compression.type=lz4`,
+Result: `linger.ms=100`, `compression.type=lz4`,
 `queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
 `statistics.interval.ms=1000`
+
+Add a central `producer.production` naming only `linger.ms=50` and the result
+becomes `linger.ms=50`, `compression.type=lz4`,
+`queue.buffering.max.kbytes=262144` -- `socket.nagle.disable` and
+`statistics.interval.ms` are gone, because the central profile replaced the
+constants rather than merging over them.
 
 ## Consumer Profiles
 
@@ -48,11 +60,11 @@ and any service consuming from Kafka in production.
 
 | Setting | Value | librdkafka Default | Justification |
 |---------|-------|--------------------|---------------|
-| `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | KIP-429: incremental rebalances avoid stop-the-world pauses. Partitions stay assigned during rebalance — only moving partitions are revoked. |
+| `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | KIP-429: incremental rebalances avoid stop-the-world pauses. Partitions stay assigned during rebalance -- only moving partitions are revoked. |
 | `fetch.min.bytes` | `1048576` (1 MiB) | `1` | Batch fetches for throughput. Broker waits until 1 MiB of data is available before responding, reducing fetch round-trips. |
 | `fetch.wait.max.ms` | `100` | `500` | Upper bound on fetch latency when `fetch.min.bytes` threshold isn't met. Prevents 500 ms stalls on low-volume topics. |
-| `queued.min.messages` | `20000` | `100000` | Pre-fetch queue depth. 10-20K is the efficiency sweet spot — large enough for batching, small enough to avoid excessive memory and rebalance lag. |
-| `enable.auto.commit` | `false` | `true` | DFE services manage offset commits explicitly after processing (at-least-once guarantee). Auto-commit risks data loss on crash. |
+| `queued.min.messages` | `20000` | `100000` | Pre-fetch queue depth. 10-20K is the efficiency sweet spot -- large enough for batching, small enough to avoid excessive memory and rebalance lag. |
+| `enable.auto.commit` | `false` | `true` | Suits a service that commits by hand after processing, which is how dfe-loader withholds offsets on a failed insert. transform-vector overrides this back to `true` -- see Service-Specific Overrides. |
 | `statistics.interval.ms` | `1000` | `0` (disabled) | Enable librdkafka internal metrics at 1-second granularity for Prometheus scraping. |
 
 **Settings intentionally left at default:**
@@ -77,7 +89,7 @@ Fast iteration, low memory footprint. For local dev and CI.
 | `queued.min.messages` | `1000` | `100000` | Lower memory on dev machines |
 | `enable.auto.commit` | `false` | `true` | Consistent with production |
 | `reconnect.backoff.ms` | `10` | `100` | Fast reconnect for quick iteration |
-| `reconnect.backoff.max.ms` | `100` | `10000` | Cap quickly — don't wait 10s in dev |
+| `reconnect.backoff.max.ms` | `100` | `10000` | Cap quickly -- don't wait 10s in dev |
 | `log.connection.close` | `true` | `false` | Debug-friendly connection logging |
 | `statistics.interval.ms` | `1000` | `0` | Metrics available even in dev |
 
@@ -89,7 +101,7 @@ Minimal fetch delay for latency-sensitive pipelines.
 |---------|-------|--------------------|---------------|
 | `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | Consistent across environments |
 | `fetch.wait.max.ms` | `10` | `500` | Return from fetch after 10 ms regardless of data available |
-| `queued.min.messages` | `1000` | `100000` | Smaller pre-fetch queue — process sooner |
+| `queued.min.messages` | `1000` | `100000` | Smaller pre-fetch queue -- process sooner |
 | `enable.auto.commit` | `false` | `true` | DFE manages commits |
 | `reconnect.backoff.ms` | `10` | `100` | Fast reconnect |
 | `reconnect.backoff.max.ms` | `100` | `10000` | Cap quickly |
@@ -103,7 +115,7 @@ High-throughput producer. Default for all DFE services writing to Kafka.
 
 | Setting | Value | librdkafka Default | Justification |
 |---------|-------|--------------------|---------------|
-| `linger.ms` | `100` | `5` | Accumulate larger batches — 100 ms latency trade-off for significantly higher throughput. Most DFE pipelines are throughput-optimised. |
+| `linger.ms` | `100` | `5` | Accumulate larger batches -- 100 ms latency trade-off for significantly higher throughput. Most DFE pipelines are throughput-optimised. |
 | `compression.type` | `zstd` | `none` | Best compression ratio with acceptable CPU cost. Reduces network I/O and broker storage. |
 | `socket.nagle.disable` | `true` | `false` | Disable TCP Nagle's algorithm. Kafka already batches at the application level (`linger.ms`), so Nagle just adds latency. |
 | `statistics.interval.ms` | `1000` | `0` | Enable librdkafka metrics for Prometheus. |
@@ -112,7 +124,7 @@ High-throughput producer. Default for all DFE services writing to Kafka.
 
 | Setting | Default | Why Not Changed |
 |---------|---------|-----------------|
-| `acks` | `all` (-1) | Default is already the safest — all ISR replicas must acknowledge. |
+| `acks` | `all` (-1) | Default is already the safest -- all ISR replicas must acknowledge. |
 | `batch.size` | `1000000` (1 MiB) | Adequate for most workloads |
 | `batch.num.messages` | `10000` | Default is reasonable |
 | `queue.buffering.max.kbytes` | `1048576` (1 GiB) | Default is fine for most services. transform-vector overrides to 256 MiB due to lower pod memory. |
@@ -127,9 +139,9 @@ Idempotent producer with ordering guarantees.
 | Setting | Value | librdkafka Default | Justification |
 |---------|-------|--------------------|---------------|
 | `enable.idempotence` | `true` | `false` | Exactly-once semantics within a partition. Broker deduplicates by producer ID + sequence number. |
-| `acks` | `all` | `all` (-1) | Already default but stated explicitly — invariant for EOS. |
+| `acks` | `all` | `all` (-1) | Already default but stated explicitly -- invariant for EOS. |
 | `max.in.flight.requests.per.connection` | `5` | `1000000` | Maximum value that preserves ordering with idempotent producer (librdkafka requirement). |
-| `linger.ms` | `20` | `5` | Moderate batching — lower than production to reduce latency for EOS workloads. |
+| `linger.ms` | `20` | `5` | Moderate batching -- lower than production to reduce latency for EOS workloads. |
 | `compression.type` | `zstd` | `none` | Consistent with production |
 | `socket.nagle.disable` | `true` | `false` | Consistent with production |
 | `statistics.interval.ms` | `1000` | `0` | Enable metrics |
@@ -140,9 +152,9 @@ Minimal delay, leader-ack only. Trades durability for speed.
 
 | Setting | Value | librdkafka Default | Justification |
 |---------|-------|--------------------|---------------|
-| `acks` | `1` | `all` (-1) | Leader acknowledgement only — skip ISR replication wait. Risk: data loss if leader crashes before replication. |
+| `acks` | `1` | `all` (-1) | Leader acknowledgement only -- skip ISR replication wait. Risk: data loss if leader crashes before replication. |
 | `linger.ms` | `0` | `5` | Send immediately, no batching delay. |
-| `compression.type` | `lz4` | `none` | LZ4 is the fastest compression codec — adds minimal CPU for significant bandwidth reduction. |
+| `compression.type` | `lz4` | `none` | LZ4 is the fastest compression codec -- adds minimal CPU for significant bandwidth reduction. |
 | `socket.nagle.disable` | `true` | `false` | No TCP coalescing |
 | `statistics.interval.ms` | `1000` | `0` | Enable metrics |
 
@@ -152,7 +164,7 @@ Fast acks, no compression overhead. For local dev and CI.
 
 | Setting | Value | librdkafka Default | Justification |
 |---------|-------|--------------------|---------------|
-| `acks` | `1` | `all` (-1) | Faster for dev — don't wait for full ISR |
+| `acks` | `1` | `all` (-1) | Faster for dev -- don't wait for full ISR |
 | `socket.nagle.disable` | `true` | `false` | Consistent across profiles |
 | `statistics.interval.ms` | `1000` | `0` | Enable metrics even in dev |
 
@@ -164,9 +176,10 @@ baseline).
 
 ### dfe-transform-vector
 
-| Setting | Value | Reason |
-|---------|-------|--------|
-| `queue.buffering.max.kbytes` | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
+| Setting | Side | Value | Reason |
+|---------|------|-------|--------|
+| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
+| `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline stalled reported lag between those points rather than losing offsets. Lag is what KEDA scales on here. |
 
 ### dfe-loader
 
@@ -268,5 +281,5 @@ These are layer 4 (highest priority) and override everything below.
 
 ## Reference
 
-- [librdkafka CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) — full property reference with defaults
-- [KIP-429](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol) — cooperative-sticky rebalance protocol
+- [librdkafka CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) -- full property reference with defaults
+- [KIP-429](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol) -- cooperative-sticky rebalance protocol

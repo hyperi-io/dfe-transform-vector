@@ -880,6 +880,25 @@ impl Config {
         }
         self.validate_sasl("source.sasl", &self.source.sasl)?;
 
+        // Vector stores an offset only once the sink has acknowledged the
+        // event, which is what makes the commit timer safe to run. Hand that
+        // job back to librdkafka and offsets are stored at fetch time and
+        // committed seconds later, so a pod that dies mid-flight skips every
+        // record it had read but not yet produced.
+        if self
+            .source
+            .librdkafka_options
+            .get("enable.auto.offset.store")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(crate::Error::Validation(
+                "source.librdkafka_options.enable.auto.offset.store must not be true: Vector \
+                 stores offsets after the sink acknowledges, and letting librdkafka store them \
+                 on fetch silently drops records on an unclean shutdown"
+                    .into(),
+            ));
+        }
+
         // Source codec
         let valid_codecs = ["json", "raw_bytes", "protobuf"];
         if !valid_codecs.contains(&self.source.decoding.codec.as_str()) {
