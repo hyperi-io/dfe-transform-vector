@@ -30,6 +30,11 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+skip = [
+    # prometheus-parse 0.2.5 (latest, Dec 2023) pins itertools ^0.12; everything
+    # else resolves to 0.14 through prost-derive. Nothing upstream to move to.
+    { crate = "itertools@0.12.1", reason = "prometheus-parse 0.2.5 pins ^0.12" },
+]
 
 [sources]
 unknown-registry = "deny"

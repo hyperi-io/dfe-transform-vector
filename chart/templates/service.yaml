@@ -15,5 +15,11 @@ spec:
       targetPort: 8686
       protocol: TCP
       name: vector-api
+    {{- if eq (default "bus" ((.Values.config).source).transport) "direct" }}
+    - port: {{ .Values.service.pushPort | default 6000 }}
+      targetPort: push
+      protocol: TCP
+      name: push
+    {{- end }}
   selector:
     {{- include "dfe-transform-vector.selectorLabels" . | nindent 4 }}

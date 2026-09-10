@@ -1,0 +1,100 @@
+# Project:   dfe-transform-vector
+# File:      templates/direct.yaml
+# Purpose:   Copy-paste-modify Vector pipeline for the direct transport
+# Language:  YAML
+#
+# License:   BUSL-1.1
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+#
+# ============================================================================
+# A DFE transform on the DIRECT transport: gRPC in -> transform -> gRPC out
+# ============================================================================
+#
+# The same pipeline as bus.yaml with no broker anywhere. The transform step is
+# identical; only who hands the record over changes.
+#
+# HOW THE RECORD GETS HERE. Vector does not speak scalo's `Transport/Push`, so
+# the supervisor translates. It runs the Push listener the receiver and the
+# fetcher send to, and hands each record to the `dfe_source` below over Vector's
+# own protocol; `dfe_sink` hands the transformed record back, and the supervisor
+# pushes it on to the next stage. Both addresses below are therefore LOOPBACK --
+# the two legs live inside one pod and nothing outside it may reach them:
+#
+#   receiver/fetcher --Push--> [supervisor] --> dfe_source
+#                                                   |
+#                                             dfe_transform
+#                                                   |
+#   loader/next stage <--Push-- [supervisor] <-- dfe_sink
+#
+# WHAT YOU ACTUALLY AUTHOR. In a DFE deployment the supervisor GENERATES the
+# `sources:` and `sinks:` blocks below, and you supply only the `transforms:`
+# block -- as a file in `transforms.dir`, or as a library artefact the console
+# links to the source. Do NOT mount this whole file as a transform file: the
+# supervisor would add its own source and sink beside these and Vector would run
+# two of each.
+#
+# Run it standalone -- as a plain Vector pipeline, outside DFE -- exactly as it
+# is, and push events at 127.0.0.1:6100 with any Vector sink:
+#   vector --config direct.yaml
+#
+# PLACEHOLDERS the engine fills, and what to put there by hand:
+#   127.0.0.1:6100  `bridge.to_vector` -- where THIS file listens for records.
+#   127.0.0.1:6101  `bridge.from_vector` -- where the supervisor listens for the
+#                   transformed records. The two must differ.
+#
+# The component LABELS `dfe_source` and `dfe_sink` are fixed, exactly as on the
+# bus, so a transform authored for one transport runs unchanged on the other.
+
+# Vector's default is the HOST's timezone, so a zone-less timestamp would parse
+# to a different instant on every pod. DFE events are UTC end to end.
+timezone: UTC
+
+sources:
+  # Fixed label. The supervisor generates this block from `source.*` and
+  # `bridge.to_vector`.
+  dfe_source:
+    type: vector
+    # A BIND address: this end listens, the supervisor dials it.
+    address: 127.0.0.1:6100
+    acknowledgements:
+      # This is what makes the whole path hold rather than drop. The supervisor's
+      # RPC does not return until the record has reached the sink, so a stalled
+      # downstream stalls the supervisor, which stops draining its own Push
+      # listener, which back-pressures whoever is sending to this transform.
+      enabled: true
+
+transforms:
+  # THE STEP YOU REPLACE. A no-op: it takes the record and passes it on
+  # unchanged, so the pipeline is complete and runnable before you write
+  # anything. Put your VRL in `source:`.
+  dfe_transform:
+    type: remap
+    inputs:
+      - dfe_source
+    source: |
+      # Replace this with the transform. `.` is the record; whatever `.` holds
+      # at the end is what goes downstream. For example:
+      #   .severity = downcase(string!(.severity))
+      #   .parsed_at = now()
+      .
+
+sinks:
+  # Fixed label. The supervisor generates this block from `sink.*` and
+  # `bridge.from_vector`, and wires `inputs` to the last transform in the chain.
+  dfe_sink:
+    type: vector
+    inputs:
+      - dfe_transform
+    # A URI, not a bind address: this end DIALS the supervisor's listener.
+    address: http://127.0.0.1:6101
+    acknowledgements:
+      # Completes the hold-rather-than-drop chain the source starts.
+      enabled: true
+    healthcheck:
+      enabled: true
+    buffer:
+      # `block` is what makes a slow next stage back-pressure this one rather
+      # than the pipeline dropping records.
+      type: memory
+      max_events: 500
+      when_full: block
