@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.38](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.37...v1.0.38) (2026-09-10)
+
+### Bug Fixes
+
+* **config:** commit consumer offsets instead of only storing them ([c00b36b](https://github.com/hyperi-io/dfe-transform-vector/commit/c00b36b7da766f12dca2906b172d0249e7382816))
+* **config:** settings a deployment writes now reach what they name ([87ab545](https://github.com/hyperi-io/dfe-transform-vector/commit/87ab5456e0221949f3d78011cb1083db1b16210b))
+* **docs:** correct the readiness comment, generalise the kafka doc ([68f43b8](https://github.com/hyperi-io/dfe-transform-vector/commit/68f43b81dbe16611d4dde6839c9f356e707b81b6))
+
 ## [1.0.37](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.36...v1.0.37) (2026-09-09)
 
 ### Bug Fixes
