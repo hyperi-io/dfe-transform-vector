@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.39](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.38...v1.0.39) (2026-09-12)
+
+### Bug Fixes
+
+* **deps:** update dependency vectordotdev/vector to v0.58.0 ([#67](https://github.com/hyperi-io/dfe-transform-vector/issues/67)) ([bf928d3](https://github.com/hyperi-io/dfe-transform-vector/commit/bf928d3e49da5d900b0e062a405aed5c6a3590f4))
+* **deps:** update rust-dependencies ([#43](https://github.com/hyperi-io/dfe-transform-vector/issues/43)) ([8ab2597](https://github.com/hyperi-io/dfe-transform-vector/commit/8ab25975f7fad3ecf09bdff144b8e552bff8de73))
+* rebuild on scalo 2.12.2 ([6947108](https://github.com/hyperi-io/dfe-transform-vector/commit/6947108d2609866f4ffaf0b033a09efa9e7fd51a))
+
 ## [1.0.38](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.37...v1.0.38) (2026-09-10)
 
 ### Bug Fixes
