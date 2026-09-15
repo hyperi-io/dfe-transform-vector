@@ -32,11 +32,32 @@ build:
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
+    # Tier 2 release-track optimisation. hyperi-ci applies jemalloc + fat LTO
+    # on the release channel by itself; this section opts in to PGO + BOLT on
+    # top, and both are gated on that channel (optimize.py:125,129).
+    #
+    # What it covers: the supervisor's own binary -- the direct-transport
+    # bridge, the subprocess watch and the Vector metrics merge. Vector's
+    # per-record CPU on the bus transport is inside the upstream binary the
+    # image downloads rather than compiles (scripts/fetch-vector.sh), so no
+    # PGO or BOLT we run here reaches it.
+    optimize:
+      pgo:
+        enabled: true
+        workload_cmd: "bash scripts/pgo-workload.sh"
+        # 300s is the floor a stable profile needs: a short workload biases
+        # the compiler toward startup paths and turns PGO NEGATIVE.
+        duration_secs: 300
+      bolt:
+        enabled: true  # Linux only; skipped on non-Linux targets
 
 # Publishing (on release)
 publish:
   enabled: true
-  target: internal
+  # The release channel comes from the `publish-target: both` input the caller
+  # workflow passes (hyperi-ci rust-ci.yml:132); this key is legacy and ignored
+  # at runtime (hyperi_ci/config.py:90-98). Kept in step with the other apps.
+  target: both
   binaries: both
   container:
     enabled: true

@@ -25,6 +25,15 @@ path = "src/lib.rs"
 name = "dfe-transform-vector"
 path = "src/main.rs"
 
+# PGO workload driver -- built only with `--features pgo-driver`, by
+# scripts/pgo-workload.sh during a release-channel Tier 2 build. hyperi-ci
+# skips feature-gated bins when it detects and packages binaries, so this one
+# never reaches the publish payload.
+[[bin]]
+name = "pgo-driver"
+path = "src/bin/pgo_driver.rs"
+required-features = ["pgo-driver"]
+
 [dependencies]
 # Async runtime
 tokio = { version = ">=1.53.1, <2", features = ["full"] }
@@ -107,6 +116,9 @@ prometheus-parse = ">=0.2.5, <0.3"
 # Local cargo build uses the system allocator.
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
+# The PGO workload driver bin. Needs no dependency the supervisor does not
+# already carry, so a production build is unaffected either way.
+pgo-driver = []
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"

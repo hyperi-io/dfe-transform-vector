@@ -18,5 +18,6 @@ mod direct_transport;
 mod fixtures;
 mod lifecycle;
 mod metrics;
+mod pgo_workload;
 mod reload;
 mod vector_validate;
