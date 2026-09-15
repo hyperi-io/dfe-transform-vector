@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.40](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.39...v1.0.40) (2026-09-15)
+
+### Bug Fixes
+
+* pgo and bolt the supervisor's direct-transport path ([a76f2f9](https://github.com/hyperi-io/dfe-transform-vector/commit/a76f2f9cbc1c5edd4ae2b2ab61442ecd148fa33a))
+
 ## [1.0.39](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.38...v1.0.39) (2026-09-12)
 
 ### Bug Fixes
