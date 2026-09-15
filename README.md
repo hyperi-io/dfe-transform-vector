@@ -201,7 +201,16 @@ cargo nextest run --test e2e --run-ignored all
 
 # Run the Vector validate cases (needs a Vector binary)
 cargo nextest run -E 'test(vector_validate)' --run-ignored all
+
+# Drive the release build's PGO workload by hand (needs no broker or Vector)
+PGO_WORKLOAD_DURATION_SECS=60 scripts/pgo-workload.sh target/debug/dfe-transform-vector
 ```
+
+Release builds are PGO- and BOLT-optimised, off `scripts/pgo-workload.sh`: it
+drives the direct transport, the subprocess watch and the Vector metrics merge
+for five minutes on each arch. That covers the supervisor binary and nothing
+else -- Vector's own per-record work happens in the binary the image downloads,
+which this repo does not compile.
 
 The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
 its own broker container. It grades the filebeat corpus against elastic's
