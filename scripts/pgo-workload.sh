@@ -19,10 +19,10 @@
 #   The supervisor's own hot path is the DIRECT transport, where every record
 #   crosses this process twice (src/bridge.rs). On the bus, Vector talks to
 #   Kafka itself and the per-record CPU sits in the upstream Vector binary the
-#   image downloads rather than compiles (scripts/fetch-vector.sh), so no PGO
-#   or BOLT build of ours reaches it. This workload therefore drives the direct
-#   path, the Vector subprocess watch, and the Vector metrics merge -- which is
-#   all of the supervisor that carries load.
+#   image downloads rather than compiles (the Dockerfile pulls the release
+#   tarball), so no PGO or BOLT build of ours reaches it. This workload
+#   therefore drives the direct path, the Vector subprocess watch, and the
+#   Vector metrics merge -- which is all of the supervisor that carries load.
 #
 # What it starts (all loopback, no broker, no container, no download):
 #   - the supervisor binary under test, on a direct-transport config
