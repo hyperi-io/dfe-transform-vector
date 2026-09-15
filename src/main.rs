@@ -154,6 +154,13 @@ impl ServiceApp for App {
             .map_err(|e| CliError::Service(e.to_string()))
     }
 
+    fn register_metrics(&self, manager: &scalo::metrics::MetricsManager) {
+        // `metrics-manifest` and `generate-artefacts` read the registry without
+        // starting the service, so the catalogue is empty until the wrapper's
+        // own metrics are built against their manager.
+        let _ = WrapperMetrics::register(manager, COMMIT);
+    }
+
     fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }

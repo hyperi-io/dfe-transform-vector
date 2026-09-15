@@ -52,10 +52,11 @@ DURATION="${PGO_WORKLOAD_DURATION_SECS:-300}"
 DRIVER_PROFILE="${PGO_DRIVER_PROFILE:-release}"
 KEEP="${PGO_WORKLOAD_KEEP:-0}"
 
-# Set by main() as it brings each piece up; read by cleanup().
+# Set as each piece comes up; read by cleanup() and the driver's environment.
 WORK_DIR=""
 SUPERVISOR_PID=""
 DRIVER_PID=""
+PORT_BASE=""
 
 log() { echo "pgo-workload: $*" >&2; }
 die() { log "$*"; exit 1; }
@@ -72,15 +73,7 @@ cleanup() {
     if [[ -n "${DRIVER_PID}" ]]; then
         kill -TERM "${DRIVER_PID}" 2>/dev/null || true
     fi
-    if [[ -n "${SUPERVISOR_PID}" ]]; then
-        kill -TERM "${SUPERVISOR_PID}" 2>/dev/null || true
-        local waited=0
-        while kill -0 "${SUPERVISOR_PID}" 2>/dev/null && [[ "${waited}" -lt 10 ]]; do
-            sleep 1
-            waited=$((waited + 1))
-        done
-        kill -KILL "${SUPERVISOR_PID}" 2>/dev/null || true
-    fi
+    stop_supervisor
     if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then
         rm -rf "${WORK_DIR}"
     fi
@@ -94,18 +87,25 @@ port_is_free() {
     ! (exec 3<>"/dev/tcp/127.0.0.1/${1}") 2>/dev/null
 }
 
+# The six ports sit below the ephemeral range every Linux kernel allocates
+# outbound source ports from -- a range that starts at 10240 on some hosts, and
+# a supervisor whose own OTLP connection took the port cannot then bind it.
+readonly PORT_FLOOR=6200
+readonly PORT_SLOTS=300
+
 #######################################
 # First of six consecutive free loopback ports.
 #
-# Derived from the pid so two workload runs on one runner -- the PGO pass and
-# a BOLT pass, or two jobs -- do not claim the same ports.
+# Varies with the pid and the attempt, so the PGO pass, the BOLT pass and a
+# concurrent job do not claim the same six.
 #######################################
 pick_port_base() {
-    local base="${PGO_WORKLOAD_PORT_BASE:-$((20000 + ($$ % 10000)))}"
-    local attempt=0
+    local attempt_seed="${1}"
+    local base="${PGO_WORKLOAD_PORT_BASE:-$((PORT_FLOOR + ((($$ + attempt_seed * 77) % PORT_SLOTS) * 10)))}"
+    local tries=0
     local offset
     local taken
-    while [[ "${attempt}" -lt 50 ]]; do
+    while [[ "${tries}" -lt 50 ]]; do
         taken=0
         for offset in 0 1 2 3 4 5; do
             if ! port_is_free "$((base + offset))"; then
@@ -118,9 +118,9 @@ pick_port_base() {
             return 0
         fi
         base=$((base + 10))
-        attempt=$((attempt + 1))
+        tries=$((tries + 1))
     done
-    die "no six consecutive free loopback ports from ${PGO_WORKLOAD_PORT_BASE:-20000}"
+    die "no six consecutive free loopback ports from ${PGO_WORKLOAD_PORT_BASE:-${PORT_FLOOR}}"
 }
 
 #######################################
@@ -232,24 +232,69 @@ CONFIG
 
 #######################################
 # Wait for /readyz, which only answers 200 once the subprocess is supervised.
+# Returns non-zero when the supervisor dies or never reports ready.
 #######################################
 wait_for_ready() {
     local addr="${1}"
-    local attempt=0
-    while [[ "${attempt}" -lt 60 ]]; do
+    local waited=0
+    while [[ "${waited}" -lt 60 ]]; do
         if ! kill -0 "${SUPERVISOR_PID}" 2>/dev/null; then
-            tail -100 "${WORK_DIR}/supervisor.log" >&2 || true
-            die "the supervisor died during startup"
+            log "the supervisor died during startup"
+            return 1
         fi
         if curl -sf -o /dev/null --max-time 1 "http://${addr}/readyz"; then
-            log "supervisor ready (attempt $((attempt + 1)))"
+            log "supervisor ready after ${waited}s"
             return 0
         fi
         sleep 1
+        waited=$((waited + 1))
+    done
+    log "the supervisor did not become ready in 60s"
+    return 1
+}
+
+#######################################
+# Stop the supervisor and forget its pid.
+#######################################
+stop_supervisor() {
+    [[ -n "${SUPERVISOR_PID}" ]] || return 0
+    kill -TERM "${SUPERVISOR_PID}" 2>/dev/null || true
+    local waited=0
+    while kill -0 "${SUPERVISOR_PID}" 2>/dev/null && [[ "${waited}" -lt 10 ]]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    kill -KILL "${SUPERVISOR_PID}" 2>/dev/null || true
+    SUPERVISOR_PID=""
+}
+
+#######################################
+# Start the supervisor on a fresh set of ports and wait for it to report ready.
+#
+# Sets PORT_BASE to the six it settled on. A port free at probe time can be
+# taken before the bind, so a failed start retries on a different six rather
+# than failing the build.
+#######################################
+start_supervisor() {
+    local binary="${1}"
+    local attempt=1
+    while [[ "${attempt}" -le 3 ]]; do
+        PORT_BASE="$(pick_port_base "${attempt}")"
+        write_config "${PORT_BASE}"
+        log "starting ${binary} on ports ${PORT_BASE}..$((PORT_BASE + 5)) (attempt ${attempt})"
+        "${binary}" --config "${WORK_DIR}/config.yaml" \
+            --metrics-addr "127.0.0.1:$((PORT_BASE + 4))" \
+            run >"${WORK_DIR}/supervisor.log" 2>&1 &
+        SUPERVISOR_PID=$!
+
+        if wait_for_ready "127.0.0.1:$((PORT_BASE + 4))"; then
+            return 0
+        fi
+        tail -20 "${WORK_DIR}/supervisor.log" >&2 || true
+        stop_supervisor
         attempt=$((attempt + 1))
     done
-    tail -100 "${WORK_DIR}/supervisor.log" >&2 || true
-    die "the supervisor did not become ready in 60s"
+    die "the supervisor would not come up in 3 attempts"
 }
 
 main() {
@@ -268,34 +313,24 @@ main() {
 
     trap cleanup EXIT INT TERM
     WORK_DIR="$(mktemp -d -t pgo-workload-XXXXXX)"
-
-    local base
-    base="$(pick_port_base)"
-    log "ports ${base}..$((base + 5)), work dir ${WORK_DIR}"
+    log "work dir ${WORK_DIR}"
 
     write_vector_stand_in "${WORK_DIR}/vector-stand-in.sh"
-    write_config "${base}"
 
     # cargo-pgo bakes the profile directory into the instrumented binary; this
     # only matters when the script is run by hand against a plain build.
     export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE:-${PROJECT_ROOT}/target/pgo-profiles/pgo-%p_%m.profraw}"
     mkdir -p "$(dirname "${LLVM_PROFILE_FILE}")"
 
-    log "starting ${binary}"
-    "${binary}" --config "${WORK_DIR}/config.yaml" \
-        --metrics-addr "127.0.0.1:$((base + 4))" \
-        run >"${WORK_DIR}/supervisor.log" 2>&1 &
-    SUPERVISOR_PID=$!
-
-    wait_for_ready "127.0.0.1:$((base + 4))"
+    start_supervisor "${binary}"
 
     log "driving the direct transport for ${DURATION}s via ${driver}"
     PGO_DRIVER_DURATION_SECS="${DURATION}" \
-    PGO_DRIVER_PUSH_ENDPOINT="http://127.0.0.1:$((base + 0))" \
-    PGO_DRIVER_TO_VECTOR="127.0.0.1:$((base + 1))" \
-    PGO_DRIVER_FROM_VECTOR="127.0.0.1:$((base + 2))" \
-    PGO_DRIVER_SINK_LISTEN="127.0.0.1:$((base + 3))" \
-    PGO_DRIVER_VECTOR_METRICS="127.0.0.1:$((base + 5))" \
+    PGO_DRIVER_PUSH_ENDPOINT="http://127.0.0.1:$((PORT_BASE + 0))" \
+    PGO_DRIVER_TO_VECTOR="127.0.0.1:$((PORT_BASE + 1))" \
+    PGO_DRIVER_FROM_VECTOR="127.0.0.1:$((PORT_BASE + 2))" \
+    PGO_DRIVER_SINK_LISTEN="127.0.0.1:$((PORT_BASE + 3))" \
+    PGO_DRIVER_VECTOR_METRICS="127.0.0.1:$((PORT_BASE + 5))" \
         "${driver}" &
     DRIVER_PID=$!
 

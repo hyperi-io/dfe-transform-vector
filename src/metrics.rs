@@ -251,3 +251,47 @@ pub fn spawn_uptime_tick_task(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use scalo::metrics::{MetricsConfig, MetricsManager};
+
+    use super::WrapperMetrics;
+
+    /// `metrics-manifest` and `generate-artefacts` build their own manager and
+    /// call `ServiceApp::register_metrics`, so the catalogue carries only what
+    /// registration puts through that manager.
+    #[test]
+    fn registering_the_wrapper_metrics_fills_the_manifest_catalogue() {
+        // The manager the subcommand builds, minus the app-name namespace, so
+        // the names read as the service emits them.
+        let manager = MetricsManager::with_config(MetricsConfig::offline(""));
+        assert!(
+            manager.registry().manifest().metrics.is_empty(),
+            "a fresh manager starts with no catalogue"
+        );
+
+        let _metrics = WrapperMetrics::register(&manager, "test-commit");
+        let names: Vec<String> = manager
+            .registry()
+            .manifest()
+            .metrics
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+
+        for expected in [
+            "crashes_total",
+            "restarts_total",
+            "config_validation_errors_total",
+            "transform_vector_scrape_failures_total",
+            "uptime_seconds",
+            "pipeline_ready",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "{expected} is missing from the catalogue: {names:?}"
+            );
+        }
+    }
+}
