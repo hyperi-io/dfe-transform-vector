@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.41](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.40...v1.0.41) (2026-09-15)
+
+### Bug Fixes
+
+* fill the metrics catalogue and keep the workload off ephemeral ports ([26eb6af](https://github.com/hyperi-io/dfe-transform-vector/commit/26eb6af9e7598c9943ca7bfb49ef178b62343a19)), closes [scalo-rs#102](https://github.com/hyperi-io/scalo-rs/issues/102)
+
 ## [1.0.40](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.39...v1.0.40) (2026-09-15)
 
 ### Bug Fixes
