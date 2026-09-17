@@ -7,6 +7,10 @@
   bootstrapServers, consumerGroup and topic, which KEDA accepts and then never
   scales on. Guarded by the `checked_in_keda_scaledobject_survives_emit_chart`
   integration test.
+
+  Only the broker/group/topic addressing diverges. Every other line tracks the
+  generator and must be carried across by hand when scalo changes it, because
+  the exemption stops `emit-chart` from delivering it here.
 */}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
@@ -41,7 +45,10 @@ spec:
         {{- end }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         activationLagThreshold: {{ .Values.keda.kafka.activationLagThreshold | quote }}
-        saslType: scram_sha512
+        # `sasl`, not `saslType`: the kafka trigger replaced the old `authMode`
+        # property with `sasl` + `tls`, and an unrecognised key is ignored, so
+        # the mechanism was being supplied nowhere at all.
+        sasl: scram_sha512
         tls: disable
     {{- if .Values.keda.cpu.enabled }}
     # CPU utilisation (secondary scaler)
