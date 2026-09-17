@@ -291,6 +291,84 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     );
 }
 
+/// The committed `chart/` must be what the generator produces, file by file.
+///
+/// `checked_in_keda_scaledobject_survives_emit_chart` above guards one file
+/// against being clobbered. Nothing guarded the rest, so a scalo release that
+/// corrected the generator left the shipped chart on the old output with no
+/// test failing: the KEDA TriggerAuthentication bound the username to
+/// `parameter: sasl`, which KEDA reads as the mechanism enum, so the scaler had
+/// no username, never read consumer-group lag, and the app never scaled.
+///
+/// Files in `HAND_FIXED` are asserted to still DIVERGE, so when the generator
+/// converges on the hand-edit the test says to drop the exemption rather than
+/// leaving a stale divergence nobody rechecks.
+#[test]
+fn committed_chart_matches_the_generator() {
+    // Each of these addresses app-specific values the generator does not model:
+    // the `config.source.*` Kafka addressing, the direct-transport Push port,
+    // and the Kafka credential env names Vector expands itself.
+    const HAND_FIXED: &[&str] = &[
+        "values.yaml",
+        "templates/deployment.yaml",
+        "templates/service.yaml",
+        "templates/keda-scaledobject.yaml",
+    ];
+
+    let generated = tempfile::tempdir().expect("temp dir");
+    scalo::deployment::generate_chart(
+        &deployment::contract(),
+        generated.path().to_str().expect("temp dir path"),
+        None,
+    )
+    .expect("chart generates");
+
+    let want = read_chart(generated.path());
+    let got = read_chart(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart"));
+
+    assert_eq!(
+        want.keys().collect::<Vec<_>>(),
+        got.keys().collect::<Vec<_>>(),
+        "chart/ holds a different set of files from `emit-chart`"
+    );
+
+    for (rel, from_generator) in &want {
+        if HAND_FIXED.contains(&rel.as_str()) {
+            assert_ne!(
+                got[rel], *from_generator,
+                "chart/{rel} is listed as hand-fixed but now matches the generator -- \
+                 drop it from HAND_FIXED"
+            );
+            continue;
+        }
+        assert_eq!(
+            got[rel], *from_generator,
+            "chart/{rel} has drifted from `emit-chart` -- fix contract() and regenerate, \
+             never hand-edit the output"
+        );
+    }
+}
+
+/// Relative path -> contents for a chart directory (root files plus
+/// `templates/`, which is the whole shape the generator emits).
+fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for sub in [None, Some("templates")] {
+        let here = sub.map_or_else(|| dir.to_path_buf(), |s| dir.join(s));
+        for entry in std::fs::read_dir(&here).expect("chart directory readable") {
+            let entry = entry.expect("chart directory entry");
+            if !entry.file_type().expect("file type").is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = sub.map_or_else(|| name.clone(), |s| format!("{s}/{name}"));
+            let body = std::fs::read_to_string(entry.path()).expect("chart file readable");
+            out.insert(rel, body);
+        }
+    }
+    out
+}
+
 /// The chart's expected Vector version must match the one the Dockerfile bakes.
 ///
 /// They drifted by nine minor versions once already -- the chart said 0.48.0
