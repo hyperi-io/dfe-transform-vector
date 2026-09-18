@@ -24,7 +24,9 @@ target/
 *.profdata
 coverage-html/
 coverage.lcov
-.cargo/
+# Glob the CONTENTS, not the directory: git cannot re-include a file whose
+# parent directory is excluded, so `.cargo/` would make the negation inert.
+.cargo/*
 !.cargo/config.toml
 
 # Local working files (not committed)
@@ -83,10 +85,6 @@ coverage-html/
 coverage.lcov
 tarpaulin-report.json
 cobertura.xml
-
-# cargo
-.cargo/
-!.cargo/config.toml
 
 # Local scratch / tmp (CORE.md: scratch goes here, gitignored, NOT
 # /tmp). Bare patterns (no leading slash) match a tmp dir at ANY
