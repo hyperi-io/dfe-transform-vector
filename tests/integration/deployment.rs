@@ -220,10 +220,12 @@ fn emit_chart_generates_without_panic() {
 /// The committed KEDA ScaledObject is a deliberate hand-edit of the generated
 /// one, and a fresh `emit-chart` over `chart/` silently clobbers it.
 ///
-/// The generator addresses `.Values.config.kafka.*`. This app has no
-/// `config.kafka` block, so a regenerated ScaledObject renders empty
-/// `bootstrapServers`, `consumerGroup` and `topic` — valid YAML that KEDA
-/// accepts and then never scales on, with nothing logged.
+/// The generator addresses `.Values.config.kafka.*`, which this app has no
+/// block for, and hardcodes the broker's SASL mechanism and TLS mode. A
+/// regenerated ScaledObject therefore renders empty `bootstrapServers`,
+/// `consumerGroup` and `topic`, and describes an auth posture the app may not
+/// be using — all valid YAML that KEDA accepts and then never scales on, with
+/// nothing logged.
 #[test]
 fn checked_in_keda_scaledobject_survives_emit_chart() {
     let committed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -244,14 +246,17 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     for (key, expected) in [
         ("bootstrapServers", ".Values.config.source.brokers"),
         ("consumerGroup", ".Values.config.source.group_id"),
+        ("sasl", ".Values.config.source.sasl"),
+        ("tls", ".Values.config.source.tls"),
+        ("unsafeSsl", ".Values.config.source.tls"),
     ] {
         let line = directive(key);
         assert!(
             line.contains(expected),
             "chart/templates/keda-scaledobject.yaml has been overwritten by `emit-chart`: \
              `{line}` does not read {expected}. The generator addresses config.kafka.*, which \
-             this chart does not define, so KEDA would get an empty value here and stop \
-             scaling with nothing logged."
+             this chart does not define, and hardcodes the mechanism and TLS mode, so KEDA \
+             would get an empty or wrong value here and stop scaling with nothing logged."
         );
     }
     assert!(
@@ -273,6 +278,21 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
         assert!(
             source.get(key).is_some(),
             "chart values.yaml has no config.source.{key} for the ScaledObject to read"
+        );
+    }
+    // The trigger reads these to decide the scaler's auth posture. Omitting a
+    // block is safe -- the parenthesised lookups fall back to SASL off, TLS
+    // off -- but silently descending to `none` when the app is using SCRAM
+    // gives a scaler that cannot authenticate, so the values must say.
+    for (block, key) in [
+        ("sasl", "enabled"),
+        ("sasl", "mechanism"),
+        ("tls", "enabled"),
+    ] {
+        assert!(
+            source.get(block).and_then(|b| b.get(key)).is_some(),
+            "chart values.yaml has no config.source.{block}.{key}; the ScaledObject trigger \
+             would fall back to an unauthenticated scaler against an authenticated broker"
         );
     }
 
@@ -367,6 +387,101 @@ fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, Strin
         }
     }
     out
+}
+
+/// Render the chart and read the trigger Helm actually produces.
+///
+/// Every other guard here reads the template as text, which cannot tell a
+/// working conditional from one that renders the wrong branch or refuses
+/// outright. The nil-safe parentheses and the `eq ... "true"` comparison exist
+/// because Go truthiness reads a quoted `"false"` as true and a missing block
+/// as a fatal dereference; both are invisible to a substring check.
+///
+/// Skips without helm on PATH. It is not on the CI test runner today, so treat
+/// this as a developer-machine gate until it is.
+#[test]
+fn the_keda_trigger_renders_the_auth_posture_the_app_uses() {
+    let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
+    let render = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("helm")
+            .args(["template", "t"])
+            .arg(&chart)
+            .args(["--show-only", "templates/keda-scaledobject.yaml"])
+            .args(args)
+            .output()
+            .map_err(|e| format!("run helm: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).to_string())
+        }
+    };
+
+    if render(&[]).is_err()
+        && std::process::Command::new("helm")
+            .arg("version")
+            .output()
+            .is_err()
+    {
+        eprintln!("SKIP: helm not on PATH, cannot render the chart");
+        return;
+    }
+
+    for (case, args, expected) in [
+        (
+            "stock values",
+            vec![],
+            vec!["sasl: scram_sha512", "tls: disable", "unsafeSsl: \"false\""],
+        ),
+        (
+            "both optional blocks omitted",
+            vec![
+                "--set",
+                "config.source.sasl=null",
+                "--set",
+                "config.source.tls=null",
+            ],
+            vec!["sasl: none", "tls: disable"],
+        ),
+        (
+            "sasl off as a quoted string, which Go truthiness reads as true",
+            vec!["--set-string", "config.source.sasl.enabled=false"],
+            vec!["sasl: none"],
+        ),
+        (
+            "plain maps to KEDA's spelling",
+            vec!["--set", "config.source.sasl.mechanism=plain"],
+            vec!["sasl: plaintext"],
+        ),
+        (
+            "tls on with skip_verify reaches KEDA too",
+            vec![
+                "--set",
+                "config.source.tls.enabled=true",
+                "--set",
+                "config.source.tls.skip_verify=true",
+            ],
+            vec!["tls: enable", "unsafeSsl: \"true\""],
+        ),
+    ] {
+        let rendered =
+            render(&args).unwrap_or_else(|e| panic!("{case}: helm refused to render: {e}"));
+        for want in expected {
+            assert!(
+                rendered.contains(want),
+                "{case}: rendered trigger has no `{want}`:\n{rendered}"
+            );
+        }
+    }
+
+    // A mechanism the app rejects must stop the chart rather than emit an
+    // empty `sasl:`, which KEDA would fail on with nothing pointing back here.
+    let err = render(&["--set", "config.source.sasl.mechanism=oauthbearer"])
+        .expect_err("an unmapped mechanism must fail the render");
+    assert!(
+        err.contains("no KEDA sasl mechanism"),
+        "unmapped mechanism failed for the wrong reason: {err}"
+    );
 }
 
 /// The chart's expected Vector version must match the one the Dockerfile bakes.

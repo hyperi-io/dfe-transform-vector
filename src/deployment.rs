@@ -99,7 +99,7 @@ pub fn contract() -> DeploymentContract {
             },
             "sink": {
                 "transport": "bus",
-                "endpoint": "http://dfe-loader:6000",
+                "endpoint": "http://dfe-loader:50051",
                 "brokers": ["kafka:9092"],
                 "topic": "enriched_events",
                 "key_field": ".org_id",

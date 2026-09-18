@@ -61,7 +61,7 @@
       "$ref": "#/$defs/SinkConfig",
       "default": {
         "transport": "bus",
-        "endpoint": "http://dfe-loader:6000",
+        "endpoint": "http://dfe-loader:50051",
         "brokers": [
           "localhost:9092"
         ],
@@ -333,6 +333,8 @@
         "password": {
           "description": "SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.",
           "type": "string",
+          "x-dfe-secret": true,
+          "writeOnly": true,
           "default": ""
         }
       }
@@ -389,7 +391,7 @@
         "endpoint": {
           "description": "Downstream Push listener on the direct transport, e.g. the loader.",
           "type": "string",
-          "default": "http://dfe-loader:6000"
+          "default": "http://dfe-loader:50051"
         },
         "brokers": {
           "description": "Kafka bootstrap servers.",

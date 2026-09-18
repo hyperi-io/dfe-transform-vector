@@ -42,6 +42,10 @@ pub struct SaslConfig {
     /// SASL username. Supports Vector env interpolation: `${KAFKA_SASL_USERNAME}`.
     pub username: String,
     /// SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.
+    // Typed `String` for the round-trip above, but schema'd as scalo's
+    // `SensitiveString` so the emitted config-schema carries `x-dfe-secret` and
+    // `writeOnly`, which is what tells the console to mask the field.
+    #[schemars(with = "scalo::SensitiveString")]
     pub password: String,
 }
 
@@ -329,7 +333,7 @@ impl Default for SinkConfig {
     fn default() -> Self {
         Self {
             transport: Transport::default(),
-            endpoint: "http://dfe-loader:6000".to_string(),
+            endpoint: "http://dfe-loader:50051".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topic: String::new(),
             key_field: String::new(),

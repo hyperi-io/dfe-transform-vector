@@ -70,7 +70,7 @@ dfe_source: "my_source"
 # its table by, so a source keeps its name across the hop.
 # sink:
 #   transport: "bus"                   # bus | direct
-#   endpoint: "http://dfe-loader:6000" # direct only: where the records go next
+#   endpoint: "http://dfe-loader:50051" # direct only: where the records go next
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
