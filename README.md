@@ -118,7 +118,7 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 | `DFE_TRANSFORM_TRANSFORMS__DIR` | Transform YAML directory |
 | `DFE_TRANSFORM_LOGGING__LEVEL` | Log level (trace/debug/info/warn/error) |
 
-## Hot-Reload
+### Hot-reload
 
 **Hot-reloaded (takes effect via SIGHUP to Vector):**
 - Transform YAML file contents (modified/added/removed in watched directory)
@@ -220,6 +220,7 @@ points at it.
 
 ## Documentation
 
+- [docs/architecture.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/architecture.md) -- The problem, the ownership boundary and the invariants
 - [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/DESIGN.md) -- Full architecture and design
 - [docs/MIGRATION.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/MIGRATION.md) -- Migration from official Vector chart
 - [docs/LIBRDKAFKA.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/LIBRDKAFKA.md) -- Kafka tuning reference
@@ -233,3 +234,114 @@ This project is licensed under the Business Source License 1.1
 Copyright (c) 2026 HYPERI PTY LIMITED
 
 For commercial licensing options, see [COMMERCIAL.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/COMMERCIAL.md).
+
+## Context
+
+### What this is
+
+A Rust supervisor that runs Vector.dev as a child process so a Vector pipeline
+behaves like every other DFE app -- one big-dial config, one ops port, an OTLP
+push, a consumer-lag scaling signal and a chart dfe-engine compiles. It is NOT
+the transform engine and it does not build Vector: the image downloads the
+upstream release binary at the version pinned by `VECTOR_VERSION` in
+`src/deployment.rs`, and cargo compiles only the supervisor. It is also not a
+singleton and not part of the default deploy -- `dfe-infra/apps.yaml` declares
+it `multiplicity: per_config` with `scale_deployed: true` and an empty
+`default_in`, so one deployment exists per source config and only when a
+deployment asks for it.
+
+### Where things live
+
+| Path | What it holds |
+|---|---|
+| `src/main.rs` | CLI entry. Fills scalo's `CommonArgs` from the loaded config before `run_app`, which is what makes `metrics.address` and `logging.*` take effect |
+| `src/config/` | `loader` -> `validate` -> `generate` -> `wiring` -> `assembler`, plus `reload`, `transforms` and `kafka_defaults` |
+| `src/vector/` | `process` spawn and backoff, `lifecycle` states, and `binary` -- version selection kept pure and NOT on the run path, which its own header explains |
+| `src/bridge.rs` | The direct-transport translation between scalo `Transport/Push` and Vector `PushEvents`. Does nothing on `bus` |
+| `src/health.rs`, `src/metrics.rs`, `src/metrics/scrape.rs` | Readiness publishing, and the scrape that merges `vector_*` into scalo's registry |
+| `src/deployment.rs`, `src/vector-layer.dockerfile` | The two-binary image override spliced onto scalo's generated Dockerfile |
+| `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
+| `pipelines/filebeat/` | The shipped filebeat pipeline |
+| `chart/` | The committed Helm chart. Carries KEDA hand-edits, so NOT pure generator output |
+| `deploy/` | Argo Application and the helm kustomization overlays |
+| `docs/` | `architecture.md` for the shape and the invariants, `DESIGN.md` for field-by-field depth, `MIGRATION.md`, `LIBRDKAFKA.md`, the generated `config-schema.*` and `capability-catalog.*` |
+| `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
+| `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
+
+### Commands that prove a change
+
+```bash
+make check                                   # hyperi-ci check -- quality + test
+cargo nextest run --lib                      # unit only, no infrastructure
+cargo nextest run --test integration         # config assembly, wiring, lifecycle, metrics
+cargo nextest run --test smoke               # CLI surface
+cargo nextest run --test e2e                 # needs Docker or a live broker
+cargo nextest run --run-ignored all          # everything, opt-in cases included
+```
+
+`cargo nextest run --lib` was run against this branch: 112 passed, 1 skipped.
+
+What green does NOT mean:
+
+- **The default run skips the Vector validator.** Seven `#[ignore]` cases need a
+  real Vector binary -- six in `tests/integration/vector_validate.rs` and one in
+  `tests/e2e/kafka.rs`. Until you pass `--run-ignored all`, nothing has run
+  Vector's own validator over an assembled config.
+- **Locally, a missing broker or Vector binary SKIPS rather than fails.** In CI
+  that same absence is an assertion failure instead, so CI is stricter than a
+  green laptop run.
+- **`e2e::filebeat_kafka` runs by default but skips without a sibling repo.** The
+  corpus and elastic's golden events live in dfe-transform-vrl, so it needs that
+  repo checked out beside this one or `DFE_TRANSFORM_VRL_DIR` pointing at it.
+- **A docs-only push runs no CI at all.** `paths-ignore` for `docs/**` and
+  `**.md` is on the `push` trigger but not on `pull_request`, so the PR is the
+  only place a docs change is checked. A silent push is not a pass.
+
+### What tends to bite
+
+| Don't | Do | Why |
+|---|---|---|
+| Point `emit-chart` at `chart/` | Render to a scratch directory and diff | `chart/` carries KEDA hand-edits the generator does not produce, including a ScaledObject addressed at `config.source.*` where the generator emits `config.kafka.*`. A test asserts the committed chart matches the generator except for four exempted files |
+| Bump the Vector version in one place | Change `VECTOR_VERSION` in `src/deployment.rs` and carry it to `chart/values.yaml` | The chart once said 0.48.0 while the image baked 0.57.0, nine minor versions apart, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
+| Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials, so Vector would run two sources and two sinks |
+| Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs, and the generated Vector YAML interpolates `${KAFKA_SASL_PASSWORD}` |
+| Assume a config key you added is wired because it parses and validates | Prove it changes behaviour, and add it to the standing check that every committed config file loads | `metrics.address` and `logging.level` never left the struct. A config saying `metrics.address: 0.0.0.0:19099` still listened on 9090, so a deployment moving the metrics port lost every probe |
+| Set `enable.auto.commit: false` here, as the shared DFE consumer baseline does | Leave auto-commit on | Vector's kafka source only stores offsets and leaves librdkafka's commit timer to flush them, and that timer is armed only when auto-commit is on. Consumer lag sat at 72 across a quiet 90-second window while the app's own metrics said it had processed those same 72 events |
+| Read `/readyz` as "carrying traffic" | Read it as "the child was alive 500ms after spawn" | It once answered an unconditional 200 because nothing published a readiness signal, so Vector could crash and restart hundreds of times with the pod still Ready and zero restarts |
+| Swap the reload poller for inotify | Keep polling | S3-backed mounts -- s3fs, goofys, Mountpoint for S3 -- generate no filesystem notification events, so inotify works on every laptop and silently stops reloading in production |
+| Rename a credential field, or add one whose leaf name is not `password`, `secret`, `token`, `api_key`, `private_key` or `passphrase` | Add the `x-dfe-secret` marker to the schema first | This repo ships no `x-dfe-secret` marker anywhere. The only thing redacting the SASL password over dfe-engine's API is its leaf-name fallback in `appmgmt/contract.py`, so a rename outside that set returns an operator's Kafka password in the clear. The sibling dfe-transform-vrl marked its Kafka passwords already |
+
+### Where this sits
+
+Generated from `dfe-infra/suite.yaml` via
+`python3 /projects/dfe-infra/scripts/dfe-stack suite --consumer dfe-transform-vector`
+and `--producer dfe-transform-vector`.
+
+Inbound -- what this repo depends on:
+
+- **scalo-rs**, `cargo-dep`. `Cargo.toml` declares the `scalo` crate by range,
+  with a second range covering the dev dependency. A scalo release reaches this
+  repo, so widen the range if it does not admit the new version, then rebuild.
+- **scalo-rs**, `generated-file`, lockstep. The committed `Dockerfile` is written
+  by `scalo::deployment::generate_dockerfile()` -- its own header names the
+  generator and the schema version -- and this repo splices the Vector layer onto
+  it. When the generator or its schema moves, regenerate with
+  `dfe-transform-vector emit-dockerfile > Dockerfile` and commit the diff.
+
+Outbound -- what depends on this repo:
+
+- **dfe-infra**, `image-pin`, lockstep. `dfe-infra/helm/charts/dfe-transform-vector/Chart.yaml`
+  pins this repo's container image as a tag plus the digest that makes the tag
+  immutable. Bump the tag, re-resolve the digest, and `check_versions_drift.py`
+  confirms the chart's `appVersion` and the digest mirror agree with the pin.
+
+Two more relationships that are real but are NOT declared edges in the suite
+graph, so no gate enforces them:
+
+- **dfe-infra `apps.yaml`** is the SSoT for this app's shape -- multiplicity,
+  scaling, transports, endpoints and which compiler derives its routing.
+  dfe-engine reads that manifest, so adding or changing the app is a manifest
+  edit, never an engine release.
+- **dfe-transform-vrl** holds the filebeat corpus, the bundled pipeline and the
+  documented divergences that `e2e::filebeat_kafka` grades against. The
+  dependency is a test-time repo checkout only, and the case skips without it.
