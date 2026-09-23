@@ -67,7 +67,7 @@ publish:
       - linux/arm64
     # Vector binary install + data dirs are spliced into the Dockerfile
     # by `src/deployment.rs::emit_dockerfile()` (consumer-side post-process
-    # over rustlib's base output). When hyperi-ci's overlay framework
+    # over scalo's base output). When hyperi-ci's overlay framework
     # lands, this moves to `publish.container.overlays:` here.
     # See: docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md
   helm:
