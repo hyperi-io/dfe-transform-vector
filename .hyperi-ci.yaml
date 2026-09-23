@@ -49,12 +49,7 @@ build:
         # the compiler toward startup paths and turns PGO NEGATIVE.
         duration_secs: 300
       bolt:
-        # Off until hyperi-ci#136 packages the BOLT output. cargo-pgo writes
-        # <bin>-bolt-optimized and packaging copies the unsuffixed binary, so
-        # the optimised file is built and discarded -- confirmed at the shipped
-        # artefact on five DFE apps. dfe-receiver stays the canary that proves
-        # the fix; everything else turns this back on after it releases.
-        enabled: false  # Linux only; skipped on non-Linux targets
+        enabled: true  # Linux only; skipped on non-Linux targets
 
 # Publishing (on release)
 publish:
