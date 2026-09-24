@@ -85,7 +85,16 @@ pub fn contract() -> DeploymentContract {
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vector-default",
                 "decoding": { "codec": "json" },
-                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
+                // Vector expands these when it reads its own config, from the
+                // env vars the generated Deployment fills out of the kafka
+                // secret. A literal here would land in the ConfigMap instead,
+                // and leaving them out fails validation before Vector starts.
+                "sasl": {
+                    "enabled": true,
+                    "mechanism": "scram_sha_512",
+                    "username": "${KAFKA_SASL_USERNAME}",
+                    "password": "${KAFKA_SASL_PASSWORD}"
+                },
                 "tls": { "enabled": false }
             },
             "sink": {
@@ -96,7 +105,12 @@ pub fn contract() -> DeploymentContract {
                 "key_field": ".org_id",
                 "encoding": "json",
                 "compression": "zstd",
-                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
+                "sasl": {
+                    "enabled": true,
+                    "mechanism": "scram_sha_512",
+                    "username": "${KAFKA_SASL_USERNAME}",
+                    "password": "${KAFKA_SASL_PASSWORD}"
+                },
                 "tls": { "enabled": false }
             },
             // The two loopback legs between the supervisor and Vector, used on

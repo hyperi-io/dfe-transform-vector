@@ -96,6 +96,8 @@ config:
     sasl:
       enabled: true
       mechanism: scram_sha_512
+      username: ${KAFKA_SASL_USERNAME}
+      password: ${KAFKA_SASL_PASSWORD}
     tls:
       enabled: false
   sink:
@@ -112,6 +114,8 @@ config:
     sasl:
       enabled: true
       mechanism: scram_sha_512
+      username: ${KAFKA_SASL_USERNAME}
+      password: ${KAFKA_SASL_PASSWORD}
     tls:
       enabled: false
   # -- The two supervisor-to-Vector legs, used on the direct transport only.
