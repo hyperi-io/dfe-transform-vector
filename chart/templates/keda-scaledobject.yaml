@@ -8,9 +8,10 @@
   scales on. Guarded by the `checked_in_keda_scaledobject_survives_emit_chart`
   integration test.
 
-  Only the broker/group/topic addressing diverges. Every other line tracks the
-  generator and must be carried across by hand when scalo changes it, because
-  the exemption stops `emit-chart` from delivering it here.
+  The addressing and the sasl/tls lines both diverge from the generator, which
+  hardcodes them. Every other line tracks it and must be carried across by hand
+  when scalo changes it, because the exemption stops `emit-chart` from
+  delivering it here.
 */}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
@@ -45,11 +46,24 @@ spec:
         {{- end }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         activationLagThreshold: {{ .Values.keda.kafka.activationLagThreshold | quote }}
-        # `sasl`, not `saslType`: the kafka trigger replaced the old `authMode`
-        # property with `sasl` + `tls`, and an unrecognised key is ignored, so
-        # the mechanism was being supplied nowhere at all.
-        sasl: scram_sha512
-        tls: disable
+        {{- /* KEDA reads `sasl`, not `saslType`, and its enum spells the
+            mechanisms without the underscore the app config uses. These track
+            the app's own source config so the scaler dials the broker the way
+            the app does.
+
+            `sasl` and `tls` are optional to the app (SourceConfig is
+            serde(default)), so reach them through the nil-safe parenthesised
+            form or an operator who omits either block gets a Helm render
+            error instead of a chart. Compare against "true" rather than
+            leaning on Go truthiness, which reads a quoted "false" as true. */}}
+        {{- $mechanisms := dict "plain" "plaintext" "scram_sha_256" "scram_sha256" "scram_sha_512" "scram_sha512" }}
+        {{- $configured := (.Values.config.source.sasl).mechanism | default "scram_sha_512" }}
+        sasl: {{ if eq ((.Values.config.source.sasl).enabled | toString) "true" }}{{ required (printf "keda: no KEDA sasl mechanism for %q" $configured) (get $mechanisms $configured) }}{{ else }}none{{ end }}
+        tls: {{ if eq ((.Values.config.source.tls).enabled | toString) "true" }}enable{{ else }}disable{{ end }}
+        {{- /* The app turns skip_verify into enable.ssl.certificate.verification=false.
+            Without the matching dial KEDA is stricter than the app it scales, and a
+            private-CA broker the app talks to fine fails verification here. */}}
+        unsafeSsl: {{ (.Values.config.source.tls).skip_verify | default false | quote }}
     {{- if .Values.keda.cpu.enabled }}
     # CPU utilisation (secondary scaler)
     - type: cpu

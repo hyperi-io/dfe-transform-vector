@@ -98,6 +98,10 @@ fn suite_label_identifies_this_repo() {
 /// returns the right string -- not that anything calls it. A convention that is
 /// never wired to a container is decoration, so this asks Docker what actually
 /// got created, and then that it was removed.
+///
+/// `hermetic`, not `acquire`: there is nothing to inspect unless this test owns
+/// the container, and `acquire` prefers a live broker whenever `.env` names a
+/// reachable one.
 #[tokio::test]
 async fn a_started_container_carries_the_name_and_label_then_goes_away() {
     const TEST: &str = "container-hygiene-inspects-a-real-one";
@@ -113,14 +117,11 @@ async fn a_started_container_carries_the_name_and_label_then_goes_away() {
     };
 
     {
-        let Some(fixture) = common::KafkaFixture::acquire(TEST).await else {
-            eprintln!("skipping: no Docker and no live Kafka");
+        let Some(_fixture) = common::KafkaFixture::hermetic(TEST).await else {
+            common::require_service_in_ci("Kafka", "no Docker to start a broker container");
+            eprintln!("skipping: no Docker, so this test cannot own a container");
             return;
         };
-        if fixture.mode != common::FixtureMode::Testcontainer {
-            eprintln!("skipping: the live cluster answered, so no container was started");
-            return;
-        }
 
         let name =
             inspect("{{.Name}}").expect("docker must know the container by its expected name");

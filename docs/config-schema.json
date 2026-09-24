@@ -333,6 +333,8 @@
         "password": {
           "description": "SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.",
           "type": "string",
+          "x-dfe-secret": true,
+          "writeOnly": true,
           "default": ""
         }
       }
