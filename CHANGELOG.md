@@ -3,6 +3,16 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.42](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.41...v1.0.42) (2026-09-24)
+
+### Bug Fixes
+
+* **chart:** let the KEDA Kafka scaler authenticate, and guard the chart ([#81](https://github.com/hyperi-io/dfe-transform-vector/issues/81)) ([6fa2714](https://github.com/hyperi-io/dfe-transform-vector/commit/6fa27148729c22fa620c3565ae96b1aaadd8ed27))
+* **ci:** accept the unoptimised release consent inputs ([#89](https://github.com/hyperi-io/dfe-transform-vector/issues/89)) ([a0ac7ec](https://github.com/hyperi-io/dfe-transform-vector/commit/a0ac7ecb566bce59102d67832f784444e01f9db5))
+* **ci:** skip PGO and BOLT for the rc.14 workstream ([#87](https://github.com/hyperi-io/dfe-transform-vector/issues/87)) ([fa27008](https://github.com/hyperi-io/dfe-transform-vector/commit/fa270086a649516e070c35ac59be908add4eaeec))
+* **docs:** give the README a Context section and write the architecture doc ([#83](https://github.com/hyperi-io/dfe-transform-vector/issues/83)) ([f08d86f](https://github.com/hyperi-io/dfe-transform-vector/commit/f08d86f47c6d6fa9153ce927b5c9e77f3d02075e))
+* **docs:** name scalo, not rustlib ([#86](https://github.com/hyperi-io/dfe-transform-vector/issues/86)) ([7591dc0](https://github.com/hyperi-io/dfe-transform-vector/commit/7591dc0c9dc7b1f586dac7636b39e295b06f9e91))
+
 ## [1.0.41](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.40...v1.0.41) (2026-09-15)
 
 ### Bug Fixes
