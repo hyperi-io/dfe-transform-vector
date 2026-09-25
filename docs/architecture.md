@@ -112,11 +112,13 @@ bind at startup, the consumer group id and metrics labels are set at startup,
 and the ops listener is bound at startup. A change that classifies as
 transforms-only when it is not logs a successful reload for work it never did.
 
-**Nothing on the direct path drops a record.** Every hop holds and retries
-rather than discarding. A batch that cannot move on stops the supervisor
-draining the listener behind it, the listener's channel fills, and scalo answers
-the upstream caller `Backpressured` -- the same signal a full Kafka producer
-queue gives. A record leaves this process only by being accepted downstream.
+**A push on the direct path is answered only once the next hop has it.** Both
+bridge listeners are built armed, so a push is held until the pipeline releases
+its records. A hop that refuses is retried until the hold runs out (18 s), each
+send to the next stage giving up after 15 s, and then the push is answered
+`Unavailable` and its sender retries. A record over the next stage's
+message-size ceiling is the one exception: no retry would get it through, so it
+is released dropped and counted rather than resent forever.
 
 ## Health and metrics invariants
 

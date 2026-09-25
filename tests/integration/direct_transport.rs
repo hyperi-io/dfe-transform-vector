@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use dfe_transform_vector::bridge::{Bridge, BridgeRuntime};
+use dfe_transform_vector::bridge::{Bridge, BridgeRuntime, MAX_HOLD, SEND_TIMEOUT_MS};
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
     BridgeConfig, Config, PipelineConfig, SinkConfig, SourceConfig, TransformConfig, Transport,
@@ -387,6 +387,87 @@ async fn vectors_push_is_not_answered_ok_before_the_next_stage_takes_it() {
     assert!(
         sent.is_err(),
         "PushEvents must not be answered OK while the next stage is down"
+    );
+}
+
+/// The outbound leg keeps the stage's deadlines: Vector's push is given up at
+/// `MAX_HOLD`, and inside that hold a next stage that never answers is
+/// abandoned at `SEND_TIMEOUT_MS` and tried again. On scalo's defaults, a 25 s
+/// hold and a 30 s send, the push is held to 25 s and the next stage is tried
+/// once.
+#[tokio::test]
+async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    config.source.transport = Transport::Bus;
+    config.source.topics = vec!["orders_land".into()];
+
+    // Takes every push and never releases its records, so each is answered
+    // only when its hold runs out.
+    let loader_port = free_port();
+    let loader = GrpcTransport::builder(&GrpcConfig::server(&format!("127.0.0.1:{loader_port}")))
+        .armed(true)
+        .start()
+        .await
+        .expect("stand-in loader listener");
+    config.sink.endpoint = format!("http://127.0.0.1:{loader_port}");
+
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    wait_for_port(&config.bridge.from_vector).await;
+
+    let vector_sink = scalo::transport::vector_compat::VectorCompatClient::connect_lazy(&format!(
+        "http://{}",
+        config.bridge.from_vector
+    ))
+    .expect("vector-protocol client");
+    let events = [serde_json::json!({"id": "hung"})];
+    let started = tokio::time::Instant::now();
+    let push = vector_sink.send_events(&events);
+    tokio::pin!(push);
+
+    // Kept unreleased until the end, so the loader never answers one early.
+    let mut taken = Vec::new();
+    let sent = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            tokio::select! {
+                sent = &mut push => break sent,
+                batch = loader.recv(10) => {
+                    if let Ok(batch) = batch
+                        && !batch.records.is_empty()
+                    {
+                        taken.push(batch);
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("the hold answers the push");
+    let held_for = started.elapsed();
+    let attempts: usize = taken.iter().map(|b| b.records.len()).sum();
+
+    stop.cancel();
+    let _ = task.await;
+    drop(taken);
+
+    assert!(
+        sent.is_err(),
+        "PushEvents must not be answered OK while the next stage never answers"
+    );
+    assert!(
+        held_for >= MAX_HOLD - Duration::from_secs(1)
+            && held_for < MAX_HOLD + Duration::from_secs(3),
+        "Vector's push must be held for the {MAX_HOLD:?} hold, not scalo's 25 s default; it was \
+         held {held_for:?}"
+    );
+    assert!(
+        attempts >= 2,
+        "a next stage that never answers must be given up after {SEND_TIMEOUT_MS} ms and tried \
+         again inside the hold; it saw {attempts} attempt(s)"
     );
 }
 

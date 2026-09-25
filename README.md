@@ -56,9 +56,11 @@ On `direct` Vector does not speak scalo's `Transport/Push`, so the supervisor
 translates. It accepts records on `source.listen`, hands them to Vector over
 `bridge.to_vector`, takes them back on `bridge.from_vector`, and pushes them to
 `sink.endpoint`. Both inner legs are loopback -- they exist inside one pod.
-Nothing on that path drops a record: a hop that cannot move on holds and
-retries, which stops the listener behind it draining, so the caller upstream is
-back-pressured instead.
+A push is answered only once the next hop has its records. A hop that cannot
+move on is retried for up to 18 s, each send to the next stage giving up after
+15 s, and then the push is answered `Unavailable` so its sender retries. The one
+record that is dropped, and counted, is one over the next stage's message-size
+ceiling, which no retry would get through.
 
 ## Features
 

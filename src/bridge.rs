@@ -45,24 +45,44 @@
 //! is answered `Unavailable` and its sender retries: duplicates are possible,
 //! loss is not. At shutdown each listener closes to new pushes and drains what
 //! it already holds.
+//!
+//! The one record that leaves without being delivered is one the next stage
+//! could never take, over its message-size ceiling. Its push is released
+//! dropped and scalo counts it, so it is not resent forever.
+//!
+//! ## Deadlines
+//!
+//! A push is held at most [`MAX_HOLD`] (18 s), under the deadline of the stage
+//! pushing in. Each send to the next stage gives up after [`SEND_TIMEOUT_MS`]
+//! (15 s), so a hung next stage is retried inside the hold rather than
+//! outliving it.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use scalo::governor::UnifiedPressure;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
-    AcknowledgementsConfig, Record, SendResult, SinkConfirmation, TransportError, TransportSender,
-    WorkBatch,
+    AcknowledgementsConfig, DeliveryStatus, Record, SendResult, SinkConfirmation, TransportError,
+    TransportSender, WorkBatch,
 };
-use scalo::worker::engine::BatchProcessingConfig;
+use scalo::worker::engine::{BatchProcessingConfig, BlockPieces};
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::{Error, Result};
+
+/// The longest either listener holds a push: under the upstream stage's send
+/// deadline, over this stage's own.
+pub const MAX_HOLD: Duration = Duration::from_secs(18);
+
+/// Each send to the next stage gives up after this, inside [`MAX_HOLD`], so the
+/// hold can still retry it.
+pub const SEND_TIMEOUT_MS: u64 = 15_000;
 
 /// What the service runtime lends the bridge.
 #[derive(Clone, Default)]
@@ -159,7 +179,7 @@ impl Bridge {
                 "bridge.from_vector listener",
             )
             .await?;
-            let downstream = GrpcTransport::new(&GrpcConfig::client(&config.sink.endpoint))
+            let downstream = GrpcTransport::new(&downstream_config(&config.sink.endpoint))
                 .await
                 .map_err(|e| {
                     Error::Transport(format!(
@@ -234,6 +254,13 @@ impl Bridge {
     }
 }
 
+/// The client for the next stage's Push listener.
+fn downstream_config(endpoint: &str) -> GrpcConfig {
+    let mut config = GrpcConfig::client(endpoint);
+    config.send_timeout_ms = SEND_TIMEOUT_MS;
+    config
+}
+
 /// Bind a receive server built armed, so no push is answered before the
 /// pipeline releases its records.
 async fn listener(
@@ -244,7 +271,8 @@ async fn listener(
 ) -> Result<GrpcTransport> {
     let builder = GrpcTransport::builder(config)
         .acknowledgements(acknowledgements)
-        .armed(true);
+        .armed(true)
+        .max_hold(MAX_HOLD);
     let builder = match pressure {
         Some(pressure) => builder.pressure(pressure),
         None => builder,
@@ -306,7 +334,7 @@ async fn run_outbound(
         // Screens out what the next stage's listener would refuse outright, so
         // such a record is counted rather than sent and silently left out.
         .sender(&**downstream)
-        .run(
+        .run_with_pieces(
             |mut batch: WorkBatch<GrpcToken>| {
                 // The next stage routes on the record key, and a record that
                 // came back through Vector carries none.
@@ -315,34 +343,58 @@ async fn run_outbound(
                 }
                 Ok(batch)
             },
-            |batch: &WorkBatch<GrpcToken>| {
+            |batch: &WorkBatch<GrpcToken>, pieces: &BlockPieces<'_>| {
                 let records: Vec<Record> = batch.records.clone();
                 let downstream = Arc::clone(downstream);
+                // Carries only what the send left out; the pipeline's own piece
+                // carries whether the batch was delivered.
+                let left_out = pieces.piece();
                 async move {
-                    match downstream.send_batch(&records).await {
-                        // The screen has already taken out what the sender
-                        // would dead-letter, so what it names here it counted.
-                        SendResult::Ok | SendResult::FilteredDlq => Ok(()),
-                        SendResult::Backpressured => {
-                            debug!(
-                                records = records.len(),
-                                "next stage is backpressured -- holding the batch"
-                            );
-                            Err(retry_later())
+                    match sent(downstream.send_batch(&records).await, records.len()) {
+                        Ok(status) => {
+                            left_out.report(status);
+                            Ok(())
                         }
-                        SendResult::Fatal(e) => {
-                            error!(
-                                error = %e,
-                                records = records.len(),
-                                "next stage refused the batch -- holding it and retrying"
-                            );
-                            Err(retry_later())
+                        Err(e) => {
+                            // Delivered is the merge's identity, so a failed
+                            // attempt adds nothing to the block's status.
+                            left_out.report(DeliveryStatus::Delivered);
+                            Err(e)
                         }
                     }
                 }
             },
         )
         .await
+}
+
+/// What one send to the next stage adds to its block's status, or the refusal
+/// the pipeline retries.
+fn sent(result: SendResult, records: usize) -> std::result::Result<DeliveryStatus, EngineError> {
+    match result {
+        SendResult::Ok => Ok(DeliveryStatus::Delivered),
+        // Every record was over the next stage's size ceiling, which the screen
+        // should have caught: released dropped, never delivered, never resent.
+        SendResult::FilteredDlq => {
+            warn!(
+                records,
+                "next stage could take none of the batch -- releasing it as dropped"
+            );
+            Ok(DeliveryStatus::Dropped)
+        }
+        SendResult::Backpressured => {
+            debug!(records, "next stage is backpressured -- holding the batch");
+            Err(retry_later())
+        }
+        SendResult::Fatal(e) => {
+            error!(
+                error = %e,
+                records,
+                "next stage refused the batch -- holding it and retrying"
+            );
+            Err(retry_later())
+        }
+    }
 }
 
 /// A payload as the JSON event Vector's protocol carries.
@@ -423,5 +475,40 @@ mod tests {
             retry_later(),
             EngineError::Transport(ref e) if e.is_recoverable()
         ));
+    }
+
+    /// A batch the next stage took none of is released dropped, so its source
+    /// is answered and it is counted, but never as delivered.
+    #[test]
+    fn a_send_that_left_every_record_out_is_dropped_never_delivered() {
+        assert!(matches!(
+            sent(SendResult::FilteredDlq, 3),
+            Ok(DeliveryStatus::Dropped)
+        ));
+        assert!(matches!(
+            sent(SendResult::Ok, 3),
+            Ok(DeliveryStatus::Delivered)
+        ));
+        assert!(matches!(
+            sent(SendResult::Backpressured, 3),
+            Err(EngineError::Transport(ref e)) if e.is_recoverable()
+        ));
+        assert!(matches!(
+            sent(SendResult::Fatal(TransportError::Send("refused".into())), 3),
+            Err(EngineError::Transport(ref e)) if e.is_recoverable()
+        ));
+    }
+
+    /// The send to the next stage must give up while the push it carries is
+    /// still held, or a hung next stage runs the hold out on one attempt.
+    #[test]
+    fn the_send_deadline_sits_inside_the_hold() {
+        let config = downstream_config("http://127.0.0.1:1");
+        assert_eq!(config.send_timeout_ms, SEND_TIMEOUT_MS);
+        assert!(
+            Duration::from_millis(config.send_timeout_ms) < MAX_HOLD,
+            "a {} ms send deadline outlives the {MAX_HOLD:?} hold",
+            config.send_timeout_ms
+        );
     }
 }
