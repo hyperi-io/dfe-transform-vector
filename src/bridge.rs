@@ -50,18 +50,36 @@
 //! could never take, over its message-size ceiling. Its push is released
 //! dropped and scalo counts it, so it is not resent forever.
 //!
+//! A leg whose pipeline fails stops the service, so the pod restarts rather
+//! than run on with a listener nobody reads.
+//!
 //! ## Deadlines
 //!
-//! A push is held at most [`MAX_HOLD`] (18 s), under the deadline of the stage
-//! pushing in. Each send to the next stage gives up after [`SEND_TIMEOUT_MS`]
-//! (15 s), so a hung next stage is retried inside the hold rather than
-//! outliving it.
+//! The deadlines nest, outermost first, so an inner hop is always answered
+//! while the hop around it can still answer its own sender:
+//!
+//! - [`INTAKE_HOLD`] (18 s): the longest the intake listener holds a push,
+//!   under the deadline of the stage pushing in.
+//! - [`RETURN_HOLD`] (16.5 s): the longest the listener Vector's sink pushes
+//!   into holds a push. On direct to direct that hold sits inside the intake
+//!   one, with room for Vector's own sink batching.
+//! - [`SEND_TIMEOUT_MS`] (15 s): each send to the next stage, and each dial to
+//!   Vector, gives up after this, so a hung hop is retried inside the hold.
+//!
+//! ## Pressure and memory
+//!
+//! Only the intake listener sheds pushes under the governor's pressure. The
+//! return listener is the only drain for everything the intake holds, so
+//! shedding it would stall the stage until the holds expired into duplicates.
+//! Both lease what they hold on the runtime's memory guard.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use scalo::governor::UnifiedPressure;
+use scalo::memory::MemoryGuard;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
@@ -76,21 +94,38 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::{Error, Result};
 
-/// The longest either listener holds a push: under the upstream stage's send
-/// deadline, over this stage's own.
-pub const MAX_HOLD: Duration = Duration::from_secs(18);
+/// The longest the intake listener holds a push: under the upstream stage's
+/// send deadline, over [`RETURN_HOLD`].
+pub const INTAKE_HOLD: Duration = Duration::from_secs(18);
 
-/// Each send to the next stage gives up after this, inside [`MAX_HOLD`], so the
-/// hold can still retry it.
+/// The longest the listener Vector's sink pushes into holds a push: inside
+/// [`INTAKE_HOLD`] by more than Vector's one-second sink batching, over
+/// [`SEND_TIMEOUT_MS`].
+pub const RETURN_HOLD: Duration = Duration::from_millis(16_500);
+
+/// Each send to the next stage, and each dial to Vector, gives up after this,
+/// inside [`RETURN_HOLD`], so the hold can still retry it.
 pub const SEND_TIMEOUT_MS: u64 = 15_000;
+
+/// Payload bytes one `PushEvents` to Vector carries at most, bar a single
+/// record over it, which goes alone.
+///
+/// Vector's `vector` source refuses a request that decodes past 100 MiB, and a
+/// batch it refuses would be retried until its hold ran out, on every resend.
+/// The intake listener bounds one record at 16 MiB, so a request this size
+/// stays under that cap at several times its payload once encoded.
+pub const VECTOR_PUSH_BYTES: usize = 16 * 1024 * 1024;
 
 /// What the service runtime lends the bridge.
 #[derive(Clone, Default)]
 pub struct BridgeRuntime {
     /// The runtime's worker pool, reused rather than building a second one.
     pub pool: Option<Arc<AdaptiveWorkerPool>>,
-    /// Pressure both listeners shed pushes on while it holds intake.
+    /// Pressure the intake listener sheds pushes on while it holds intake.
     pub pressure: Option<Arc<UnifiedPressure>>,
+    /// The guard both listeners lease held bytes on, which also sizes their
+    /// held-byte ceilings.
+    pub memory_guard: Option<Arc<MemoryGuard>>,
 }
 
 /// The half that carries records INTO Vector.
@@ -142,19 +177,24 @@ impl Bridge {
             let upstream = listener(
                 &GrpcConfig::server(&config.source.listen),
                 acknowledgements,
-                runtime.pressure.clone(),
+                Hold {
+                    max: INTAKE_HOLD,
+                    pressure: runtime.pressure.clone(),
+                    memory_guard: runtime.memory_guard.clone(),
+                },
                 "upstream Push listener",
             )
             .await?;
-            let to_vector =
-                VectorCompatClient::connect_lazy(&format!("http://{}", bridge.to_vector)).map_err(
-                    |e| {
-                        Error::Transport(format!(
-                            "bridge.to_vector '{}' is not a usable endpoint: {e}",
-                            bridge.to_vector
-                        ))
-                    },
-                )?;
+            let to_vector = VectorCompatClient::connect_lazy_within(
+                &format!("http://{}", bridge.to_vector),
+                SEND_TIMEOUT_MS,
+            )
+            .map_err(|e| {
+                Error::Transport(format!(
+                    "bridge.to_vector '{}' is not a usable endpoint: {e}",
+                    bridge.to_vector
+                ))
+            })?;
             info!(
                 listen = %config.source.listen,
                 to_vector = %bridge.to_vector,
@@ -172,10 +212,15 @@ impl Bridge {
         let outbound = if config.sink.transport.is_direct() {
             // Vector's sink is a Vector-protocol client, so this end must accept
             // that protocol as well as the native one.
+            // No pressure here: this leg drains what the intake holds.
             let from_vector = listener(
                 &GrpcConfig::server(&bridge.from_vector).with_vector_compat(),
                 acknowledgements,
-                runtime.pressure.clone(),
+                Hold {
+                    max: RETURN_HOLD,
+                    pressure: None,
+                    memory_guard: runtime.memory_guard.clone(),
+                },
                 "bridge.from_vector listener",
             )
             .await?;
@@ -223,35 +268,65 @@ impl Bridge {
     /// Each leg stops taking pushes once its token is cancelled and drains what
     /// it already holds. The outbound token is separate so the leg Vector's
     /// sink flushes into can stay up until Vector has exited.
+    ///
+    /// A leg whose pipeline fails cancels `failed` at once, so the service can
+    /// stop Vector while the other leg drains.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first leg's failure, once both legs have stopped.
     pub async fn run(
         self,
         inbound_shutdown: CancellationToken,
         outbound_shutdown: CancellationToken,
-    ) {
+        failed: CancellationToken,
+    ) -> Result<()> {
         let Self {
             inbound,
             outbound,
             engine,
         } = self;
         let engine = &engine;
+        let failed = &failed;
 
         let inbound = async {
-            if let Some(half) = inbound
-                && let Err(e) = run_inbound(engine, &half, inbound_shutdown).await
-            {
-                error!(error = %e, "bridge inbound stopped");
+            match inbound {
+                Some(half) => leg_ended(
+                    "inbound",
+                    run_inbound(engine, &half, inbound_shutdown).await,
+                    failed,
+                ),
+                None => Ok(()),
             }
         };
         let outbound = async {
-            if let Some(half) = outbound
-                && let Err(e) = run_outbound(engine, &half, outbound_shutdown).await
-            {
-                error!(error = %e, "bridge outbound stopped");
+            match outbound {
+                Some(half) => leg_ended(
+                    "outbound",
+                    run_outbound(engine, &half, outbound_shutdown).await,
+                    failed,
+                ),
+                None => Ok(()),
             }
         };
-        tokio::join!(inbound, outbound);
+        let (inbound, outbound) = tokio::join!(inbound, outbound);
         debug!("direct-transport bridge stopped");
+        inbound.and(outbound)
     }
+}
+
+/// A leg's end: a failure also cancels `failed`, so the service stops rather
+/// than run on with a listener nothing reads.
+fn leg_ended(
+    leg: &'static str,
+    ended: std::result::Result<(), EngineError>,
+    failed: &CancellationToken,
+) -> Result<()> {
+    ended.map_err(|e| {
+        error!(leg, error = %e, "bridge leg stopped -- stopping the service");
+        failed.cancel();
+        Error::Transport(format!("bridge {leg} leg stopped: {e}"))
+    })
 }
 
 /// The client for the next stage's Push listener.
@@ -261,22 +336,34 @@ fn downstream_config(endpoint: &str) -> GrpcConfig {
     config
 }
 
+/// How a listener holds the pushes it takes.
+struct Hold {
+    /// The longest a push is held.
+    max: Duration,
+    /// Pressure the listener sheds pushes on, for the intake only.
+    pressure: Option<Arc<UnifiedPressure>>,
+    /// The guard held bytes are leased on.
+    memory_guard: Option<Arc<MemoryGuard>>,
+}
+
 /// Bind a receive server built armed, so no push is answered before the
 /// pipeline releases its records.
 async fn listener(
     config: &GrpcConfig,
     acknowledgements: AcknowledgementsConfig,
-    pressure: Option<Arc<UnifiedPressure>>,
+    hold: Hold,
     what: &str,
 ) -> Result<GrpcTransport> {
-    let builder = GrpcTransport::builder(config)
+    let mut builder = GrpcTransport::builder(config)
         .acknowledgements(acknowledgements)
         .armed(true)
-        .max_hold(MAX_HOLD);
-    let builder = match pressure {
-        Some(pressure) => builder.pressure(pressure),
-        None => builder,
-    };
+        .max_hold(hold.max);
+    if let Some(pressure) = hold.pressure {
+        builder = builder.pressure(pressure);
+    }
+    if let Some(guard) = hold.memory_guard {
+        builder = builder.memory_guard(guard);
+    }
     let listen = config.listen.clone().unwrap_or_default();
     builder
         .start()
@@ -303,21 +390,47 @@ async fn run_inbound(
         // its sink has delivered.
         .sink_confirms(SinkConfirmation::Remote)
         .run(Ok, |batch: &WorkBatch<GrpcToken>| {
+            let sizes: Vec<usize> = batch.records.iter().map(|r| r.payload.len()).collect();
             let events: Vec<serde_json::Value> =
                 batch.records.iter().map(|r| as_event(&r.payload)).collect();
             let to_vector = Arc::clone(to_vector);
             async move {
-                to_vector.send_events(&events).await.map_err(|e| {
-                    warn!(
-                        error = %e,
-                        records = events.len(),
-                        "Vector would not take the batch -- holding it and retrying"
-                    );
-                    retry_later()
-                })
+                // A refused push retries the whole batch, so a run Vector
+                // already took is sent again: duplicated, never lost.
+                for run in runs_within(&sizes, VECTOR_PUSH_BYTES) {
+                    to_vector.send_events(&events[run]).await.map_err(|e| {
+                        warn!(
+                            error = %e,
+                            records = events.len(),
+                            "Vector would not take the batch -- holding it and retrying"
+                        );
+                        retry_later()
+                    })?;
+                }
+                Ok(())
             }
         })
         .await
+}
+
+/// Consecutive runs of `sizes` whose totals stay within `budget`. A size over
+/// the budget runs alone.
+fn runs_within(sizes: &[usize], budget: usize) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = 0;
+    let mut total = 0_usize;
+    for (index, &size) in sizes.iter().enumerate() {
+        if index > start && total.saturating_add(size) > budget {
+            runs.push(start..index);
+            start = index;
+            total = 0;
+        }
+        total = total.saturating_add(size);
+    }
+    if start < sizes.len() {
+        runs.push(start..sizes.len());
+    }
+    runs
 }
 
 /// Vector's `vector` sink to the next stage's Push listener.
@@ -499,16 +612,69 @@ mod tests {
         ));
     }
 
-    /// The send to the next stage must give up while the push it carries is
-    /// still held, or a hung next stage runs the hold out on one attempt.
+    /// The deadlines nest strictly, outermost first: the intake hold, then the
+    /// return hold with room for Vector's one-second sink batching, then each
+    /// send. An inner hop that outlived the one around it would be cut off
+    /// rather than answered.
     #[test]
-    fn the_send_deadline_sits_inside_the_hold() {
-        let config = downstream_config("http://127.0.0.1:1");
-        assert_eq!(config.send_timeout_ms, SEND_TIMEOUT_MS);
+    fn the_deadlines_nest_intake_over_return_over_send() {
+        let send = Duration::from_millis(downstream_config("http://127.0.0.1:1").send_timeout_ms);
+        assert_eq!(send, Duration::from_millis(SEND_TIMEOUT_MS));
         assert!(
-            Duration::from_millis(config.send_timeout_ms) < MAX_HOLD,
-            "a {} ms send deadline outlives the {MAX_HOLD:?} hold",
-            config.send_timeout_ms
+            INTAKE_HOLD > RETURN_HOLD + Duration::from_secs(1),
+            "the {RETURN_HOLD:?} return hold leaves Vector no room inside the {INTAKE_HOLD:?} \
+             intake hold"
+        );
+        assert!(
+            RETURN_HOLD > send,
+            "a {send:?} send outlives the {RETURN_HOLD:?} return hold"
+        );
+    }
+
+    /// A PushEvents is split so none outgrows what Vector's `vector` source
+    /// decodes, and one record the intake admitted always fits on its own.
+    #[test]
+    fn no_push_to_vector_outgrows_what_its_source_decodes() {
+        // Vector's `vector` source decode cap, its global decompressed-size cap.
+        const VECTOR_DECODE_LIMIT: usize = 100 * 1024 * 1024;
+        assert!(
+            GrpcConfig::default().max_message_size <= VECTOR_PUSH_BYTES,
+            "one record the intake admits must fit a push on its own"
+        );
+        const {
+            assert!(
+                VECTOR_PUSH_BYTES * 3 < VECTOR_DECODE_LIMIT,
+                "a push at the budget must stay under Vector's cap at three times its payload"
+            );
+        }
+    }
+
+    #[test]
+    fn runs_stay_within_the_budget_and_an_oversize_record_runs_alone() {
+        assert_eq!(runs_within(&[], 10), Vec::<Range<usize>>::new());
+        assert_eq!(runs_within(&[3, 3, 3], 100), vec![0..3]);
+        assert_eq!(runs_within(&[5, 5, 5], 10), vec![0..2, 2..3]);
+        assert_eq!(runs_within(&[4, 20, 4], 10), vec![0..1, 1..2, 2..3]);
+        assert_eq!(runs_within(&[20], 10), vec![0..1]);
+    }
+
+    /// A leg that stops on its own takes the service down with it; one that
+    /// stops cleanly does not.
+    #[test]
+    fn a_failed_leg_signals_the_service_and_returns_its_error() {
+        let failed = CancellationToken::new();
+        assert!(leg_ended("inbound", Ok(()), &failed).is_ok());
+        assert!(!failed.is_cancelled());
+
+        let ended = leg_ended("outbound", Err(EngineError::Sink("gone".into())), &failed);
+        assert!(
+            failed.is_cancelled(),
+            "a failed leg must signal the service"
+        );
+        let message = ended.expect_err("a failed leg is an error").to_string();
+        assert!(
+            message.contains("outbound") && message.contains("gone"),
+            "{message}"
         );
     }
 }

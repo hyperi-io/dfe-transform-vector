@@ -443,6 +443,7 @@ async fn run_transform_service(
         let lent = BridgeRuntime {
             pool: runtime.worker_pool.clone(),
             pressure: runtime.governor.as_ref().map(|g| g.pressure()),
+            memory_guard: Some(Arc::clone(&runtime.memory_guard)),
         };
         let bridge = bridge::Bridge::build(&config, lent).await?;
         // Intake stops with the shutdown signal; the leg back from Vector stays
@@ -457,9 +458,20 @@ async fn run_transform_service(
             }
             stop.cancel();
         });
-        Some(tokio::spawn(
-            bridge.run(inbound_stop.clone(), outbound_stop.clone()),
-        ))
+        // A failed leg shuts the service down as SIGTERM would, so the process
+        // exits non-zero and the pod restarts.
+        let failed = CancellationToken::new();
+        let on_failure = failed.clone();
+        let shutdown_on_failure = shutdown_tx.clone();
+        tokio::spawn(async move {
+            on_failure.cancelled().await;
+            let _ = shutdown_on_failure.send(true);
+        });
+        Some(tokio::spawn(bridge.run(
+            inbound_stop.clone(),
+            outbound_stop.clone(),
+            failed,
+        )))
     } else {
         None
     };
@@ -486,22 +498,28 @@ async fn run_transform_service(
     // what they hold before the process exits.
     inbound_stop.cancel();
     outbound_stop.cancel();
-    if let Some(task) = bridge_task
-        && tokio::time::timeout(BRIDGE_DRAIN_LIMIT, task)
-            .await
-            .is_err()
-    {
-        error!(
-            limit_secs = BRIDGE_DRAIN_LIMIT.as_secs(),
-            "bridge did not finish draining; what it still holds is answered unavailable \
-             and retried by its senders"
-        );
-    }
+    let bridged = match bridge_task {
+        Some(task) => match tokio::time::timeout(BRIDGE_DRAIN_LIMIT, task).await {
+            Ok(Ok(ended)) => ended.map_err(anyhow::Error::from),
+            Ok(Err(join)) => Err(anyhow::anyhow!("bridge task ended abnormally: {join}")),
+            Err(_) => {
+                error!(
+                    limit_secs = BRIDGE_DRAIN_LIMIT.as_secs(),
+                    "bridge did not finish draining; what it still holds is answered \
+                     unavailable and retried by its senders"
+                );
+                Ok(())
+            }
+        },
+        None => Ok(()),
+    };
 
     // Update final metrics
     let final_state = lifecycle.state();
     metrics.set_lifecycle_state(final_state);
 
+    result?;
+    bridged?;
     info!("shutdown complete");
     Ok(())
 }

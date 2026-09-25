@@ -114,11 +114,21 @@ transforms-only when it is not logs a successful reload for work it never did.
 
 **A push on the direct path is answered only once the next hop has it.** Both
 bridge listeners are built armed, so a push is held until the pipeline releases
-its records. A hop that refuses is retried until the hold runs out (18 s), each
-send to the next stage giving up after 15 s, and then the push is answered
-`Unavailable` and its sender retries. A record over the next stage's
-message-size ceiling is the one exception: no retry would get it through, so it
-is released dropped and counted rather than resent forever.
+its records. A hop that refuses is retried until the hold runs out, and then the
+push is answered `Unavailable` and its sender retries. The holds nest so an
+inner hop is answered while the one around it can still answer its own sender:
+18 s at the intake, 16.5 s on the leg back from Vector, and 15 s for each send
+to the next stage. A record over the next stage's message-size ceiling is the
+one exception: no retry would get it through, so it is released dropped and
+counted rather than resent forever.
+
+**Only the intake sheds under pressure.** The leg back from Vector drains
+everything the intake holds, so shedding it would stall the stage until the
+holds expired into duplicates. Both listeners lease held bytes on the runtime's
+memory guard.
+
+**A failed bridge leg stops the process.** Its senders would otherwise retry for
+ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
 ## Health and metrics invariants
 

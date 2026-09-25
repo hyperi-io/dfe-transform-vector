@@ -16,16 +16,21 @@
 //! transport is that the record makes it THROUGH Vector: the two loopback legs
 //! either speak Vector's protocol or they do not, and only Vector can say.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use dfe_transform_vector::bridge::{Bridge, BridgeRuntime, MAX_HOLD, SEND_TIMEOUT_MS};
+use dfe_transform_vector::bridge::{
+    Bridge, BridgeRuntime, INTAKE_HOLD, RETURN_HOLD, SEND_TIMEOUT_MS,
+};
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
     BridgeConfig, Config, PipelineConfig, SinkConfig, SourceConfig, TransformConfig, Transport,
     VectorConfig,
 };
 use dfe_transform_vector::vector::spawn_vector;
+use scalo::governor::{Hysteresis, MemoryPressureSource, PressureSource, UnifiedPressure};
+use scalo::memory::{MemoryGuard, MemoryGuardConfig, UsageSource};
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
 use scalo::transport::{TransportReceiver, TransportSender};
 use tempfile::TempDir;
@@ -137,7 +142,8 @@ async fn a_record_pushed_at_the_listener_comes_out_the_sink_transformed() {
         .await
         .expect("bridge");
     let stop = CancellationToken::new();
-    let bridge_task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let bridge_task =
+        tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
 
     wait_for_port(&config.bridge.to_vector).await;
     wait_for_port(&config.source.listen).await;
@@ -202,7 +208,7 @@ async fn the_bridge_binds_both_loopback_legs() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
 
     wait_for_port(&config.source.listen).await;
     wait_for_port(&config.bridge.from_vector).await;
@@ -232,7 +238,7 @@ async fn only_the_direct_end_binds_a_leg() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
 
     wait_for_port(&config.bridge.from_vector).await;
     assert!(
@@ -266,7 +272,7 @@ async fn a_push_is_not_answered_ok_before_vector_takes_it() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
     wait_for_port(&config.source.listen).await;
 
     let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
@@ -323,7 +329,7 @@ async fn shutdown_answers_a_held_push_rather_than_dropping_it() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
     wait_for_port(&config.source.listen).await;
 
     // Long enough that only the shutdown can answer it.
@@ -347,7 +353,8 @@ async fn shutdown_answers_a_held_push_rather_than_dropping_it() {
     tokio::time::timeout(Duration::from_secs(40), task)
         .await
         .expect("the bridge stops after draining")
-        .expect("bridge task");
+        .expect("bridge task")
+        .expect("a shutdown is not a leg failure");
 }
 
 /// The outbound listener is built armed too: Vector's `PushEvents` is answered
@@ -366,7 +373,7 @@ async fn vectors_push_is_not_answered_ok_before_the_next_stage_takes_it() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
     wait_for_port(&config.bridge.from_vector).await;
 
     // What Vector's `vector` sink does: PushEvents at the from_vector leg.
@@ -391,10 +398,10 @@ async fn vectors_push_is_not_answered_ok_before_the_next_stage_takes_it() {
 }
 
 /// The outbound leg keeps the stage's deadlines: Vector's push is given up at
-/// `MAX_HOLD`, and inside that hold a next stage that never answers is
-/// abandoned at `SEND_TIMEOUT_MS` and tried again. On scalo's defaults, a 25 s
-/// hold and a 30 s send, the push is held to 25 s and the next stage is tried
-/// once.
+/// `RETURN_HOLD`, inside the intake's hold, and inside that a next stage that
+/// never answers is abandoned at `SEND_TIMEOUT_MS` and tried again. On scalo's
+/// defaults, a 25 s hold and a 30 s send, the push is held to 25 s and the next
+/// stage is tried once.
 #[tokio::test]
 async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
     let work = TempDir::new().expect("work dir");
@@ -416,7 +423,7 @@ async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
         .await
         .expect("bridge binds");
     let stop = CancellationToken::new();
-    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
     wait_for_port(&config.bridge.from_vector).await;
 
     let vector_sink = scalo::transport::vector_compat::VectorCompatClient::connect_lazy(&format!(
@@ -458,17 +465,227 @@ async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
         sent.is_err(),
         "PushEvents must not be answered OK while the next stage never answers"
     );
+    // The upper bound sits below where the intake's hold would have answered.
     assert!(
-        held_for >= MAX_HOLD - Duration::from_secs(1)
-            && held_for < MAX_HOLD + Duration::from_secs(3),
-        "Vector's push must be held for the {MAX_HOLD:?} hold, not scalo's 25 s default; it was \
-         held {held_for:?}"
+        held_for >= RETURN_HOLD - Duration::from_secs(1)
+            && held_for < RETURN_HOLD + Duration::from_secs(1),
+        "Vector's push must be held for the {RETURN_HOLD:?} return hold, not the intake's \
+         {INTAKE_HOLD:?} or scalo's 25 s default; it was held {held_for:?}"
     );
     assert!(
         attempts >= 2,
         "a next stage that never answers must be given up after {SEND_TIMEOUT_MS} ms and tried \
          again inside the hold; it saw {attempts} attempt(s)"
     );
+}
+
+/// The intake holds a push for the outer hold, longer than the leg back from
+/// Vector holds its own, so on direct to direct the inner answer lands first.
+#[tokio::test]
+async fn the_intake_holds_a_push_for_the_outer_hold() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    // Inbound only, towards a Vector that is not running.
+    config.sink.transport = Transport::Bus;
+    config.sink.topic = "orders_load".into();
+
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
+    wait_for_port(&config.source.listen).await;
+
+    // No deadline of its own, so the listener's hold is the whole budget.
+    let pusher = pusher_with_timeout(&config.source.listen, 0).await;
+    let started = tokio::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        pusher.send("orders_land", Bytes::from_static(br#"{"id":"outer"}"#)),
+    )
+    .await
+    .expect("the hold answers the push");
+    let held_for = started.elapsed();
+
+    stop.cancel();
+    let _ = task.await;
+    assert!(
+        !result.is_ok(),
+        "a push Vector never took must not be acknowledged: {result:?}"
+    );
+    assert!(
+        held_for >= INTAKE_HOLD - Duration::from_secs(1)
+            && held_for < INTAKE_HOLD + Duration::from_secs(1),
+        "the intake must hold a push for its {INTAKE_HOLD:?} hold; it was held {held_for:?}"
+    );
+}
+
+/// A memory guard whose pressure the governor reads, pinned over its hold
+/// threshold, and the pressure latch built on it.
+fn pinned_pressure() -> Arc<UnifiedPressure> {
+    let guard = Arc::new(MemoryGuard::with_usage_source(
+        MemoryGuardConfig {
+            limit_bytes: 1000,
+            pressure_threshold: 0.80,
+            ..Default::default()
+        },
+        UsageSource::Reservations,
+    ));
+    guard.add_bytes(950);
+    let pressure = Arc::new(UnifiedPressure::new(
+        vec![Arc::new(MemoryPressureSource::new(guard)) as Arc<dyn PressureSource>],
+        Hysteresis::new(0.80, 0.65).expect("valid band"),
+    ));
+    assert!(pressure.should_hold(), "pinned-high pressure must hold");
+    pressure
+}
+
+/// Under pressure the intake sheds new pushes, but the leg back from Vector
+/// keeps draining: it is the only way out for everything the intake holds.
+#[tokio::test]
+async fn pressure_sheds_the_intake_but_never_the_return_leg() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    let loader_port = free_port();
+    let loader = GrpcTransport::new(&GrpcConfig::server(&format!("127.0.0.1:{loader_port}")))
+        .await
+        .expect("stand-in loader listener");
+    config.sink.endpoint = format!("http://127.0.0.1:{loader_port}");
+
+    let runtime = BridgeRuntime {
+        pressure: Some(pinned_pressure()),
+        ..BridgeRuntime::default()
+    };
+    let bridge = Bridge::build(&config, runtime).await.expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
+    wait_for_port(&config.source.listen).await;
+    wait_for_port(&config.bridge.from_vector).await;
+
+    // A held push would be answered at its 2 s budget; a shed one at once.
+    let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
+    let started = tokio::time::Instant::now();
+    let shed = pusher
+        .send("orders_land", Bytes::from_static(br#"{"id":"shed"}"#))
+        .await;
+    let shed_after = started.elapsed();
+
+    let vector_sink = scalo::transport::vector_compat::VectorCompatClient::connect_lazy(&format!(
+        "http://{}",
+        config.bridge.from_vector
+    ))
+    .expect("vector-protocol client");
+    let drained = tokio::time::timeout(
+        Duration::from_secs(30),
+        vector_sink.send_events(&[serde_json::json!({"id": "drained"})]),
+    )
+    .await
+    .expect("the return leg answers");
+    let mut received = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while received.is_empty() && tokio::time::Instant::now() < deadline {
+        if let Ok(batch) = loader.recv(10).await {
+            received.extend(batch.records);
+        }
+    }
+
+    stop.cancel();
+    let _ = task.await;
+    assert!(
+        !shed.is_ok() && shed_after < Duration::from_secs(1),
+        "the intake must shed a push under pressure at once; got {shed:?} after {shed_after:?}"
+    );
+    assert!(
+        drained.is_ok(),
+        "the return leg must keep draining under pressure: {drained:?}"
+    );
+    assert_eq!(
+        received.len(),
+        1,
+        "the drained record reached the next stage"
+    );
+}
+
+/// Both listeners lease what they hold on the runtime's memory guard, and hand
+/// it back once the push is answered.
+#[tokio::test]
+async fn both_listeners_lease_what_they_hold_on_the_memory_guard() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    // Nothing downstream and no Vector, so both legs hold what they take.
+    config.sink.endpoint = format!("http://127.0.0.1:{}", free_port());
+
+    let guard = Arc::new(MemoryGuard::with_usage_source(
+        MemoryGuardConfig {
+            limit_bytes: 1 << 30,
+            ..Default::default()
+        },
+        UsageSource::Reservations,
+    ));
+    let runtime = BridgeRuntime {
+        memory_guard: Some(Arc::clone(&guard)),
+        ..BridgeRuntime::default()
+    };
+    let bridge = Bridge::build(&config, runtime).await.expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
+    wait_for_port(&config.source.listen).await;
+    wait_for_port(&config.bridge.from_vector).await;
+
+    let pusher = pusher_with_timeout(&config.source.listen, 60_000).await;
+    let intake_push = tokio::spawn(async move {
+        pusher
+            .send("orders_land", Bytes::from_static(br#"{"id":"intake"}"#))
+            .await
+    });
+    let after_intake = leased_above(&guard, 0).await;
+
+    let vector_sink = scalo::transport::vector_compat::VectorCompatClient::connect_lazy(&format!(
+        "http://{}",
+        config.bridge.from_vector
+    ))
+    .expect("vector-protocol client");
+    let return_push = tokio::spawn(async move {
+        vector_sink
+            .send_events(&[serde_json::json!({"id": "return"})])
+            .await
+    });
+    let after_return = leased_above(&guard, after_intake).await;
+
+    stop.cancel();
+    for push in [
+        tokio::time::timeout(Duration::from_secs(40), intake_push)
+            .await
+            .map(|r| r.map(|_| ())),
+        tokio::time::timeout(Duration::from_secs(40), return_push)
+            .await
+            .map(|r| r.map(|_| ())),
+    ] {
+        push.expect("a held push is answered at shutdown")
+            .expect("push task");
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(40), task).await;
+
+    assert!(after_intake > 0, "the intake leased nothing");
+    assert!(after_return > after_intake, "the return leg leased nothing");
+    assert_eq!(
+        guard.reserved_bytes(),
+        0,
+        "every lease is handed back once its push is answered"
+    );
+}
+
+/// Wait up to 10 s for the guard's leases to rise above `floor`, and return
+/// them.
+async fn leased_above(guard: &MemoryGuard, floor: u64) -> u64 {
+    for _ in 0..200 {
+        let leased = guard.reserved_bytes();
+        if leased > floor {
+            return leased;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    guard.reserved_bytes()
 }
 
 /// One address cannot be both ends of the loop through Vector.
