@@ -80,11 +80,12 @@ use std::time::Duration;
 use bytes::Bytes;
 use scalo::governor::UnifiedPressure;
 use scalo::memory::MemoryGuard;
+use scalo::transport::ack::EffectiveGuarantee;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
     AcknowledgementsConfig, DeliveryStatus, Record, SendResult, SinkConfirmation, TransportError,
-    TransportSender, WorkBatch,
+    TransportReceiver, TransportSender, WorkBatch,
 };
 use scalo::worker::engine::{BatchProcessingConfig, BlockPieces};
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
@@ -281,6 +282,7 @@ impl Bridge {
         outbound_shutdown: CancellationToken,
         failed: CancellationToken,
     ) -> Result<()> {
+        self.publish_guarantees();
         let Self {
             inbound,
             outbound,
@@ -313,7 +315,27 @@ impl Bridge {
         debug!("direct-transport bridge stopped");
         inbound.and(outbound)
     }
+
+    /// Publish each leg's delivery guarantee as its own
+    /// `pipeline_delivery_guarantee` series, labelled by leg.
+    fn publish_guarantees(&self) {
+        if let Some(half) = &self.inbound {
+            EffectiveGuarantee::of(half.upstream.ack_control(), VECTOR_CONFIRMS)
+                .publish_for("inbound");
+        }
+        if let Some(half) = &self.outbound {
+            EffectiveGuarantee::of(
+                half.from_vector.ack_control(),
+                half.downstream.confirms_delivery(),
+            )
+            .publish_for("outbound");
+        }
+    }
 }
+
+/// What Vector's `vector` source answering proves: with acknowledgements on it
+/// returns only once its sink has delivered.
+const VECTOR_CONFIRMS: SinkConfirmation = SinkConfirmation::Remote;
 
 /// A leg's end: a failure also cancels `failed`, so the service stops rather
 /// than run on with a listener nothing reads.
@@ -386,9 +408,7 @@ async fn run_inbound(
     engine
         .pipeline(&half.upstream)
         .shutdown(shutdown)
-        // Vector's `vector` source with acknowledgements on answers only once
-        // its sink has delivered.
-        .sink_confirms(SinkConfirmation::Remote)
+        .sink_confirms(VECTOR_CONFIRMS)
         .run(Ok, |batch: &WorkBatch<GrpcToken>| {
             let sizes: Vec<usize> = batch.records.iter().map(|r| r.payload.len()).collect();
             let events: Vec<serde_json::Value> =
@@ -656,6 +676,97 @@ mod tests {
         assert_eq!(runs_within(&[5, 5, 5], 10), vec![0..2, 2..3]);
         assert_eq!(runs_within(&[4, 20, 4], 10), vec![0..1, 1..2, 2..3]);
         assert_eq!(runs_within(&[20], 10), vec![0..1]);
+    }
+
+    /// Records the gauges registered through it, and nothing else.
+    #[derive(Default)]
+    struct GaugeKeys(std::sync::Mutex<Vec<metrics::Key>>);
+
+    impl metrics::Recorder for GaugeKeys {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn register_counter(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            metrics::Counter::noop()
+        }
+        fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(key.clone());
+            metrics::Gauge::noop()
+        }
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// Each leg publishes its own guarantee series, told apart by `listener`,
+    /// rather than both writing the one unlabelled series.
+    #[tokio::test]
+    async fn each_leg_publishes_its_own_guarantee() {
+        let mut config = Config::default();
+        config.source.transport = crate::config::Transport::Direct;
+        config.source.listen = "127.0.0.1:0".into();
+        config.sink.transport = crate::config::Transport::Direct;
+        config.sink.endpoint = "http://127.0.0.1:1".into();
+        config.bridge.from_vector = "127.0.0.1:0".into();
+        let bridge = Bridge::build(&config, BridgeRuntime::default())
+            .await
+            .expect("bridge binds");
+
+        let keys = GaugeKeys::default();
+        metrics::with_local_recorder(&keys, || bridge.publish_guarantees());
+
+        let published: Vec<(String, String)> = keys
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|key| key.name() == "pipeline_delivery_guarantee")
+            .map(|key| {
+                let label = |name: &str| {
+                    key.labels()
+                        .find(|l| l.key() == name)
+                        .map(|l| l.value().to_owned())
+                        .unwrap_or_default()
+                };
+                (label("listener"), label("guarantee"))
+            })
+            .collect();
+        assert_eq!(
+            published,
+            vec![
+                ("inbound".to_owned(), "at_least_once".to_owned()),
+                ("outbound".to_owned(), "at_least_once".to_owned()),
+            ]
+        );
     }
 
     /// A leg that stops on its own takes the service down with it; one that

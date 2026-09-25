@@ -99,7 +99,7 @@ pub fn generate_global_yaml(vector: &VectorConfig, secrets: &[SecretBackend]) ->
 #[must_use]
 pub fn generate_source_yaml(source: &SourceConfig, bridge: &BridgeConfig) -> Value {
     let component = if source.transport.is_direct() {
-        direct_source_component(bridge, source.acknowledgements.enabled)
+        direct_source_component(bridge)
     } else {
         kafka_source_component(source)
     };
@@ -108,14 +108,14 @@ pub fn generate_source_yaml(source: &SourceConfig, bridge: &BridgeConfig) -> Val
 
 /// The `vector` source the supervisor's bridge delivers into.
 ///
-/// `acknowledgements` is what makes the whole path hold rather than drop: the
-/// RPC does not return until the record has reached the sink, so the bridge
-/// answers its own sender only once Vector has delivered.
-fn direct_source_component(bridge: &BridgeConfig, acknowledged: bool) -> serde_yaml_ng::Mapping {
+/// It carries no `acknowledgements` of its own: Vector turns them on for a
+/// source whose sink has them, and deprecates setting them on the source. With
+/// them on, the RPC does not return until the record has reached the sink, so
+/// the bridge answers its own sender only once Vector has delivered.
+fn direct_source_component(bridge: &BridgeConfig) -> serde_yaml_ng::Mapping {
     let mut component = serde_yaml_ng::Mapping::new();
     component.insert(val("type"), val("vector"));
     component.insert(val("address"), val(&bridge.to_vector));
-    component.insert(val("acknowledgements"), enabled_block(acknowledged));
     component
 }
 
@@ -288,7 +288,9 @@ fn direct_sink_component(
         val(&format!("http://{}", bridge.from_vector)),
     );
     component.insert(val("acknowledgements"), enabled_block(acknowledged));
-    component.insert(val("healthcheck"), enabled_block(true));
+    // The bridge is this process's own listener, bound only after `vector
+    // validate` runs, and its health is the supervisor's readiness.
+    component.insert(val("healthcheck"), enabled_block(false));
     component.insert(val("buffer"), build_buffer_block(&sink.buffer));
 
     component
@@ -934,6 +936,43 @@ mod tests {
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
         assert!(yaml.get("transforms").is_none());
+    }
+
+    /// The direct sink dials the supervisor's own bridge, which is bound only
+    /// after `vector validate` runs, so its health check would fail startup.
+    /// The Kafka sink's check stays: the broker is someone else's.
+    #[test]
+    fn only_the_direct_sink_skips_its_health_check() {
+        let healthcheck = |transport| {
+            let sink = SinkConfig {
+                transport,
+                ..Default::default()
+            };
+            generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true)
+                .get("sinks")
+                .and_then(|s| s.get(SINK_LABEL))
+                .and_then(|s| s.get("healthcheck"))
+                .and_then(|h| h.get("enabled"))
+                .and_then(Value::as_bool)
+        };
+        assert_eq!(healthcheck(crate::config::Transport::Direct), Some(false));
+        assert_eq!(healthcheck(crate::config::Transport::Bus), Some(true));
+    }
+
+    /// Vector deprecates acknowledgements set on a source; the direct source
+    /// takes them from its sink.
+    #[test]
+    fn the_direct_source_takes_acknowledgements_from_its_sink() {
+        let source = SourceConfig {
+            transport: crate::config::Transport::Direct,
+            ..Default::default()
+        };
+        let yaml = generate_source_yaml(&source, &BridgeConfig::default());
+        let component = yaml
+            .get("sources")
+            .and_then(|s| s.get(SOURCE_LABEL))
+            .expect("the direct source");
+        assert!(component.get("acknowledgements").is_none(), "{component:?}");
     }
 
     #[test]

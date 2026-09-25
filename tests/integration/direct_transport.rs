@@ -25,9 +25,10 @@ use dfe_transform_vector::bridge::{
 };
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
-    BridgeConfig, Config, PipelineConfig, SinkConfig, SourceConfig, TransformConfig, Transport,
-    VectorConfig,
+    BridgeConfig, Config, MetricsConfig, PipelineConfig, SinkConfig, SourceConfig, TransformConfig,
+    Transport, VectorConfig,
 };
+use dfe_transform_vector::config::validate::vector_validate;
 use dfe_transform_vector::vector::spawn_vector;
 use scalo::governor::{Hysteresis, MemoryPressureSource, PressureSource, UnifiedPressure};
 use scalo::memory::{MemoryGuard, MemoryGuardConfig, UsageSource};
@@ -105,6 +106,12 @@ fn direct_config(work: &TempDir, vector_binary: &str) -> Config {
             api_address: String::new(),
             version: String::new(),
             version_check: "disabled".into(),
+            ..Default::default()
+        },
+        // Vector's exporter would otherwise claim the fixed 9598 in every test
+        // that runs Vector, and all but one of them would fail to start.
+        metrics: MetricsConfig {
+            vector_metrics_address: format!("127.0.0.1:{}", free_port()),
             ..Default::default()
         },
         ..Default::default()
@@ -848,6 +855,40 @@ async fn the_assembled_direct_config_passes_vector_validate() {
         "vector validate rejected the direct config:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Startup runs the full `vector validate`, health checks included, before the
+/// bridge binds. A direct config must pass it, and Vector must start, with
+/// nothing listening where its sink dials back.
+#[tokio::test]
+async fn a_direct_config_validates_and_starts_with_nothing_on_the_bridge() {
+    let Some(vector_binary) = common::vector_binary_path() else {
+        common::require_service_in_ci("Vector binary", "scripts/fetch-vector.sh found nothing");
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+
+    let work = TempDir::new().expect("work dir");
+    std::fs::create_dir_all(work.path().join("data")).expect("data dir");
+    let mut config = direct_config(&work, &vector_binary.to_string_lossy());
+    config.sink.endpoint = format!("http://127.0.0.1:{}", free_port());
+    let config_dir = std::path::PathBuf::from(&config.vector.config_dir);
+    assembler::assemble(&config, &config_dir).expect("assemble");
+
+    vector_validate(&config.vector, &config_dir)
+        .await
+        .expect("the startup vector validate must pass before the bridge is bound");
+
+    let mut vector = spawn_vector(&config.vector, &config_dir).expect("spawn Vector");
+    wait_for_port(&config.bridge.to_vector).await;
+    // Vector runs its sinks' health checks as it starts.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let running = vector.try_wait().expect("child status").is_none();
+    let _ = vector.kill().await;
+    assert!(
+        running,
+        "Vector must keep running with nothing on the bridge yet"
     );
 }
 
