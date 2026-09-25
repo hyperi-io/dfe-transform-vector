@@ -85,8 +85,8 @@ use scalo::memory::MemoryGuard;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
-    AcknowledgementsConfig, DeliveryStatus, Record, SendResult, SinkConfirmation, TransportError,
-    TransportSender, WorkBatch,
+    AcknowledgementsConfig, DEAD_LETTER_REJECTED, DeliveryStatus, Record, SendResult,
+    SinkConfirmation, TransportError, TransportSender, WorkBatch,
 };
 use scalo::worker::engine::{BatchProcessingConfig, BlockPieces};
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
@@ -94,6 +94,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::metrics::count_dropped_dead_letters;
 use crate::{Error, Result};
 
 /// The longest the intake listener holds a push: under the upstream stage's
@@ -321,10 +322,6 @@ impl Bridge {
 /// returns only once its sink has delivered.
 const VECTOR_CONFIRMS: SinkConfirmation = SinkConfirmation::Remote;
 
-/// The `reason` records Vector's sink rejected for good are counted under in
-/// `pipeline_dead_letters_dropped_total`.
-pub const REJECTED_REASON: &str = "rejected";
-
 /// A leg's end: a failure also cancels `failed`, so the service stops rather
 /// than run on with a listener nothing reads.
 fn leg_ended(
@@ -453,8 +450,7 @@ fn dropped_if_rejected(rejected: usize) -> DeliveryStatus {
     if rejected == 0 {
         return DeliveryStatus::Delivered;
     }
-    metrics::counter!("pipeline_dead_letters_dropped_total", "reason" => REJECTED_REASON)
-        .increment(rejected as u64);
+    count_dropped_dead_letters(DEAD_LETTER_REJECTED, rejected as u64);
     DeliveryStatus::Dropped
 }
 
@@ -704,113 +700,26 @@ mod tests {
         assert_eq!(runs_within(&[20], 10), vec![0..1]);
     }
 
-    /// A counter that adds up what it is incremented by.
-    #[derive(Default)]
-    struct Tally(std::sync::atomic::AtomicU64);
-
-    impl metrics::CounterFn for Tally {
-        fn increment(&self, value: u64) {
-            self.0
-                .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
-        }
-        fn absolute(&self, value: u64) {
-            self.0
-                .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    /// Records the gauges registered through it and what its counters count.
-    #[derive(Default)]
-    struct Captured {
-        gauges: std::sync::Mutex<Vec<metrics::Key>>,
-        counters: std::sync::Mutex<Vec<(metrics::Key, Arc<Tally>)>>,
-    }
-
-    impl Captured {
-        /// The `listener` and `guarantee` of every `pipeline_delivery_guarantee`
-        /// series published through it.
-        fn guarantees(&self) -> Vec<(String, String)> {
-            self.gauges
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .iter()
-                .filter(|key| key.name() == "pipeline_delivery_guarantee")
-                .map(|key| {
-                    let label = |name: &str| {
-                        key.labels()
-                            .find(|l| l.key() == name)
-                            .map_or_else(|| "(none)".to_owned(), |l| l.value().to_owned())
-                    };
-                    (label("listener"), label("guarantee"))
-                })
-                .collect()
-        }
-
-        /// The total counted under `name` with `reason`.
-        fn counted(&self, name: &str, reason: &str) -> u64 {
-            self.counters
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .iter()
-                .filter(|(key, _)| {
-                    key.name() == name
-                        && key
-                            .labels()
-                            .any(|l| l.key() == "reason" && l.value() == reason)
-                })
-                .map(|(_, tally)| tally.0.load(std::sync::atomic::Ordering::Relaxed))
-                .sum()
-        }
-    }
-
-    impl metrics::Recorder for Captured {
-        fn describe_counter(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-        fn describe_gauge(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-        fn describe_histogram(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-        fn register_counter(
-            &self,
-            key: &metrics::Key,
-            _: &metrics::Metadata<'_>,
-        ) -> metrics::Counter {
-            let tally = Arc::new(Tally::default());
-            self.counters
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((key.clone(), Arc::clone(&tally)));
-            metrics::Counter::from_arc(tally)
-        }
-        fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
-            self.gauges
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(key.clone());
-            metrics::Gauge::noop()
-        }
-        fn register_histogram(
-            &self,
-            _: &metrics::Key,
-            _: &metrics::Metadata<'_>,
-        ) -> metrics::Histogram {
-            metrics::Histogram::noop()
-        }
+    /// The `listener` and `guarantee` of every `pipeline_delivery_guarantee`
+    /// series `snapshotter` saw, `(none)` for a series with no listener.
+    fn guarantees(snapshotter: &metrics_util::debugging::Snapshotter) -> Vec<(String, String)> {
+        let mut published: Vec<(String, String)> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, ..)| key.key().name() == "pipeline_delivery_guarantee")
+            .map(|(key, ..)| {
+                let label = |name: &str| {
+                    key.key()
+                        .labels()
+                        .find(|l| l.key() == name)
+                        .map_or_else(|| "(none)".to_owned(), |l| l.value().to_owned())
+                };
+                (label("listener"), label("guarantee"))
+            })
+            .collect();
+        published.sort();
+        published
     }
 
     /// Each leg's pipeline publishes its own guarantee series, told apart by
@@ -828,8 +737,9 @@ mod tests {
             .expect("bridge binds");
 
         // One thread, so every task the bridge spawns records here.
-        let captured = Captured::default();
-        let _recording = metrics::set_default_local_recorder(&captured);
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let stop = CancellationToken::new();
         let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -838,10 +748,8 @@ mod tests {
             .expect("bridge task")
             .expect("a shutdown is not a leg failure");
 
-        let mut published = captured.guarantees();
-        published.sort();
         assert_eq!(
-            published,
+            guarantees(&snapshotter),
             vec![
                 ("inbound".to_owned(), "at_least_once".to_owned()),
                 ("outbound".to_owned(), "at_least_once".to_owned()),
@@ -853,14 +761,15 @@ mod tests {
     /// counted; an attempt with none adds nothing.
     #[test]
     fn records_vector_rejected_are_dropped_and_counted() {
-        let captured = Captured::default();
-        let (none, some) = metrics::with_local_recorder(&captured, || {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let (none, some) = metrics::with_local_recorder(&recorder, || {
             (dropped_if_rejected(0), dropped_if_rejected(3))
         });
         assert_eq!(none, DeliveryStatus::Delivered);
         assert_eq!(some, DeliveryStatus::Dropped);
         assert_eq!(
-            captured.counted("pipeline_dead_letters_dropped_total", REJECTED_REASON),
+            crate::metrics::dropped_since(&snapshotter, DEAD_LETTER_REJECTED),
             3
         );
     }

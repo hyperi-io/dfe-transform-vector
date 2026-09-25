@@ -142,6 +142,10 @@ scalo = { version = ">=2.12.0, <3", features = [
 ] }
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.
 tonic = { version = ">=0.14.6, <0.15", features = ["gzip"] }
+# Reads back what the app counted; the Prometheus exporter already builds it.
+metrics-util = { version = ">=0.20.4, <0.21", default-features = false, features = [
+    "debugging",
+] }
 
 # Temporary: builds against the scalo branch that holds source acknowledgements
 # until delivery (scalo-rs#204), until the release carrying it is on crates.io.

@@ -31,11 +31,51 @@ use metrics::{Counter, Gauge};
 use scalo::metrics::MetricsManager;
 use scalo::metrics::groups::AppMetrics;
 use scalo::metrics::service::ServiceMetrics;
+use scalo::transport::DeadLetterReason;
 use tokio::sync::watch;
 use tracing::debug;
 
 use crate::vector::Lifecycle;
 use crate::vector::lifecycle::State;
+
+/// scalo's counter of records dropped with nowhere to go, by `reason`.
+pub const DEAD_LETTERS_DROPPED: &str = "pipeline_dead_letters_dropped_total";
+
+/// The `reason` scalo counts a record over a size ceiling under.
+pub const TOO_LARGE: &str = DeadLetterReason::TooLarge { bytes: 0, limit: 0 }.as_str();
+
+/// Count `records` dropped with nowhere to go under `reason`, in the series
+/// scalo counts its own drops in.
+pub fn count_dropped_dead_letters(reason: &'static str, records: u64) {
+    if records > 0 {
+        metrics::counter!(DEAD_LETTERS_DROPPED, "reason" => reason).increment(records);
+    }
+}
+
+/// What [`DEAD_LETTERS_DROPPED`] gained under `reason` since `snapshotter`'s
+/// last snapshot.
+#[cfg(test)]
+pub(crate) fn dropped_since(
+    snapshotter: &metrics_util::debugging::Snapshotter,
+    reason: &str,
+) -> u64 {
+    snapshotter
+        .snapshot()
+        .into_vec()
+        .into_iter()
+        .filter(|(key, ..)| {
+            key.key().name() == DEAD_LETTERS_DROPPED
+                && key
+                    .key()
+                    .labels()
+                    .any(|l| l.key() == "reason" && l.value() == reason)
+        })
+        .map(|(.., value)| match value {
+            metrics_util::debugging::DebugValue::Counter(n) => n,
+            _ => 0,
+        })
+        .sum()
+}
 
 /// Wrapper-specific metrics, registered on a shared `MetricsManager`.
 ///

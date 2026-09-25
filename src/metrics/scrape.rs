@@ -35,7 +35,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use super::WrapperMetrics;
+use super::{TOO_LARGE, WrapperMetrics, count_dropped_dead_letters};
 use crate::config::generate::{SINK_LABEL, SIZE_CAP_LABEL, SOURCE_LABEL};
 
 /// Vector's per-component counter of events read in.
@@ -428,6 +428,34 @@ pub fn apply_derived(metrics: &WrapperMetrics, derived: &Derived) {
         .absolute(to_u64(derived.sink_errors));
 }
 
+/// Counts the size cap's drops in scalo's dead-letter drop counter, each once.
+///
+/// Vector's discard counter is a running total, so each exposition adds only
+/// what grew since the last one. A total below the last is a restarted Vector
+/// counting from zero again, and all of it is new.
+#[derive(Debug, Default)]
+pub struct OversizeDrops {
+    /// The size cap's discard total at the last exposition.
+    seen: f64,
+}
+
+impl OversizeDrops {
+    /// Count the records the size cap dropped since the last exposition, under
+    /// `reason="too_large"`, and return how many.
+    pub fn record(&mut self, derived: &Derived) -> u64 {
+        let total = derived.oversize;
+        let fresh = if total >= self.seen {
+            total - self.seen
+        } else {
+            total
+        };
+        self.seen = total;
+        let fresh = to_u64(fresh);
+        count_dropped_dead_letters(TOO_LARGE, fresh);
+        fresh
+    }
+}
+
 /// Whether the sink is still moving the records it has taken on.
 ///
 /// Vector with an unlimited producer timeout holds a record it cannot deliver
@@ -491,6 +519,7 @@ pub fn spawn_vector_scrape_task(
         let mut last_warn: Option<Instant> = None;
         let mut merger = ExpositionMerger::new(expiry_ticks);
         let mut progress = SinkProgress::new(stall_after, Instant::now());
+        let mut oversize = OversizeDrops::default();
 
         loop {
             ticker.tick().await;
@@ -498,6 +527,7 @@ pub fn spawn_vector_scrape_task(
                 Ok(body) => {
                     let derived = merger.merge(&body);
                     apply_derived(&metrics, &derived);
+                    oversize.record(&derived);
                     let now_stalled = progress.observe(&derived, Instant::now());
                     if stalled.swap(now_stalled, Ordering::Relaxed) != now_stalled {
                         if now_stalled {
@@ -623,6 +653,31 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
             "an operator's own filter is not a loss"
         );
         assert_eq!(derived.outstanding(), 6.0);
+    }
+
+    /// The size cap's running total reaches scalo's drop counter once: each
+    /// exposition adds what grew, and a restarted Vector's fresh total counts
+    /// whole.
+    #[test]
+    fn size_cap_drops_count_once_each_across_expositions() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let mut drops = OversizeDrops::default();
+        let at = |oversize: f64| Derived {
+            oversize,
+            ..Derived::default()
+        };
+
+        for (total, fresh) in [(3.0, 3), (3.0, 0), (5.0, 2), (1.0, 1), (0.0, 0)] {
+            let recorded = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
+            assert_eq!(recorded, fresh, "at a total of {total}");
+            assert_eq!(
+                crate::metrics::dropped_since(&snapshotter, TOO_LARGE),
+                fresh,
+                "at a total of {total}"
+            );
+        }
+        assert_eq!(TOO_LARGE, "too_large", "scalo's own label for the reason");
     }
 
     fn holding(sink_received: f64, sent: f64) -> Derived {

@@ -176,6 +176,7 @@ because Vector, not the wrapper, owns the Kafka client:
 | `records_processed_total`, `records_delivered_total` | `vector_component_sent_events_total{component_id="dfe_sink"}` |
 | `records_error_total` | `vector_component_discarded_events_total` on `dfe_sink` (records it rejected) and on `dfe_size_cap` (records over the producer's `message.max.bytes`) |
 | `transform_vector_sink_errors_total` | `vector_component_errors_total{component_id="dfe_sink"}` |
+| `pipeline_dead_letters_dropped_total{reason="too_large"}` | what `vector_component_discarded_events_total{component_id="dfe_size_cap"}` grew by since the last scrape, so each drop counts once, as every other app counts a record over its ceiling |
 
 An unreachable exporter is not fatal: the scrape warns at most once every five
 minutes, counts `transform_vector_scrape_failures_total`, and leaves readiness
