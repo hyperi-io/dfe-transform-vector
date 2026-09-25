@@ -118,9 +118,9 @@ its records. A hop that refuses is retried until the hold runs out, and then the
 push is answered `Unavailable` and its sender retries. The holds nest so an
 inner hop is answered while the one around it can still answer its own sender:
 18 s at the intake, 16.5 s on the leg back from Vector, and 15 s for each send
-to the next stage. A record over the next stage's message-size ceiling is the
-one exception: no retry would get it through, so it is released dropped and
-counted rather than resent forever.
+to the next stage. A record no retry would get through is released dropped and
+counted rather than resent forever: one over the next stage's message-size
+ceiling, or one Vector refused for good because a sink it feeds rejected it.
 
 **Only the intake sheds under pressure.** The leg back from Vector drains
 everything the intake holds, so shedding it would stall the stage until the

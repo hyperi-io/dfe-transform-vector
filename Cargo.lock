@@ -713,6 +713,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
+ "tonic",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3096,7 +3097,7 @@ dependencies = [
 [[package]]
 name = "scalo"
 version = "2.12.0"
-source = "git+https://github.com/hyperi-io/scalo-rs?branch=fix%2Fat-least-once#8ce8e1bc68962cb39e262dff8993b9a7d0887d3f"
+source = "git+https://github.com/hyperi-io/scalo-rs?branch=fix%2Fat-least-once#7497494d0f5dafa9d9bbf2220bde882fd5b8292a"
 dependencies = [
  "backon",
  "bytes",

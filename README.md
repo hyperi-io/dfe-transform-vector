@@ -59,9 +59,11 @@ translates. It accepts records on `source.listen`, hands them to Vector over
 A push is answered only once the next hop has its records. A hop that cannot
 move on is retried until the push's hold runs out, 18 s at `source.listen` and
 16.5 s at `bridge.from_vector`, each send to the next stage giving up after
-15 s, and then the push is answered `Unavailable` so its sender retries. The one
-record that is dropped, and counted, is one over the next stage's message-size
-ceiling, which no retry would get through. Under memory pressure only
+15 s, and then the push is answered `Unavailable` so its sender retries. A record
+no retry would get through is dropped and counted in
+`pipeline_dead_letters_dropped_total`: one over the next stage's message-size
+ceiling, or one Vector refused for good because a sink it feeds rejected it
+(`reason="rejected"`). Under memory pressure only
 `source.listen` sheds pushes; the leg back from Vector keeps draining.
 
 ## Features

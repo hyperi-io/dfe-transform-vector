@@ -17,6 +17,7 @@
 //! either speak Vector's protocol or they do not, and only Vector can say.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -33,6 +34,12 @@ use dfe_transform_vector::vector::spawn_vector;
 use scalo::governor::{Hysteresis, MemoryPressureSource, PressureSource, UnifiedPressure};
 use scalo::memory::{MemoryGuard, MemoryGuardConfig, UsageSource};
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
+use scalo::transport::vector_compat::proto::vector::vector_server::{
+    Vector as VectorService, VectorServer,
+};
+use scalo::transport::vector_compat::proto::vector::{
+    HealthCheckRequest, HealthCheckResponse, PushEventsRequest, PushEventsResponse, ServingStatus,
+};
 use scalo::transport::{TransportReceiver, TransportSender};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -262,6 +269,112 @@ async fn pusher_with_timeout(listen: &str, timeout_ms: u64) -> GrpcTransport {
     let mut config = GrpcConfig::client(&format!("http://{listen}"));
     config.send_timeout_ms = timeout_ms;
     GrpcTransport::new(&config).await.expect("push client")
+}
+
+/// A Vector `vector` source that answers every push with one status code, and
+/// counts the pushes it was sent.
+struct StandInVector {
+    code: tonic::Code,
+    pushes: Arc<AtomicUsize>,
+}
+
+#[tonic::async_trait]
+impl VectorService for StandInVector {
+    async fn push_events(
+        &self,
+        _request: tonic::Request<PushEventsRequest>,
+    ) -> Result<tonic::Response<PushEventsResponse>, tonic::Status> {
+        self.pushes.fetch_add(1, Ordering::SeqCst);
+        Err(tonic::Status::new(self.code, "stand-in"))
+    }
+
+    async fn health_check(
+        &self,
+        _request: tonic::Request<HealthCheckRequest>,
+    ) -> Result<tonic::Response<HealthCheckResponse>, tonic::Status> {
+        Ok(tonic::Response::new(HealthCheckResponse {
+            status: ServingStatus::Serving.into(),
+        }))
+    }
+}
+
+/// Serve a [`StandInVector`] answering `code` on `addr`, and return its push
+/// count.
+async fn stand_in_vector(addr: &str, code: tonic::Code) -> Arc<AtomicUsize> {
+    let pushes = Arc::new(AtomicUsize::new(0));
+    // The bridge's client sends gzip, which Vector's source accepts.
+    let service = VectorServer::new(StandInVector {
+        code,
+        pushes: Arc::clone(&pushes),
+    })
+    .accept_compressed(tonic::codec::CompressionEncoding::Gzip);
+    let bind: std::net::SocketAddr = addr.parse().expect("stand-in address");
+    tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(service)
+            .serve(bind),
+    );
+    wait_for_port(addr).await;
+    pushes
+}
+
+/// Vector's `vector` source answers `DataLoss` when a sink it feeds rejected the
+/// events, and `InvalidArgument` or `OutOfRange` for a request it cannot use.
+/// None clears on a resend, so the push is released dropped and answered at
+/// once. Anything else, `Internal` for a transient sink failure included, is
+/// held and sent again.
+#[tokio::test]
+async fn a_push_vector_rejects_for_good_is_dropped_and_one_that_can_clear_is_held() {
+    for (code, permanent) in [
+        (tonic::Code::DataLoss, true),
+        (tonic::Code::InvalidArgument, true),
+        (tonic::Code::OutOfRange, true),
+        (tonic::Code::Internal, false),
+        (tonic::Code::Unavailable, false),
+    ] {
+        let work = TempDir::new().expect("work dir");
+        let mut config = direct_config(&work, "/nonexistent/vector");
+        // Inbound only: the far end of the push is the stand-in.
+        config.sink.transport = Transport::Bus;
+        config.sink.topic = "orders_load".into();
+        let pushes = stand_in_vector(&config.bridge.to_vector, code).await;
+
+        let bridge = Bridge::build(&config, BridgeRuntime::default())
+            .await
+            .expect("bridge binds");
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
+        wait_for_port(&config.source.listen).await;
+
+        // A held push is answered at its 2 s budget; a dropped one at once.
+        let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
+        let started = tokio::time::Instant::now();
+        let result = pusher
+            .send("orders_land", Bytes::from_static(br#"{"id":"stand-in"}"#))
+            .await;
+        let answered_after = started.elapsed();
+        stop.cancel();
+        let _ = task.await;
+        let pushes = pushes.load(Ordering::SeqCst);
+
+        if permanent {
+            assert!(
+                result.is_ok() && answered_after < Duration::from_secs(1),
+                "{code:?} is a rejection for good: the push must be released dropped at once, \
+                 got {result:?} after {answered_after:?}"
+            );
+            assert_eq!(pushes, 1, "{code:?} must not be sent to Vector again");
+        } else {
+            assert!(
+                !result.is_ok(),
+                "{code:?} can clear: the push must be held, not acknowledged: {result:?}"
+            );
+            assert!(
+                pushes >= 2,
+                "{code:?} can clear: the batch must be sent again, it went {pushes} time(s)"
+            );
+        }
+    }
 }
 
 /// The inbound listener is built armed: a push is answered only once Vector

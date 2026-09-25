@@ -46,9 +46,11 @@
 //! loss is not. At shutdown each listener closes to new pushes and drains what
 //! it already holds.
 //!
-//! The one record that leaves without being delivered is one the next stage
-//! could never take, over its message-size ceiling. Its push is released
-//! dropped and scalo counts it, so it is not resent forever.
+//! A record leaves without being delivered only when no resend could deliver
+//! it: one over the next stage's message-size ceiling, or one Vector refused for
+//! good (a sink it feeds rejected it, or it could not use the request). Its push
+//! is released dropped and counted in `pipeline_dead_letters_dropped_total`, so
+//! it is not resent forever.
 //!
 //! A leg whose pipeline fails stops the service, so the pod restarts rather
 //! than run on with a listener nobody reads.
@@ -80,12 +82,11 @@ use std::time::Duration;
 use bytes::Bytes;
 use scalo::governor::UnifiedPressure;
 use scalo::memory::MemoryGuard;
-use scalo::transport::ack::EffectiveGuarantee;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
     AcknowledgementsConfig, DeliveryStatus, Record, SendResult, SinkConfirmation, TransportError,
-    TransportReceiver, TransportSender, WorkBatch,
+    TransportSender, WorkBatch,
 };
 use scalo::worker::engine::{BatchProcessingConfig, BlockPieces};
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
@@ -282,7 +283,6 @@ impl Bridge {
         outbound_shutdown: CancellationToken,
         failed: CancellationToken,
     ) -> Result<()> {
-        self.publish_guarantees();
         let Self {
             inbound,
             outbound,
@@ -315,27 +315,15 @@ impl Bridge {
         debug!("direct-transport bridge stopped");
         inbound.and(outbound)
     }
-
-    /// Publish each leg's delivery guarantee as its own
-    /// `pipeline_delivery_guarantee` series, labelled by leg.
-    fn publish_guarantees(&self) {
-        if let Some(half) = &self.inbound {
-            EffectiveGuarantee::of(half.upstream.ack_control(), VECTOR_CONFIRMS)
-                .publish_for("inbound");
-        }
-        if let Some(half) = &self.outbound {
-            EffectiveGuarantee::of(
-                half.from_vector.ack_control(),
-                half.downstream.confirms_delivery(),
-            )
-            .publish_for("outbound");
-        }
-    }
 }
 
 /// What Vector's `vector` source answering proves: with acknowledgements on it
 /// returns only once its sink has delivered.
 const VECTOR_CONFIRMS: SinkConfirmation = SinkConfirmation::Remote;
+
+/// The `reason` records Vector's sink rejected for good are counted under in
+/// `pipeline_dead_letters_dropped_total`.
+pub const REJECTED_REASON: &str = "rejected";
 
 /// A leg's end: a failure also cancels `failed`, so the service stops rather
 /// than run on with a listener nothing reads.
@@ -407,30 +395,67 @@ async fn run_inbound(
     let to_vector = &half.to_vector;
     engine
         .pipeline(&half.upstream)
+        .listener("inbound")
         .shutdown(shutdown)
         .sink_confirms(VECTOR_CONFIRMS)
-        .run(Ok, |batch: &WorkBatch<GrpcToken>| {
-            let sizes: Vec<usize> = batch.records.iter().map(|r| r.payload.len()).collect();
-            let events: Vec<serde_json::Value> =
-                batch.records.iter().map(|r| as_event(&r.payload)).collect();
-            let to_vector = Arc::clone(to_vector);
-            async move {
-                // A refused push retries the whole batch, so a run Vector
-                // already took is sent again: duplicated, never lost.
-                for run in runs_within(&sizes, VECTOR_PUSH_BYTES) {
-                    to_vector.send_events(&events[run]).await.map_err(|e| {
-                        warn!(
-                            error = %e,
-                            records = events.len(),
-                            "Vector would not take the batch -- holding it and retrying"
-                        );
-                        retry_later()
-                    })?;
+        .run_with_pieces(
+            Ok,
+            |batch: &WorkBatch<GrpcToken>, pieces: &BlockPieces<'_>| {
+                let sizes: Vec<usize> = batch.records.iter().map(|r| r.payload.len()).collect();
+                let events: Vec<serde_json::Value> =
+                    batch.records.iter().map(|r| as_event(&r.payload)).collect();
+                let to_vector = Arc::clone(to_vector);
+                // Carries only what Vector rejected for good; the pipeline's
+                // own piece carries whether the batch was delivered.
+                let rejected_piece = pieces.piece();
+                async move {
+                    let mut rejected = 0_usize;
+                    // A push that can clear retries the whole batch, so a run
+                    // Vector already took is sent again: duplicated, never lost.
+                    for run in runs_within(&sizes, VECTOR_PUSH_BYTES) {
+                        let run = &events[run];
+                        match to_vector.send_events_status(run).await {
+                            Ok(()) => {}
+                            Err(status) if VectorCompatClient::is_permanent_rejection(&status) => {
+                                warn!(
+                                    code = ?status.code(),
+                                    message = status.message(),
+                                    records = run.len(),
+                                    "Vector rejected the records for good -- releasing them \
+                                     as dropped"
+                                );
+                                rejected += run.len();
+                            }
+                            Err(status) => {
+                                warn!(
+                                    error = %status,
+                                    records = events.len(),
+                                    "Vector would not take the batch -- holding it and retrying"
+                                );
+                                // Delivered is the merge's identity, so a
+                                // failed attempt adds nothing to the block.
+                                rejected_piece.report(DeliveryStatus::Delivered);
+                                return Err(retry_later());
+                            }
+                        }
+                    }
+                    rejected_piece.report(dropped_if_rejected(rejected));
+                    Ok(())
                 }
-                Ok(())
-            }
-        })
+            },
+        )
         .await
+}
+
+/// What an attempt that ended with `rejected` records refused for good adds to
+/// its block: `Dropped`, counted, when there were any.
+fn dropped_if_rejected(rejected: usize) -> DeliveryStatus {
+    if rejected == 0 {
+        return DeliveryStatus::Delivered;
+    }
+    metrics::counter!("pipeline_dead_letters_dropped_total", "reason" => REJECTED_REASON)
+        .increment(rejected as u64);
+    DeliveryStatus::Dropped
 }
 
 /// Consecutive runs of `sizes` whose totals stay within `budget`. A size over
@@ -463,6 +488,7 @@ async fn run_outbound(
     let downstream = &half.downstream;
     engine
         .pipeline(&half.from_vector)
+        .listener("outbound")
         .shutdown(shutdown)
         // Screens out what the next stage's listener would refuse outright, so
         // such a record is counted rather than sent and silently left out.
@@ -678,11 +704,66 @@ mod tests {
         assert_eq!(runs_within(&[20], 10), vec![0..1]);
     }
 
-    /// Records the gauges registered through it, and nothing else.
+    /// A counter that adds up what it is incremented by.
     #[derive(Default)]
-    struct GaugeKeys(std::sync::Mutex<Vec<metrics::Key>>);
+    struct Tally(std::sync::atomic::AtomicU64);
 
-    impl metrics::Recorder for GaugeKeys {
+    impl metrics::CounterFn for Tally {
+        fn increment(&self, value: u64) {
+            self.0
+                .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn absolute(&self, value: u64) {
+            self.0
+                .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Records the gauges registered through it and what its counters count.
+    #[derive(Default)]
+    struct Captured {
+        gauges: std::sync::Mutex<Vec<metrics::Key>>,
+        counters: std::sync::Mutex<Vec<(metrics::Key, Arc<Tally>)>>,
+    }
+
+    impl Captured {
+        /// The `listener` and `guarantee` of every `pipeline_delivery_guarantee`
+        /// series published through it.
+        fn guarantees(&self) -> Vec<(String, String)> {
+            self.gauges
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .filter(|key| key.name() == "pipeline_delivery_guarantee")
+                .map(|key| {
+                    let label = |name: &str| {
+                        key.labels()
+                            .find(|l| l.key() == name)
+                            .map_or_else(|| "(none)".to_owned(), |l| l.value().to_owned())
+                    };
+                    (label("listener"), label("guarantee"))
+                })
+                .collect()
+        }
+
+        /// The total counted under `name` with `reason`.
+        fn counted(&self, name: &str, reason: &str) -> u64 {
+            self.counters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .filter(|(key, _)| {
+                    key.name() == name
+                        && key
+                            .labels()
+                            .any(|l| l.key() == "reason" && l.value() == reason)
+                })
+                .map(|(_, tally)| tally.0.load(std::sync::atomic::Ordering::Relaxed))
+                .sum()
+        }
+    }
+
+    impl metrics::Recorder for Captured {
         fn describe_counter(
             &self,
             _: metrics::KeyName,
@@ -706,13 +787,18 @@ mod tests {
         }
         fn register_counter(
             &self,
-            _: &metrics::Key,
+            key: &metrics::Key,
             _: &metrics::Metadata<'_>,
         ) -> metrics::Counter {
-            metrics::Counter::noop()
+            let tally = Arc::new(Tally::default());
+            self.counters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((key.clone(), Arc::clone(&tally)));
+            metrics::Counter::from_arc(tally)
         }
         fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
-            self.0
+            self.gauges
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(key.clone());
@@ -727,9 +813,9 @@ mod tests {
         }
     }
 
-    /// Each leg publishes its own guarantee series, told apart by `listener`,
-    /// rather than both writing the one unlabelled series.
-    #[tokio::test]
+    /// Each leg's pipeline publishes its own guarantee series, told apart by
+    /// `listener`, and nothing writes the unlabelled series.
+    #[tokio::test(flavor = "current_thread")]
     async fn each_leg_publishes_its_own_guarantee() {
         let mut config = Config::default();
         config.source.transport = crate::config::Transport::Direct;
@@ -741,31 +827,41 @@ mod tests {
             .await
             .expect("bridge binds");
 
-        let keys = GaugeKeys::default();
-        metrics::with_local_recorder(&keys, || bridge.publish_guarantees());
+        // One thread, so every task the bridge spawns records here.
+        let captured = Captured::default();
+        let _recording = metrics::set_default_local_recorder(&captured);
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        stop.cancel();
+        task.await
+            .expect("bridge task")
+            .expect("a shutdown is not a leg failure");
 
-        let published: Vec<(String, String)> = keys
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .filter(|key| key.name() == "pipeline_delivery_guarantee")
-            .map(|key| {
-                let label = |name: &str| {
-                    key.labels()
-                        .find(|l| l.key() == name)
-                        .map(|l| l.value().to_owned())
-                        .unwrap_or_default()
-                };
-                (label("listener"), label("guarantee"))
-            })
-            .collect();
+        let mut published = captured.guarantees();
+        published.sort();
         assert_eq!(
             published,
             vec![
                 ("inbound".to_owned(), "at_least_once".to_owned()),
                 ("outbound".to_owned(), "at_least_once".to_owned()),
             ]
+        );
+    }
+
+    /// Records Vector rejected for good release their block `Dropped` and are
+    /// counted; an attempt with none adds nothing.
+    #[test]
+    fn records_vector_rejected_are_dropped_and_counted() {
+        let captured = Captured::default();
+        let (none, some) = metrics::with_local_recorder(&captured, || {
+            (dropped_if_rejected(0), dropped_if_rejected(3))
+        });
+        assert_eq!(none, DeliveryStatus::Delivered);
+        assert_eq!(some, DeliveryStatus::Dropped);
+        assert_eq!(
+            captured.counted("pipeline_dead_letters_dropped_total", REJECTED_REASON),
+            3
         );
     }
 
