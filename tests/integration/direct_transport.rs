@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use dfe_transform_vector::bridge::Bridge;
+use dfe_transform_vector::bridge::{Bridge, BridgeRuntime};
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
     BridgeConfig, Config, PipelineConfig, SinkConfig, SourceConfig, TransformConfig, Transport,
@@ -29,6 +29,7 @@ use dfe_transform_vector::vector::spawn_vector;
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
 use scalo::transport::{TransportReceiver, TransportSender};
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 use crate::common;
 
@@ -132,9 +133,11 @@ async fn a_record_pushed_at_the_listener_comes_out_the_sink_transformed() {
     let mut vector = spawn_vector(&config.vector, &config_dir).expect("spawn Vector");
 
     // The bridge binds both listeners; Vector binds the middle one.
-    let bridge = Bridge::build(&config).await.expect("bridge");
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let bridge_task = tokio::spawn(bridge.run(shutdown_rx));
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge");
+    let stop = CancellationToken::new();
+    let bridge_task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
 
     wait_for_port(&config.bridge.to_vector).await;
     wait_for_port(&config.source.listen).await;
@@ -165,7 +168,7 @@ async fn a_record_pushed_at_the_listener_comes_out_the_sink_transformed() {
         }
     }
 
-    let _ = shutdown_tx.send(true);
+    stop.cancel();
     let _ = vector.kill().await;
     let _ = bridge_task.await;
 
@@ -195,14 +198,16 @@ async fn the_bridge_binds_both_loopback_legs() {
     let mut config = direct_config(&work, "/nonexistent/vector");
     config.sink.endpoint = "http://127.0.0.1:1".into();
 
-    let bridge = Bridge::build(&config).await.expect("bridge binds");
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let task = tokio::spawn(bridge.run(shutdown_rx));
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
 
     wait_for_port(&config.source.listen).await;
     wait_for_port(&config.bridge.from_vector).await;
 
-    let _ = shutdown_tx.send(true);
+    stop.cancel();
     let _ = task.await;
 }
 
@@ -223,9 +228,11 @@ async fn only_the_direct_end_binds_a_leg() {
         .expect("a bus source with a direct sink is a legitimate stage");
 
     let listen = config.source.listen.clone();
-    let bridge = Bridge::build(&config).await.expect("bridge binds");
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let task = tokio::spawn(bridge.run(shutdown_rx));
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
 
     wait_for_port(&config.bridge.from_vector).await;
     assert!(
@@ -233,8 +240,154 @@ async fn only_the_direct_end_binds_a_leg() {
         "the Push listener must not be bound when the source is on the bus"
     );
 
-    let _ = shutdown_tx.send(true);
+    stop.cancel();
     let _ = task.await;
+}
+
+/// A push client that gives up after `timeout_ms`.
+async fn pusher_with_timeout(listen: &str, timeout_ms: u64) -> GrpcTransport {
+    let mut config = GrpcConfig::client(&format!("http://{listen}"));
+    config.send_timeout_ms = timeout_ms;
+    GrpcTransport::new(&config).await.expect("push client")
+}
+
+/// The inbound listener is built armed: a push is answered only once Vector
+/// has taken its records. With nothing listening where Vector should be, the
+/// sender must never be told OK, since an OK here is a record lost on a kill.
+#[tokio::test]
+async fn a_push_is_not_answered_ok_before_vector_takes_it() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    // Inbound only: the far end of the push is Vector, which is not running.
+    config.sink.transport = Transport::Bus;
+    config.sink.topic = "orders_load".into();
+
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    wait_for_port(&config.source.listen).await;
+
+    let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
+    let result = pusher
+        .send("orders_land", Bytes::from_static(br#"{"id":"held"}"#))
+        .await;
+
+    stop.cancel();
+    let _ = task.await;
+    assert!(
+        !result.is_ok(),
+        "a push Vector never took must not be acknowledged: {result:?}"
+    );
+}
+
+/// Armed from the moment it binds, not from when the pipeline first runs: a
+/// push that lands between the two is held too, where an unarmed listener
+/// would answer it at enqueue with nothing yet reading its queue.
+#[tokio::test]
+async fn a_push_before_the_bridge_runs_is_held_too() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    config.sink.transport = Transport::Bus;
+    config.sink.topic = "orders_load".into();
+
+    // Bound, and deliberately never run.
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+
+    let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
+    let result = pusher
+        .send("orders_land", Bytes::from_static(br#"{"id":"early"}"#))
+        .await;
+    drop(bridge);
+
+    assert!(
+        !result.is_ok(),
+        "a push that arrived before the pipeline ran must not be acknowledged: {result:?}"
+    );
+}
+
+/// Shutdown answers what the bridge still holds instead of dropping it: the
+/// sender hears back (and retries) rather than hanging on a push nobody will
+/// deliver, and the bridge itself stops.
+#[tokio::test]
+async fn shutdown_answers_a_held_push_rather_than_dropping_it() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    config.sink.transport = Transport::Bus;
+    config.sink.topic = "orders_load".into();
+
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    wait_for_port(&config.source.listen).await;
+
+    // Long enough that only the shutdown can answer it.
+    let pusher = pusher_with_timeout(&config.source.listen, 60_000).await;
+    let push = tokio::spawn(async move {
+        pusher
+            .send("orders_land", Bytes::from_static(br#"{"id":"in-flight"}"#))
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    stop.cancel();
+
+    let answered = tokio::time::timeout(Duration::from_secs(40), push)
+        .await
+        .expect("the held push must be answered once the bridge shuts down")
+        .expect("push task");
+    assert!(
+        !answered.is_ok(),
+        "a push nothing delivered must not be acknowledged at shutdown: {answered:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(40), task)
+        .await
+        .expect("the bridge stops after draining")
+        .expect("bridge task");
+}
+
+/// The outbound listener is built armed too: Vector's `PushEvents` is answered
+/// only once the next stage has the records, so Vector's own source is never
+/// released for a record the loader did not get.
+#[tokio::test]
+async fn vectors_push_is_not_answered_ok_before_the_next_stage_takes_it() {
+    let work = TempDir::new().expect("work dir");
+    let mut config = direct_config(&work, "/nonexistent/vector");
+    // Outbound only, towards a next stage that is not there.
+    config.source.transport = Transport::Bus;
+    config.source.topics = vec!["orders_land".into()];
+    config.sink.endpoint = format!("http://127.0.0.1:{}", free_port());
+
+    let bridge = Bridge::build(&config, BridgeRuntime::default())
+        .await
+        .expect("bridge binds");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(bridge.run(stop.clone(), stop.clone()));
+    wait_for_port(&config.bridge.from_vector).await;
+
+    // What Vector's `vector` sink does: PushEvents at the from_vector leg.
+    let vector_sink = scalo::transport::vector_compat::VectorCompatClient::connect_lazy(&format!(
+        "http://{}",
+        config.bridge.from_vector
+    ))
+    .expect("vector-protocol client");
+    let sent = tokio::time::timeout(
+        Duration::from_secs(60),
+        vector_sink.send_events(&[serde_json::json!({"id": "held"})]),
+    )
+    .await
+    .expect("the hold budget answers the push");
+
+    stop.cancel();
+    let _ = task.await;
+    assert!(
+        sent.is_err(),
+        "PushEvents must not be answered OK while the next stage is down"
+    );
 }
 
 /// One address cannot be both ends of the loop through Vector.

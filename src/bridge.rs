@@ -29,42 +29,54 @@
 //! a topic runs the upper one. Vector's own component follows the same split --
 //! `kafka` on the bus end, `vector` on the direct one.
 //!
-//! ## Nothing is dropped
+//! ## A push is answered once it is delivered
 //!
-//! Every hop holds rather than discards. A batch that cannot move on is
-//! retried, so the supervisor stops draining the listener behind it, the
-//! listener's channel fills, and scalo answers the upstream caller
-//! `Backpressured` -- the same signal a full Kafka producer queue gives, all
-//! the way back to whoever is sending. A record leaves this process only by
-//! being accepted downstream.
+//! Each leg is a scalo `BatchEngine` pipeline over a listener built armed, so
+//! with `source.acknowledgements` on (the default) no push is answered until
+//! the hop after it has taken the records:
+//!
+//! - inbound: the upstream sender's push is answered once `PushEvents` returns,
+//!   and Vector's `vector` source, with acknowledgements on, returns only once
+//!   Vector's sink has delivered.
+//! - outbound: Vector's `PushEvents` is answered once the next stage accepted
+//!   the records, so Vector's own source is released only then.
+//!
+//! A hop that refuses is retried until the push's hold deadline, then the push
+//! is answered `Unavailable` and its sender retries: duplicates are possible,
+//! loss is not. At shutdown each listener closes to new pushes and drains what
+//! it already holds.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
+use bytes::Bytes;
+use scalo::governor::UnifiedPressure;
+use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
 use scalo::transport::vector_compat::VectorCompatClient;
-use scalo::transport::{Record, SendResult, TransportReceiver, TransportSender};
-use tokio::sync::watch;
+use scalo::transport::{
+    AcknowledgementsConfig, Record, SendResult, SinkConfirmation, TransportError, TransportSender,
+    WorkBatch,
+};
+use scalo::worker::engine::BatchProcessingConfig;
+use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::{Error, Result};
 
-/// First wait after a hop refuses a batch.
-const RETRY_MIN: Duration = Duration::from_millis(100);
-
-/// Ceiling on that wait. Long enough not to hammer a restarting peer, short
-/// enough that recovery is not held back by the backoff itself.
-const RETRY_MAX: Duration = Duration::from_secs(5);
-
-/// How long an idle `recv` waits before looping, so shutdown is noticed
-/// promptly on a quiet pipeline.
-const RECV_IDLE: Duration = Duration::from_millis(200);
+/// What the service runtime lends the bridge.
+#[derive(Clone, Default)]
+pub struct BridgeRuntime {
+    /// The runtime's worker pool, reused rather than building a second one.
+    pub pool: Option<Arc<AdaptiveWorkerPool>>,
+    /// Pressure both listeners shed pushes on while it holds intake.
+    pub pressure: Option<Arc<UnifiedPressure>>,
+}
 
 /// The half that carries records INTO Vector.
 struct Inbound {
     /// Accepts `Transport/Push` from the rest of DFE.
-    upstream: Arc<GrpcTransport>,
+    upstream: GrpcTransport,
     /// Hands them to Vector's `vector` source.
     to_vector: Arc<VectorCompatClient>,
 }
@@ -72,7 +84,7 @@ struct Inbound {
 /// The half that carries records OUT of Vector.
 struct Outbound {
     /// Accepts `PushEvents` back from Vector's `vector` sink.
-    from_vector: Arc<GrpcTransport>,
+    from_vector: GrpcTransport,
     /// Pushes them to the next stage.
     downstream: Arc<GrpcTransport>,
     /// Routing key stamped on every outgoing record -- the `<source>_load`
@@ -92,8 +104,8 @@ struct Outbound {
 pub struct Bridge {
     inbound: Option<Inbound>,
     outbound: Option<Outbound>,
-    /// Records moved per hop.
-    batch_size: usize,
+    /// Runs both legs; its `max_chunk_size` is the records moved per hop.
+    engine: BatchEngine,
 }
 
 impl Bridge {
@@ -102,11 +114,18 @@ impl Bridge {
     /// # Errors
     ///
     /// Fails when an address cannot be bound or an endpoint URI is unusable.
-    pub async fn build(config: &Config) -> Result<Self> {
+    pub async fn build(config: &Config, runtime: BridgeRuntime) -> Result<Self> {
         let bridge = &config.bridge;
+        let acknowledgements = config.source.acknowledgements;
 
         let inbound = if config.source.transport.is_direct() {
-            let upstream = server(&config.source.listen, "upstream Push listener").await?;
+            let upstream = listener(
+                &GrpcConfig::server(&config.source.listen),
+                acknowledgements,
+                runtime.pressure.clone(),
+                "upstream Push listener",
+            )
+            .await?;
             let to_vector =
                 VectorCompatClient::connect_lazy(&format!("http://{}", bridge.to_vector)).map_err(
                     |e| {
@@ -119,10 +138,11 @@ impl Bridge {
             info!(
                 listen = %config.source.listen,
                 to_vector = %bridge.to_vector,
+                acknowledgements = acknowledgements.enabled,
                 "bridge inbound ready"
             );
             Some(Inbound {
-                upstream: Arc::new(upstream),
+                upstream,
                 to_vector: Arc::new(to_vector),
             })
         } else {
@@ -132,7 +152,13 @@ impl Bridge {
         let outbound = if config.sink.transport.is_direct() {
             // Vector's sink is a Vector-protocol client, so this end must accept
             // that protocol as well as the native one.
-            let from_vector = server_with_vector_compat(&bridge.from_vector).await?;
+            let from_vector = listener(
+                &GrpcConfig::server(&bridge.from_vector).with_vector_compat(),
+                acknowledgements,
+                runtime.pressure.clone(),
+                "bridge.from_vector listener",
+            )
+            .await?;
             let downstream = GrpcTransport::new(&GrpcConfig::client(&config.sink.endpoint))
                 .await
                 .map_err(|e| {
@@ -144,10 +170,11 @@ impl Bridge {
             info!(
                 from_vector = %bridge.from_vector,
                 endpoint = %config.sink.endpoint,
+                acknowledgements = acknowledgements.enabled,
                 "bridge outbound ready"
             );
             Some(Outbound {
-                from_vector: Arc::new(from_vector),
+                from_vector,
                 downstream: Arc::new(downstream),
                 destination: Arc::from(config.sink.topic.as_str()),
             })
@@ -155,196 +182,167 @@ impl Bridge {
             None
         };
 
+        let engine_config = BatchProcessingConfig {
+            max_chunk_size: bridge.batch_size,
+            ..BatchProcessingConfig::default()
+        };
+        let engine = match runtime.pool {
+            Some(pool) => BatchEngine::with_pool(pool, engine_config),
+            None => BatchEngine::new(engine_config),
+        };
+
         Ok(Self {
             inbound,
             outbound,
-            batch_size: bridge.batch_size,
+            engine,
         })
     }
 
     /// Run whichever directions this deployment has, until shutdown.
-    pub async fn run(self, shutdown: watch::Receiver<bool>) {
-        let batch_size = self.batch_size;
-        let inbound = self.inbound.map(|half| {
-            tokio::spawn(run_inbound(
-                half.upstream,
-                half.to_vector,
-                batch_size,
-                shutdown.clone(),
-            ))
-        });
-        let outbound = self.outbound.map(|half| {
-            tokio::spawn(run_outbound(
-                half.from_vector,
-                half.downstream,
-                half.destination,
-                batch_size,
-                shutdown.clone(),
-            ))
-        });
+    ///
+    /// Each leg stops taking pushes once its token is cancelled and drains what
+    /// it already holds. The outbound token is separate so the leg Vector's
+    /// sink flushes into can stay up until Vector has exited.
+    pub async fn run(
+        self,
+        inbound_shutdown: CancellationToken,
+        outbound_shutdown: CancellationToken,
+    ) {
+        let Self {
+            inbound,
+            outbound,
+            engine,
+        } = self;
+        let engine = &engine;
 
-        if let Some(task) = inbound {
-            let _ = task.await;
-        }
-        if let Some(task) = outbound {
-            let _ = task.await;
-        }
+        let inbound = async {
+            if let Some(half) = inbound
+                && let Err(e) = run_inbound(engine, &half, inbound_shutdown).await
+            {
+                error!(error = %e, "bridge inbound stopped");
+            }
+        };
+        let outbound = async {
+            if let Some(half) = outbound
+                && let Err(e) = run_outbound(engine, &half, outbound_shutdown).await
+            {
+                error!(error = %e, "bridge outbound stopped");
+            }
+        };
+        tokio::join!(inbound, outbound);
         debug!("direct-transport bridge stopped");
     }
 }
 
-/// Bind a native Push listener.
-async fn server(listen: &str, what: &str) -> Result<GrpcTransport> {
-    GrpcTransport::new(&GrpcConfig::server(listen))
+/// Bind a receive server built armed, so no push is answered before the
+/// pipeline releases its records.
+async fn listener(
+    config: &GrpcConfig,
+    acknowledgements: AcknowledgementsConfig,
+    pressure: Option<Arc<UnifiedPressure>>,
+    what: &str,
+) -> Result<GrpcTransport> {
+    let builder = GrpcTransport::builder(config)
+        .acknowledgements(acknowledgements)
+        .armed(true);
+    let builder = match pressure {
+        Some(pressure) => builder.pressure(pressure),
+        None => builder,
+    };
+    let listen = config.listen.clone().unwrap_or_default();
+    builder
+        .start()
         .await
         .map_err(|e| Error::Transport(format!("{what} could not bind '{listen}': {e}")))
 }
 
-/// Bind a listener that accepts the Vector protocol as well as the native one.
-async fn server_with_vector_compat(listen: &str) -> Result<GrpcTransport> {
-    GrpcTransport::new(&GrpcConfig::server(listen).with_vector_compat())
-        .await
-        .map_err(|e| {
-            Error::Transport(format!(
-                "bridge.from_vector listener could not bind '{listen}': {e}"
-            ))
-        })
+/// A refusal the pipeline retries until the push's hold deadline.
+fn retry_later() -> EngineError {
+    EngineError::Transport(TransportError::Backpressure)
 }
 
 /// Upstream Push listener to Vector's `vector` source.
 async fn run_inbound(
-    upstream: Arc<GrpcTransport>,
-    to_vector: Arc<VectorCompatClient>,
-    batch_size: usize,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    loop {
-        if *shutdown.borrow() {
-            return;
-        }
-
-        let batch = match recv(&upstream, batch_size, &mut shutdown).await {
-            Some(batch) => batch,
-            None => return,
-        };
-        if batch.is_empty() {
-            continue;
-        }
-
-        let events: Vec<serde_json::Value> = batch.iter().map(|r| as_event(&r.payload)).collect();
-
-        let mut wait = RETRY_MIN;
-        loop {
-            match to_vector.send_events(&events).await {
-                Ok(()) => break,
-                Err(e) => {
+    engine: &BatchEngine,
+    half: &Inbound,
+    shutdown: CancellationToken,
+) -> std::result::Result<(), EngineError> {
+    let to_vector = &half.to_vector;
+    engine
+        .pipeline(&half.upstream)
+        .shutdown(shutdown)
+        // Vector's `vector` source with acknowledgements on answers only once
+        // its sink has delivered.
+        .sink_confirms(SinkConfirmation::Remote)
+        .run(Ok, |batch: &WorkBatch<GrpcToken>| {
+            let events: Vec<serde_json::Value> =
+                batch.records.iter().map(|r| as_event(&r.payload)).collect();
+            let to_vector = Arc::clone(to_vector);
+            async move {
+                to_vector.send_events(&events).await.map_err(|e| {
                     warn!(
                         error = %e,
                         records = events.len(),
                         "Vector would not take the batch -- holding it and retrying"
                     );
-                    if !sleep_unless_shutdown(wait, &mut shutdown).await {
-                        return;
-                    }
-                    wait = (wait * 2).min(RETRY_MAX);
-                }
+                    retry_later()
+                })
             }
-        }
-    }
+        })
+        .await
 }
 
 /// Vector's `vector` sink to the next stage's Push listener.
 async fn run_outbound(
-    from_vector: Arc<GrpcTransport>,
-    downstream: Arc<GrpcTransport>,
-    destination: Arc<str>,
-    batch_size: usize,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    loop {
-        if *shutdown.borrow() {
-            return;
-        }
-
-        let mut batch = match recv(&from_vector, batch_size, &mut shutdown).await {
-            Some(batch) => batch,
-            None => return,
-        };
-        if batch.is_empty() {
-            continue;
-        }
-
-        // The next stage routes on the record key, and a record that came back
-        // through Vector carries none.
-        for record in &mut batch {
-            record.key = Some(Arc::clone(&destination));
-        }
-
-        let mut wait = RETRY_MIN;
-        loop {
-            match downstream.send_batch(&batch).await {
-                SendResult::Ok => break,
-                SendResult::Backpressured => {
-                    debug!(
-                        records = batch.len(),
-                        "next stage is backpressured -- holding the batch"
-                    );
+    engine: &BatchEngine,
+    half: &Outbound,
+    shutdown: CancellationToken,
+) -> std::result::Result<(), EngineError> {
+    let destination = &half.destination;
+    let downstream = &half.downstream;
+    engine
+        .pipeline(&half.from_vector)
+        .shutdown(shutdown)
+        // Screens out what the next stage's listener would refuse outright, so
+        // such a record is counted rather than sent and silently left out.
+        .sender(&**downstream)
+        .run(
+            |mut batch: WorkBatch<GrpcToken>| {
+                // The next stage routes on the record key, and a record that
+                // came back through Vector carries none.
+                for record in &mut batch.records {
+                    record.key = Some(Arc::clone(destination));
                 }
-                other => {
-                    error!(
-                        result = ?other,
-                        records = batch.len(),
-                        "next stage refused the batch -- holding it and retrying"
-                    );
+                Ok(batch)
+            },
+            |batch: &WorkBatch<GrpcToken>| {
+                let records: Vec<Record> = batch.records.clone();
+                let downstream = Arc::clone(downstream);
+                async move {
+                    match downstream.send_batch(&records).await {
+                        // The screen has already taken out what the sender
+                        // would dead-letter, so what it names here it counted.
+                        SendResult::Ok | SendResult::FilteredDlq => Ok(()),
+                        SendResult::Backpressured => {
+                            debug!(
+                                records = records.len(),
+                                "next stage is backpressured -- holding the batch"
+                            );
+                            Err(retry_later())
+                        }
+                        SendResult::Fatal(e) => {
+                            error!(
+                                error = %e,
+                                records = records.len(),
+                                "next stage refused the batch -- holding it and retrying"
+                            );
+                            Err(retry_later())
+                        }
+                    }
                 }
-            }
-            if !sleep_unless_shutdown(wait, &mut shutdown).await {
-                return;
-            }
-            wait = (wait * 2).min(RETRY_MAX);
-        }
-    }
-}
-
-/// One `recv`, or `None` once shutdown is requested.
-///
-/// A closed transport ends the loop; any other receive error is transient and
-/// costs one idle interval.
-async fn recv(
-    transport: &GrpcTransport,
-    max: usize,
-    shutdown: &mut watch::Receiver<bool>,
-) -> Option<Vec<Record>> {
-    tokio::select! {
-        result = transport.recv(max) => match result {
-            Ok(batch) => Some(batch.records),
-            Err(e) if is_closed(&e) => {
-                debug!(error = %e, "bridge listener closed");
-                None
-            }
-            Err(e) => {
-                warn!(error = %e, "bridge receive failed");
-                if sleep_unless_shutdown(RECV_IDLE, shutdown).await {
-                    Some(Vec::new())
-                } else {
-                    None
-                }
-            }
-        },
-        _ = shutdown.changed() => None,
-    }
-}
-
-fn is_closed(error: &scalo::transport::TransportError) -> bool {
-    matches!(error, scalo::transport::TransportError::Closed)
-}
-
-/// Sleep, unless shutdown arrives first. `false` means stop.
-async fn sleep_unless_shutdown(wait: Duration, shutdown: &mut watch::Receiver<bool>) -> bool {
-    tokio::select! {
-        () = tokio::time::sleep(wait) => !*shutdown.borrow(),
-        _ = shutdown.changed() => false,
-    }
+            },
+        )
+        .await
 }
 
 /// A payload as the JSON event Vector's protocol carries.
@@ -352,7 +350,7 @@ async fn sleep_unless_shutdown(wait: Duration, shutdown: &mut watch::Receiver<bo
 /// A DFE record is JSON, but the bridge may not drop one that is not: anything
 /// that will not parse as a JSON object becomes `{"message": <text>}`, which is
 /// where Vector's own decoders put bytes they cannot read.
-fn as_event(payload: &[u8]) -> serde_json::Value {
+fn as_event(payload: &Bytes) -> serde_json::Value {
     match serde_json::from_slice::<serde_json::Value>(payload) {
         Ok(value) if value.is_object() => value,
         _ => serde_json::json!({ "message": String::from_utf8_lossy(payload) }),
@@ -375,7 +373,7 @@ mod tests {
 
     #[test]
     fn a_json_object_passes_through_unchanged() {
-        let event = as_event(br#"{"id":"e1","level":"info"}"#);
+        let event = as_event(&Bytes::from_static(br#"{"id":"e1","level":"info"}"#));
         assert_eq!(event["id"], "e1");
         assert_eq!(event["level"], "info");
     }
@@ -384,14 +382,20 @@ mod tests {
     /// as an object still arrives -- as the text it was.
     #[test]
     fn a_payload_that_is_not_a_json_object_arrives_as_a_message() {
-        assert_eq!(as_event(b"not json at all")["message"], "not json at all");
-        assert_eq!(as_event(b"[1,2,3]")["message"], "[1,2,3]");
-        assert_eq!(as_event(b"")["message"], "");
+        assert_eq!(
+            as_event(&Bytes::from_static(b"not json at all"))["message"],
+            "not json at all"
+        );
+        assert_eq!(
+            as_event(&Bytes::from_static(b"[1,2,3]"))["message"],
+            "[1,2,3]"
+        );
+        assert_eq!(as_event(&Bytes::new())["message"], "");
     }
 
     #[test]
     fn invalid_utf8_is_carried_lossily_rather_than_dropped() {
-        let event = as_event(&[0xff, 0xfe, b'h', b'i']);
+        let event = as_event(&Bytes::from_static(&[0xff, 0xfe, b'h', b'i']));
         assert!(
             event["message"].as_str().is_some_and(|s| s.ends_with("hi")),
             "the readable bytes must survive: {event}"
@@ -409,5 +413,15 @@ mod tests {
         config.source.transport = crate::config::Transport::Bus;
         config.sink.transport = crate::config::Transport::Direct;
         assert!(is_enabled(&config));
+    }
+
+    /// A refused hop is waited out to the push's deadline, never taken as a
+    /// reason to stop the leg.
+    #[test]
+    fn a_refused_hop_is_retried_not_fatal() {
+        assert!(matches!(
+            retry_later(),
+            EngineError::Transport(ref e) if e.is_recoverable()
+        ));
     }
 }
