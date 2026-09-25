@@ -54,6 +54,8 @@ pub struct WrapperMetrics {
     pub restarts_total: Counter,
     pub config_validation_errors_total: Counter,
     pub scrape_failures_total: Counter,
+    /// Vector's own error count on the generated sink.
+    pub sink_errors_total: Counter,
     pub uptime_seconds: Gauge,
     pub app: AppMetrics,
     pub service: ServiceMetrics,
@@ -90,6 +92,10 @@ impl WrapperMetrics {
             "transform_vector_scrape_failures_total",
             "Failed scrapes of Vector's prometheus_exporter",
         );
+        let sink_errors_total = manager.counter(
+            "transform_vector_sink_errors_total",
+            "Errors Vector reported on the generated sink",
+        );
         let uptime_seconds = manager.gauge("uptime_seconds", "Vector subprocess uptime in seconds");
 
         // Describe the labelled metrics (recorded via macros in
@@ -112,6 +118,7 @@ impl WrapperMetrics {
             restarts_total,
             config_validation_errors_total,
             scrape_failures_total,
+            sink_errors_total,
             uptime_seconds,
             app,
             service,
@@ -285,6 +292,8 @@ mod tests {
             "restarts_total",
             "config_validation_errors_total",
             "transform_vector_scrape_failures_total",
+            "transform_vector_sink_errors_total",
+            "records_error_total",
             "uptime_seconds",
             "pipeline_ready",
         ] {
