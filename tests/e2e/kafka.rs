@@ -113,6 +113,7 @@ fn config_from_kafka_test_config(
                 .as_ref()
                 .map(|s| s.expose().to_string())
                 .unwrap_or_default(),
+            secret_dir: None,
         }
     } else {
         SaslConfig::default()
@@ -234,13 +235,6 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
 
-    if let Some(ref u) = kf_base.sasl_username {
-        vector_cmd.env("KAFKA_SASL_USERNAME", u);
-    }
-    if let Some(ref p) = kf_base.sasl_password {
-        vector_cmd.env("KAFKA_SASL_PASSWORD", p.expose());
-    }
-
     let mut vector_child = vector_cmd.spawn().expect("spawn vector");
 
     // Run the test body, capturing the result so we can clean up topics
@@ -296,12 +290,10 @@ async fn run_pipeline_assertions(
         .await
         .map_err(|e| format!("producer transport: {e}"))?;
 
+    // The first argument is the destination topic, not a record key.
     let test_payload = format!(r#"{{"id":"{suffix}","value":"hello"}}"#);
     let send_result = producer
-        .send(
-            &format!("k-{suffix}"),
-            bytes::Bytes::from(test_payload.into_bytes()),
-        )
+        .send(source_topic, bytes::Bytes::from(test_payload.into_bytes()))
         .await;
     let send_ok = matches!(
         send_result,
@@ -395,12 +387,16 @@ async fn run_pipeline_assertions(
         ));
     }
 
-    // In SASL mode, verify the security protocol was injected into source YAML.
-    if kf_base.sasl_username.is_some() {
+    // In SASL mode, verify the security protocol was injected into source YAML,
+    // and that Vector authenticated from the secret backend alone.
+    if let Some(ref username) = kf_base.sasl_username {
         let source_yaml = fs::read_to_string(config_dir.join("00_source.yaml"))
             .map_err(|e| format!("read source YAML: {e}"))?;
         if !source_yaml.contains("security.protocol:") {
             return Err("SASL mode but generated source YAML missing security.protocol".into());
+        }
+        if source_yaml.contains(username.as_str()) {
+            return Err("SASL mode but the username is written into the source YAML".into());
         }
     }
 

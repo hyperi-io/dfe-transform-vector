@@ -50,21 +50,13 @@ fn fixture_sasl_config_loads_and_validates() {
     assert!(config.source.tls.enabled);
     assert!(config.sink.sasl.enabled);
     assert!(config.sink.tls.enabled);
-    // Credentials stay as env-var references — Vector interpolates at runtime
-    assert!(
-        config
-            .source
-            .sasl
-            .username
-            .contains("${KAFKA_SASL_USERNAME}")
+    // Credentials come from the mounted directory; none sits in the config
+    assert_eq!(
+        config.source.sasl.secret_dir.as_deref(),
+        Some("/var/run/secrets/dfe-kafka")
     );
-    assert!(
-        config
-            .source
-            .sasl
-            .password
-            .contains("${KAFKA_SASL_PASSWORD}")
-    );
+    assert!(config.source.sasl.username.is_empty());
+    assert!(config.source.sasl.password.is_empty());
     assert_eq!(config.sink.compression, "zstd");
 }
 

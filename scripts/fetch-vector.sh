@@ -8,7 +8,7 @@
 #  Copyright: (c) 2026 HYPERI PTY LIMITED
 
 # Downloads the Vector binary for the current platform, caches it in .tmp/vector/,
-# and prints the absolute path to stdout (last line). Idempotent — re-running
+# and prints the absolute path to stdout (last line). Idempotent -- re-running
 # reuses the cache unless VECTOR_VERSION changes.
 #
 # Usage:
@@ -152,5 +152,5 @@ fi
 
 echo "Cached Vector ${INSTALLED} at ${VECTOR_BIN}" >&2
 
-# Print path (last line — this is what callers read)
+# Print path (last line -- this is what callers read)
 echo "${VECTOR_BIN}"

@@ -58,9 +58,9 @@ sources:
     address: 127.0.0.1:6100
     acknowledgements:
       # This is what makes the whole path hold rather than drop. The supervisor's
-      # RPC does not return until the record has reached the sink, so a stalled
-      # downstream stalls the supervisor, which stops draining its own Push
-      # listener, which back-pressures whoever is sending to this transform.
+      # RPC does not return until the record has reached the sink, and the
+      # supervisor answers its own sender only then, so a stalled downstream
+      # back-pressures whoever is sending to this transform.
       enabled: true
 
 transforms:
@@ -88,7 +88,8 @@ sinks:
     # A URI, not a bind address: this end DIALS the supervisor's listener.
     address: http://127.0.0.1:6101
     acknowledgements:
-      # Completes the hold-rather-than-drop chain the source starts.
+      # Completes the hold-rather-than-drop chain the source starts: the
+      # supervisor answers this push only once the next stage has the records.
       enabled: true
     healthcheck:
       enabled: true

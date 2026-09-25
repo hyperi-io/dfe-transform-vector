@@ -51,11 +51,18 @@ dfe_source: "my_source"
 #   commit_interval_ms: 5000           # offset commit interval
 #   drain_timeout_ms: 15000            # max wait during rebalance (default: half session_timeout)
 #   topic_lag_metric: true             # expose consumer lag metric
+#   # Commit an offset, or answer a push, only once the record is delivered.
+#   acknowledgements:
+#     enabled: true
+#   # Vector reads the credentials from files through its directory secret
+#   # backend, never from its own config. Point secret_dir at a directory
+#   # holding `username` and `password` files (a mounted Kubernetes Secret), or
+#   # set DFE_TRANSFORM_SOURCE_SASL_USERNAME / _PASSWORD instead. A ${VAR}
+#   # placeholder is refused: Vector expands none.
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     secret_dir: "/var/run/secrets/dfe-kafka"
 #   tls:
 #     enabled: true
 #   # librdkafka overrides — production defaults baked in, override here
@@ -77,7 +84,7 @@ dfe_source: "my_source"
 #   key_field: ".org_id"               # Event field to use as Kafka partition key
 #   encoding: "json"                   # json, raw_bytes
 #   compression: "zstd"               # none, gzip, lz4, snappy, zstd
-#   message_timeout_ms: 300000         # producer delivery timeout
+#   message_timeout_ms: 0              # 0: an outage holds records, never rejects them
 #   socket_timeout_ms: 60000           # broker socket timeout
 #   batch:
 #     max_events: 10000                # Vector-level batch size (default 10K)
@@ -86,8 +93,7 @@ dfe_source: "my_source"
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     secret_dir: "/var/run/secrets/dfe-kafka"
 #   tls:
 #     enabled: true
 #   # librdkafka overrides — production defaults baked in, override here
@@ -128,7 +134,10 @@ dfe_source: "my_source"
 #   # Where the assembled Vector config is written. The default is the
 #   # container path; a bare install has no write access there.
 #   config_dir: "/var/run/vector/config"
-#   api_address: "0.0.0.0:8686"
+#   # Vector's API is unauthenticated and nothing here uses it, so it is off.
+#   # Turned on, it binds a loopback address only.
+#   api_enabled: false
+#   api_address: "127.0.0.1:8686"
 #   log_level: "info"
 #   # Version pinning — prevents silent version drift
 #   version: "0.58.0"
@@ -152,6 +161,9 @@ dfe_source: "my_source"
 #   vector_metrics_address: "127.0.0.1:9598"
 #   # Scrape ticks a merged vector_* gauge may go unseen before it is zeroed.
 #   vector_metrics_expiry_ticks: 4
+#   # Seconds the sink may hold records without delivering any before /readyz
+#   # reports not ready. 0 never does.
+#   sink_stall_secs: 60
 
 # -----------------------------------------------------------------------------
 # Logging

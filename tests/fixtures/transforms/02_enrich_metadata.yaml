@@ -3,6 +3,9 @@
 # Enrich events with pipeline metadata: pipeline name, processing timestamp,
 # and the Kafka topic the event arrived on.
 #
+# The pipeline name is read with `get_env_var`: Vector expands no `${VAR}` in
+# its config, so a placeholder would be written into every event as text.
+#
 # Inputs: auto-wired (follows previous transform in chain)
 
 transforms:
@@ -11,6 +14,6 @@ transforms:
     inputs:
       - parse_message
     source: |
-      .pipeline = "${DFE_PIPELINE_NAME:-unknown}"
+      .pipeline = get_env_var("DFE_PIPELINE_NAME") ?? "unknown"
       .processed_at = now()
       .source_topic = to_string(.metadata.kafka.topic) ?? "unknown"

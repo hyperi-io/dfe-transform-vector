@@ -13,12 +13,13 @@
 //!
 //! ```text
 //! <output_dir>/
+//!   00_global.yaml
 //!   00_source.yaml
-//!   50_transforms/
-//!     01-parse.yaml
-//!     02-enrich.yaml
+//!   50_000_parse.yaml
+//!   50_001_enrich.yaml
 //!   90_sink.yaml
 //!   99_observability.yaml
+//!   .secrets/           SASL credentials given as text, owner-only
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ use super::generate::{
     generate_global_yaml, generate_observability_yaml, generate_sink_yaml, generate_source_yaml,
 };
 use super::loader::Config;
+use super::secrets;
 use super::transforms::{LoadedTransform, load_transforms};
 use super::wiring::{WiringResult, auto_wire, extract_components, validate_dag};
 use crate::Result;
@@ -51,8 +53,11 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(output_dir)?;
 
-    // Generate global config (data_dir, API)
-    let global_yaml = generate_global_yaml(&config.vector);
+    // Credentials go where the secret backends read them, never into the YAML.
+    secrets::materialise(config, output_dir)?;
+
+    // Generate global config (data_dir, API, secret backends)
+    let global_yaml = generate_global_yaml(&config.vector, &secrets::backends(config, output_dir));
     write_yaml(output_dir, "00_global.yaml", &global_yaml)?;
 
     // Generate source YAML
@@ -74,7 +79,12 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_transforms(output_dir, &transforms, &wiring)?;
 
     // Generate sink YAML with wired inputs
-    let sink_yaml = generate_sink_yaml(&config.sink, &config.bridge, &wiring.sink_inputs);
+    let sink_yaml = generate_sink_yaml(
+        &config.sink,
+        &config.bridge,
+        &wiring.sink_inputs,
+        config.source.acknowledgements.enabled,
+    );
     write_yaml(output_dir, "90_sink.yaml", &sink_yaml)?;
 
     // Generate observability YAML

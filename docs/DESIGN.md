@@ -84,7 +84,6 @@ descriptor = ServiceDescriptor(
     consumer_group="dfe-transform-vector",
     liveness_paths=("/livez",),
     readiness_paths=("/readyz",),
-    extra_ports={"vector-api": 8686},
     description="Kafka-to-Kafka transform pipelines powered by Vector.dev",
 )
 ```
@@ -226,9 +225,11 @@ reports 503 instead of a healthy start.
 **What the settle window does NOT prove.** The check is `try_wait()` returning
 "still running" at t+500ms -- the process EXISTS. Vector's own startup routinely
 takes longer than that, so `/readyz` can answer 200 while Vector is still
-wiring up its topology and consuming nothing. The honest signal for "carrying
-traffic" is Vector's own API (`VECTOR_API_ADDRESS`, already enabled on 8686);
-the wrapper does not read it today.
+wiring up its topology and consuming nothing. The signal for "carrying
+traffic" is the sink's progress in Vector's own metrics: `/readyz` also reports
+not ready while the sink holds records and has delivered none of them for
+`metrics.sink_stall_secs` (60 by default). Vector's API is off by default and,
+when turned on, binds loopback only.
 
 During config reload, readiness stays healthy -- but only if it was healthy
 already. `Reloading` counts as ready, so it is entered by compare-and-set from
@@ -321,8 +322,9 @@ source:
   group_id: "dfe-transform-vector-${PIPELINE_NAME}"
   sasl:
     mechanism: scram_sha_512
-    username: "${KAFKA_SASL_USERNAME}"
-    password: "${KAFKA_SASL_PASSWORD}"
+    # A mounted Secret holding `username` and `password` files. Vector reads
+    # them through its directory secret backend; it expands no ${VAR}.
+    secret_dir: /var/run/secrets/dfe-kafka
   tls:
     enabled: true
 
@@ -339,7 +341,7 @@ transforms:
 vector:
   binary: /usr/local/bin/vector
   data_dir: /var/lib/vector
-  api_address: "0.0.0.0:8686"
+  api_enabled: false          # loopback only when turned on
   log_level: info
 
 metrics:
@@ -355,7 +357,7 @@ The config engine takes the big dials and produces a Vector config directory:
 
 ```
 /var/run/vector/config/
-  00_global.yaml          # data_dir + api settings
+  00_global.yaml          # data_dir, api switch, SASL secret backends
   00_source.yaml          # Generated from source big dials
   50_000_parse.yaml       # User transforms, flat (Vector --config-dir doesn't recurse)
   50_001_enrich.yaml      # Prefixed with 50_NNN_ for stable sort order
@@ -378,8 +380,8 @@ sources:
     sasl:
       enabled: true
       mechanism: SCRAM-SHA-512
-      username: "${KAFKA_SASL_USERNAME}"
-      password: "${KAFKA_SASL_PASSWORD}"
+      username: SECRET[dfe_source_sasl.username]
+      password: SECRET[dfe_source_sasl.password]
     tls:
       enabled: true
     librdkafka_options:
@@ -388,23 +390,31 @@ sources:
 
 **Generated sink (`90_sink.yaml`):**
 ```yaml
+transforms:
+  dfe_size_cap:                         # drops a record over message.max.bytes
+    type: filter
+    inputs: ["<last_transform_label>"]  # Auto-wired
+    condition: length(encode_json(.)) <= 999872
 sinks:
   dfe_sink:
     type: kafka
-    inputs: ["<last_transform_label>"]  # Auto-wired
+    inputs: ["dfe_size_cap"]
     bootstrap_servers: "kafka-1:9092,kafka-2:9092"
     topic: enriched_syslog_land
     key_field: ".org_id"
     encoding:
       codec: json
     compression: zstd
+    message_timeout_ms: 0               # an outage holds rather than rejects
     sasl:
       enabled: true
       mechanism: SCRAM-SHA-512
-      username: "${KAFKA_SASL_USERNAME}"
-      password: "${KAFKA_SASL_PASSWORD}"
+      username: SECRET[dfe_sink_sasl.username]
+      password: SECRET[dfe_sink_sasl.password]
     tls:
       enabled: true
+    librdkafka_options:
+      enable.idempotence: "true"
 ```
 
 **Generated observability (`99_observability.yaml`):**

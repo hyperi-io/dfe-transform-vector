@@ -7,7 +7,7 @@ services:
         condition: service_healthy
     ports:
       - "9090:9090"
-      - "8686:8686"
+      # - "6000:6000"  # only when config.source.transport is "direct"; uncomment to publish
     volumes:
       - ./config/config.yaml:/etc/dfe-transform-vector/config.yaml:ro
     healthcheck:

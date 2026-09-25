@@ -11,10 +11,12 @@
 # Source contract: dfe-transform-vector::deployment::contract()
 # Regenerate with: `dfe-transform-vector emit-dockerfile > Dockerfile`
 
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 LABEL io.hyperi.profile="production"
 
+# Apt versions are unpinned because Debian drops superseded ones, so the digest-pinned base is what fixes the release.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl netcat-openbsd iputils-ping \
     && rm -rf /var/lib/apt/lists/*
@@ -75,10 +77,15 @@ RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/tr
 
 LABEL io.hyperi.vector.version="0.58.0"
 
-USER appuser
+# Numeric, so Kubernetes runAsNonRoot can verify it without reading /etc/passwd.
+USER 1000
 
-EXPOSE 9090 6000 8686
+EXPOSE 9090
+# Conditional listeners, not EXPOSEd -- publish explicitly when enabled:
+#   6000/tcp push -- when config.source.transport is "direct"
 
+# Shell form maps any curl failure to exit 1, the only unhealthy status Docker defines.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:9090/livez > /dev/null || exit 1
 

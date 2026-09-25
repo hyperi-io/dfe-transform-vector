@@ -150,9 +150,19 @@ once sat nine minor versions apart and only `version_check: warn` kept pods up.
 goes through a figment serialize-merge-deserialize round trip in
 `apply_figment_env()`, and `SensitiveString` serialises as `***REDACTED***`,
 which destroys the value in transit. The protection is elsewhere: the env var is
-masked in logs, and the generated Vector YAML interpolates
-`${KAFKA_SASL_PASSWORD}` so the secret never lands in a config file. Changing
-the type to look safer breaks authentication.
+masked in logs, `Debug` redacts the field, and no credential is written into the
+Vector config. The generated components name it `SECRET[<backend>.<key>]` and
+Vector's `directory` secret backend reads it from files: the mounted secret at
+`sasl.secret_dir`, or owner-only files the assembler writes under
+`<config_dir>/.secrets` from a credential given as text. Changing the type to
+look safer breaks authentication.
+
+**Vector expands no `${VAR}`.** Since 0.57 interpolation needs
+`--dangerously-allow-env-var-interpolation`, which the supervisor never passes,
+so a `${...}` in the config reaches Vector as literal text. `validate()` refuses
+one in a SASL credential, and `vector validate` does not resolve `SECRET[...]`
+either: a missing secret file fails only when Vector starts, which is why the
+assembler checks `secret_dir` itself.
 
 **Vector is redistributed unmodified under MPL-2.0.** That carries two
 obligations -- ship the licence text and tell recipients where the source is.

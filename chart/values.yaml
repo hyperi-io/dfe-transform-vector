@@ -96,10 +96,14 @@ config:
     sasl:
       enabled: true
       mechanism: scram_sha_512
-      username: ${KAFKA_SASL_USERNAME}
-      password: ${KAFKA_SASL_PASSWORD}
+      # -- Where the Deployment mounts the kafka secret; Vector reads the
+      # username and password files from it itself.
+      secret_dir: /var/run/secrets/dfe-kafka
     tls:
       enabled: false
+    # -- Commit an offset, or answer a push, only once the record is delivered.
+    acknowledgements:
+      enabled: true
   sink:
     # -- bus produces to topic; direct pushes to endpoint. topic still applies
     # on direct: it is the routing key the next stage picks its table by.
@@ -114,8 +118,7 @@ config:
     sasl:
       enabled: true
       mechanism: scram_sha_512
-      username: ${KAFKA_SASL_USERNAME}
-      password: ${KAFKA_SASL_PASSWORD}
+      secret_dir: /var/run/secrets/dfe-kafka
     tls:
       enabled: false
   # -- The two supervisor-to-Vector legs, used on the direct transport only.
@@ -129,7 +132,10 @@ config:
   vector:
     binary: /usr/local/bin/vector
     data_dir: /var/lib/vector
-    api_address: 0.0.0.0:8686
+    # -- Vector's API is unauthenticated and nothing here uses it. When turned
+    # on it binds loopback only: reach it with kubectl port-forward.
+    api_enabled: false
+    api_address: 127.0.0.1:8686
     log_level: info
     version: 0.58.0
     version_check: warn
@@ -142,6 +148,9 @@ config:
     # -- Scrape ticks a merged vector_* gauge may go unseen before it is zeroed,
     # so a component Vector drops stops reporting its last value.
     vector_metrics_expiry_ticks: 4
+    # -- Seconds the sink may hold records without delivering any before
+    # /readyz reports not ready. 0 never does.
+    sink_stall_secs: 60
   logging:
     level: info
     format: json

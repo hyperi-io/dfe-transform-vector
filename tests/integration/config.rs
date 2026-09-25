@@ -36,8 +36,9 @@ fn full_config(transforms_dir: Option<String>) -> Config {
             sasl: SaslConfig {
                 enabled: true,
                 mechanism: "scram_sha_512".into(),
-                username: "${KAFKA_SASL_USERNAME}".into(),
-                password: "${KAFKA_SASL_PASSWORD}".into(),
+                username: "kafka-user".into(),
+                password: "kafka-pass".into(),
+                secret_dir: None,
             },
             tls: TlsConfig {
                 enabled: true,
@@ -54,8 +55,9 @@ fn full_config(transforms_dir: Option<String>) -> Config {
             sasl: SaslConfig {
                 enabled: true,
                 mechanism: "scram_sha_512".into(),
-                username: "${KAFKA_SASL_USERNAME}".into(),
-                password: "${KAFKA_SASL_PASSWORD}".into(),
+                username: "kafka-user".into(),
+                password: "kafka-pass".into(),
+                secret_dir: None,
             },
             tls: TlsConfig {
                 enabled: true,
@@ -141,14 +143,36 @@ fn end_to_end_assembly_with_transforms() {
     assert!(source.contains("kafka-1:9092,kafka-2:9092"));
     assert!(source.contains("raw_syslog_land"));
     assert!(source.contains("SCRAM-SHA-512"));
-    assert!(source.contains("${KAFKA_SASL_USERNAME}"));
+    assert!(source.contains("SECRET[dfe_credentials.source_sasl_username]"));
     assert!(source.contains("cooperative-sticky"));
 
-    // Verify sink YAML content — should wire to "filter" (last transform)
+    // Verify sink YAML content — the size cap reads the last transform, and
+    // the sink reads the size cap
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
-    assert!(sink.contains("dfe_sink"));
-    assert!(sink.contains("filter")); // Auto-wired to last transform
+    let sink_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&sink).unwrap();
+    assert_eq!(
+        sink_yaml["transforms"]["dfe_size_cap"]["inputs"][0].as_str(),
+        Some("filter"),
+        "the size cap must be auto-wired to the last transform: {sink}"
+    );
+    assert_eq!(
+        sink_yaml["sinks"]["dfe_sink"]["inputs"][0].as_str(),
+        Some("dfe_size_cap")
+    );
     assert!(sink.contains("enriched_syslog_land"));
+
+    // No credential in any config file Vector loads
+    for entry in fs::read_dir(output_dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let text = fs::read_to_string(&path).unwrap();
+            assert!(
+                !text.contains("kafka-pass") && !text.contains("kafka-user"),
+                "{} carries a credential",
+                path.display()
+            );
+        }
+    }
     assert!(sink.contains(".org_id"));
     assert!(sink.contains("compression: zstd"));
     assert!(sink.contains("acknowledgements"));
@@ -723,6 +747,108 @@ fn config_validation_catches_sasl_enabled_without_username() {
     );
 }
 
+/// Vector expands no `${VAR}`, so a placeholder credential would reach the
+/// broker as the literal text and every login would fail.
+#[test]
+fn config_validation_refuses_an_env_placeholder_in_a_credential() {
+    for (side, field) in [
+        ("source", "username"),
+        ("source", "password"),
+        ("sink", "username"),
+        ("sink", "password"),
+    ] {
+        let mut config = full_config(None);
+        let sasl = if side == "source" {
+            &mut config.source.sasl
+        } else {
+            &mut config.sink.sasl
+        };
+        let value = "${KAFKA_SASL_CREDENTIAL}".to_string();
+        if field == "username" {
+            sasl.username = value;
+        } else {
+            sasl.password = value;
+        }
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("{side}.sasl.{field}")) && err.contains("placeholder"),
+            "{side}.sasl.{field}: expected the placeholder refusal, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn config_validation_accepts_a_secret_dir_in_place_of_credentials() {
+    let mut config = full_config(None);
+    config.source.sasl.username.clear();
+    config.source.sasl.password.clear();
+    config.source.sasl.secret_dir = Some("/var/run/secrets/dfe-kafka".into());
+    config
+        .validate()
+        .expect("a secret directory supplies both credentials");
+}
+
+#[test]
+fn config_validation_refuses_a_secret_dir_beside_credentials() {
+    let mut config = full_config(None);
+    config.sink.sasl.secret_dir = Some("/var/run/secrets/dfe-kafka".into());
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("sink.sasl.secret_dir") && err.contains("set one of them"),
+        "two sources for one credential must be refused, got: {err}"
+    );
+}
+
+#[test]
+fn config_validation_refuses_a_relative_secret_dir() {
+    let mut config = full_config(None);
+    config.source.sasl.username.clear();
+    config.source.sasl.password.clear();
+    config.source.sasl.secret_dir = Some("secrets/kafka".into());
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("absolute path"),
+        "a relative secret_dir must be refused, got: {err}"
+    );
+}
+
+/// The API takes unauthenticated requests, so on it may only bind loopback.
+#[test]
+fn config_validation_keeps_the_vector_api_on_loopback() {
+    let mut config = full_config(None);
+    config.vector.api_enabled = false;
+    config.vector.api_address = "0.0.0.0:8686".into();
+    config
+        .validate()
+        .expect("an address is not checked while the API is off");
+
+    config.vector.api_enabled = true;
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("loopback"),
+        "a wildcard bind must be refused, got: {err}"
+    );
+
+    for address in ["127.0.0.1:8686", "[::1]:8686"] {
+        config.vector.api_address = address.into();
+        config
+            .validate()
+            .unwrap_or_else(|e| panic!("{address} is loopback and must pass: {e}"));
+    }
+}
+
+/// A credential in `Debug` output ends up in logs and panic messages.
+#[test]
+fn sasl_debug_output_never_carries_the_password() {
+    let config = full_config(None);
+    let printed = format!("{config:?}");
+    assert!(
+        !printed.contains("kafka-pass"),
+        "Debug printed the password: {printed}"
+    );
+    assert!(printed.contains("***REDACTED***"));
+}
+
 #[test]
 fn config_validation_accepts_all_valid_codecs() {
     for codec in &["json", "raw_bytes", "protobuf"] {
@@ -805,8 +931,9 @@ fn config_with_all_fields_populated_validates() {
             sasl: SaslConfig {
                 enabled: true,
                 mechanism: "scram_sha_256".into(),
-                username: "${KAFKA_SASL_USERNAME}".into(),
-                password: "${KAFKA_SASL_PASSWORD}".into(),
+                username: String::new(),
+                password: String::new(),
+                secret_dir: Some("/var/run/secrets/dfe-kafka".into()),
             },
             tls: TlsConfig {
                 enabled: true,
@@ -823,6 +950,7 @@ fn config_with_all_fields_populated_validates() {
             librdkafka_options: [("debug".into(), "consumer".into())].into(),
             transport: Transport::Bus,
             listen: "0.0.0.0:6000".into(),
+            acknowledgements: scalo::transport::AcknowledgementsConfig::new(false),
         },
         sink: SinkConfig {
             transport: Transport::Bus,
@@ -837,6 +965,7 @@ fn config_with_all_fields_populated_validates() {
                 mechanism: "plain".into(),
                 username: "producer".into(),
                 password: "secret".into(),
+                secret_dir: None,
             },
             tls: TlsConfig {
                 enabled: true,
@@ -870,6 +999,7 @@ fn config_with_all_fields_populated_validates() {
         vector: VectorConfig {
             binary: "/opt/vector/bin/vector".into(),
             data_dir: "/var/data/vector".into(),
+            api_enabled: true,
             api_address: "127.0.0.1:8686".into(),
             log_level: "debug".into(),
             version: "0.53.0".into(),
