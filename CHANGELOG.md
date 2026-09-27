@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.44](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.43...v1.0.44) (2026-09-27)
+
+### Bug Fixes
+
+* clear the Quality advisory warning and find the pgo driver under CARGO_TARGET_DIR ([#93](https://github.com/hyperi-io/dfe-transform-vector/issues/93)) ([130d438](https://github.com/hyperi-io/dfe-transform-vector/commit/130d438895c6f58f5ba30e4f3aab0bb7fb49eb6d))
+* keep startup vector validate off the broker ([#94](https://github.com/hyperi-io/dfe-transform-vector/issues/94)) ([21e52e1](https://github.com/hyperi-io/dfe-transform-vector/commit/21e52e1cb4aa955c9ecb3f97f13a1f3a76d881f2))
+
 ## [1.0.43](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.42...v1.0.43) (2026-09-27)
 
 ### Bug Fixes
