@@ -129,7 +129,7 @@ pick_port_base() {
 resolve_driver() {
     local path="${PGO_DRIVER_PATH:-}"
     if [[ -z "${path}" ]]; then
-        path="${PROJECT_ROOT}/target/${DRIVER_PROFILE}/pgo-driver"
+        path="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}/${DRIVER_PROFILE}/pgo-driver"
     fi
     if [[ -x "${path}" ]]; then
         echo "${path}"

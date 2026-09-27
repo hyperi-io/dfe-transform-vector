@@ -25,7 +25,6 @@ target/
 coverage-html/
 coverage.lcov
 .cargo/
-!.cargo/config.toml
 
 # Local working files (not committed)
 docs/superpowers/
@@ -83,10 +82,6 @@ coverage-html/
 coverage.lcov
 tarpaulin-report.json
 cobertura.xml
-
-# cargo
-.cargo/
-!.cargo/config.toml
 
 # Local scratch / tmp (CORE.md: scratch goes here, gitignored, NOT
 # /tmp). Bare patterns (no leading slash) match a tmp dir at ANY
