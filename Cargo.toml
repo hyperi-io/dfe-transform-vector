@@ -58,10 +58,7 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # carries the idle gate a transform with no source topics reports through.
 # `worker-batch` carries the `BatchEngine` pipeline the bridge runs each leg on,
 # which holds a push until its records are delivered.
-#
-# The floor is 2.12.0 while `[patch.crates-io]` below points at the scalo branch,
-# whose own manifest still says 2.12.0.
-scalo = { version = ">=2.12.0, <3", features = [
+scalo = { version = ">=2.13.0, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -137,7 +134,7 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.12.0, <3", features = [
+scalo = { version = ">=2.13.0, <3", features = [
     "transport-kafka",
 ] }
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.
@@ -146,11 +143,6 @@ tonic = { version = ">=0.14.6, <0.15", features = ["gzip"] }
 metrics-util = { version = ">=0.20.4, <0.21", default-features = false, features = [
     "debugging",
 ] }
-
-# Temporary: builds against the scalo branch that holds source acknowledgements
-# until delivery (scalo-rs#204), until the release carrying it is on crates.io.
-[patch.crates-io]
-scalo = { git = "https://github.com/hyperi-io/scalo-rs", branch = "fix/at-least-once" }
 
 [profile.release]
 lto = "thin"

@@ -40,6 +40,3 @@ skip = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Temporary: the scalo branch patched in by Cargo.toml [patch.crates-io], until
-# the release carrying it is on crates.io.
-allow-git = ["https://github.com/hyperi-io/scalo-rs"]
