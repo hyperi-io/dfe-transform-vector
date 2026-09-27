@@ -37,6 +37,7 @@ use dfe_transform_vector::config::loader::{
     Config, DecodingConfig, MetricsConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig,
     TlsConfig, TransformConfig, VectorConfig,
 };
+use dfe_transform_vector::config::validate::vector_validate;
 use dfe_transform_vector::metrics::scrape::OversizeDrops;
 use dfe_transform_vector::metrics::{DEAD_LETTERS_DROPPED, TOO_LARGE};
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
@@ -266,6 +267,98 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
     // Surface test failure AFTER cleanup.
     if let Err(msg) = test_outcome {
         panic!("pipeline test failed: {msg}");
+    }
+}
+
+/// Against a broker that only accepts SCRAM-SHA-512, as every DFE tier's does,
+/// the supervisor's startup `vector validate` passes and the running Vector
+/// authenticates from the secret backend and delivers.
+///
+/// Owns its broker, so it runs by default rather than opt-in.
+#[tokio::test]
+async fn e2e_a_scram_broker_passes_startup_validation_and_delivers() {
+    let Some(vector_bin) = vector_binary_path() else {
+        crate::common::require_service_in_ci(
+            "Vector binary",
+            "scripts/fetch-vector.sh found nothing",
+        );
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+    let Some(fixture) = KafkaFixture::scram("kafka-scram-startup-validation").await else {
+        crate::common::require_service_in_ci("Docker", "the SCRAM broker container did not start");
+        eprintln!("Skipping: no SCRAM broker (Docker unavailable)");
+        return;
+    };
+    let kf_base = fixture.config.clone();
+
+    let suffix = unique_suffix();
+    let source_topic = format!("dfe_e2e_scram_src_{suffix}");
+    let sink_topic = format!("dfe_e2e_scram_sink_{suffix}");
+    let group_id = format!("dfe-e2e-scram-{suffix}");
+
+    // Also the control: the fixture's own credentials authenticate.
+    let mut admin_cfg = kf_base.clone();
+    admin_cfg.group = group_id.clone();
+    let admin = KafkaAdmin::new(&admin_cfg).expect("admin");
+    admin
+        .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+        .await
+        .expect("create topics over SCRAM");
+
+    let work = TempDir::new().expect("work dir");
+    let data_dir = work.path().join("data");
+    fs::create_dir_all(&data_dir).expect("data dir");
+    let transforms_dir = work.path().join("transforms");
+    write_enrich_transform(&transforms_dir);
+    let config_dir = work.path().join("cfg");
+    let exporter_addr = free_loopback_addr();
+    let mut dfe_config = config_from_kafka_test_config(
+        &kf_base,
+        &source_topic,
+        &sink_topic,
+        &group_id,
+        &transforms_dir.to_string_lossy(),
+        &data_dir.to_string_lossy(),
+        &exporter_addr,
+    );
+    dfe_config.vector.binary = vector_bin.to_string_lossy().into_owned();
+    assert!(dfe_config.source.sasl.enabled && dfe_config.sink.sasl.enabled);
+    dfe_config.validate().expect("config validates");
+    assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
+
+    // The gate the supervisor runs before it spawns Vector.
+    vector_validate(&dfe_config.vector, &config_dir)
+        .await
+        .expect("startup vector validate must pass against a SCRAM broker");
+
+    let mut vector_child = Command::new(vector_bin)
+        .arg("--config-dir")
+        .arg(&config_dir)
+        .env("VECTOR_LOG", "warn")
+        .env("VECTOR_DATA_DIR", &data_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn vector");
+
+    let outcome = run_pipeline_assertions(
+        &kf_base,
+        &source_topic,
+        &sink_topic,
+        &group_id,
+        &suffix,
+        &config_dir,
+        &exporter_addr,
+    )
+    .await;
+
+    let _ = vector_child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(3), vector_child.wait()).await;
+
+    if let Err(msg) = outcome {
+        panic!("SCRAM pipeline test failed: {msg}");
     }
 }
 

@@ -971,9 +971,9 @@ async fn the_assembled_direct_config_passes_vector_validate() {
     );
 }
 
-/// Startup runs the full `vector validate`, health checks included, before the
-/// bridge binds. A direct config must pass it, and Vector must start, with
-/// nothing listening where its sink dials back.
+/// Startup runs `vector validate` before the bridge binds. A direct config must
+/// pass it, and Vector must start and run its own health checks, with nothing
+/// listening where its sink dials back.
 #[tokio::test]
 async fn a_direct_config_validates_and_starts_with_nothing_on_the_bridge() {
     let Some(vector_binary) = common::vector_binary_path() else {
