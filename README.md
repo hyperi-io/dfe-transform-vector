@@ -329,7 +329,7 @@ What green does NOT mean:
 ### Where this sits
 
 Generated from `dfe-infra/suite.yaml` via
-`python3 /projects/dfe-infra/scripts/dfe-stack suite --consumer dfe-transform-vector`
+`python3 ../dfe-infra/scripts/dfe-stack suite --consumer dfe-transform-vector`
 and `--producer dfe-transform-vector`.
 
 Inbound -- what this repo depends on:
