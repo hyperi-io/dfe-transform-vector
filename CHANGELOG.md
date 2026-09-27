@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.43](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.42...v1.0.43) (2026-09-27)
+
+### Bug Fixes
+
+* **chart:** scale on the auth the app uses, install with stock values, mark the secrets ([#90](https://github.com/hyperi-io/dfe-transform-vector/issues/90)) ([45ffb44](https://github.com/hyperi-io/dfe-transform-vector/commit/45ffb44be82b15a6e4dd7d104a81c11bfc50a776))
+* rc.14 security and delivery fixes ([#91](https://github.com/hyperi-io/dfe-transform-vector/issues/91)) ([d54e012](https://github.com/hyperi-io/dfe-transform-vector/commit/d54e012f420761512c6b112f95a66505dbb12c01))
+
 ## [1.0.42](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.41...v1.0.42) (2026-09-24)
 
 ### Bug Fixes
