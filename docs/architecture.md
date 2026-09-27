@@ -112,11 +112,23 @@ bind at startup, the consumer group id and metrics labels are set at startup,
 and the ops listener is bound at startup. A change that classifies as
 transforms-only when it is not logs a successful reload for work it never did.
 
-**Nothing on the direct path drops a record.** Every hop holds and retries
-rather than discarding. A batch that cannot move on stops the supervisor
-draining the listener behind it, the listener's channel fills, and scalo answers
-the upstream caller `Backpressured` -- the same signal a full Kafka producer
-queue gives. A record leaves this process only by being accepted downstream.
+**A push on the direct path is answered only once the next hop has it.** Both
+bridge listeners are built armed, so a push is held until the pipeline releases
+its records. A hop that refuses is retried until the hold runs out, and then the
+push is answered `Unavailable` and its sender retries. The holds nest so an
+inner hop is answered while the one around it can still answer its own sender:
+18 s at the intake, 16.5 s on the leg back from Vector, and 15 s for each send
+to the next stage. A record no retry would get through is released dropped and
+counted rather than resent forever: one over the next stage's message-size
+ceiling, or one Vector refused for good because a sink it feeds rejected it.
+
+**Only the intake sheds under pressure.** The leg back from Vector drains
+everything the intake holds, so shedding it would stall the stage until the
+holds expired into duplicates. Both listeners lease held bytes on the runtime's
+memory guard.
+
+**A failed bridge leg stops the process.** Its senders would otherwise retry for
+ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
 ## Health and metrics invariants
 
@@ -150,9 +162,19 @@ once sat nine minor versions apart and only `version_check: warn` kept pods up.
 goes through a figment serialize-merge-deserialize round trip in
 `apply_figment_env()`, and `SensitiveString` serialises as `***REDACTED***`,
 which destroys the value in transit. The protection is elsewhere: the env var is
-masked in logs, and the generated Vector YAML interpolates
-`${KAFKA_SASL_PASSWORD}` so the secret never lands in a config file. Changing
-the type to look safer breaks authentication.
+masked in logs, `Debug` redacts the field, and no credential is written into the
+Vector config. The generated components name it `SECRET[<backend>.<key>]` and
+Vector's `directory` secret backend reads it from files: the mounted secret at
+`sasl.secret_dir`, or owner-only files the assembler writes under
+`<config_dir>/.secrets` from a credential given as text. Changing the type to
+look safer breaks authentication.
+
+**Vector expands no `${VAR}`.** Since 0.57 interpolation needs
+`--dangerously-allow-env-var-interpolation`, which the supervisor never passes,
+so a `${...}` in the config reaches Vector as literal text. `validate()` refuses
+one in a SASL credential, and `vector validate` does not resolve `SECRET[...]`
+either: a missing secret file fails only when Vector starts, which is why the
+assembler checks `secret_dir` itself.
 
 **Vector is redistributed unmodified under MPL-2.0.** That carries two
 obligations -- ship the licence text and tell recipients where the source is.

@@ -75,7 +75,11 @@ impl Default for BackoffConfig {
 ///
 /// Polling rather than the recommended inotify watcher: a ConfigMap volume is
 /// a symlink swap, which inotify on the file does not see.
-fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
+///
+/// Never `--dangerously-allow-env-var-interpolation`: it would expand `${VAR}`
+/// in operator transforms from the pod environment, credentials included.
+#[must_use]
+pub fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
     vec![
         "--config-dir".into(),
         config_dir.as_os_str().to_owned(),
@@ -107,12 +111,6 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
     // Data directory (Vector has no --data-dir CLI flag; env var only)
     if !vector_config.data_dir.is_empty() {
         cmd.env("VECTOR_DATA_DIR", &vector_config.data_dir);
-    }
-
-    // Vector API address
-    if !vector_config.api_address.is_empty() {
-        cmd.env("VECTOR_API_ADDRESS", &vector_config.api_address);
-        cmd.env("VECTOR_API_ENABLED", "true");
     }
 
     cmd.stdout(Stdio::inherit())

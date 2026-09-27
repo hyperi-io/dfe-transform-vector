@@ -16,6 +16,7 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -26,7 +27,7 @@ use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
 use scalo::version_check::VersionCheckConfig;
 use tracing::{debug, error, info};
 
-use dfe_transform_vector::bridge;
+use dfe_transform_vector::bridge::{self, BridgeRuntime};
 use dfe_transform_vector::config::Config;
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::reload::{ReloadTrigger, run_reload_loop};
@@ -39,12 +40,17 @@ use dfe_transform_vector::metrics::scrape::spawn_vector_scrape_task;
 use dfe_transform_vector::metrics::{
     WrapperMetrics, spawn_circuit_gate_task, spawn_lifecycle_gauge_task, spawn_uptime_tick_task,
 };
+use tokio_util::sync::CancellationToken;
 
 /// Git commit hash for build info metric.
 const COMMIT: &str = match option_env!("GIT_COMMIT") {
     Some(c) => c,
     None => "unknown",
 };
+
+/// Longest the bridge may drain after Vector exits: scalo's retry window for a
+/// refused block after shutdown, with room for the last send.
+const BRIDGE_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
 use dfe_transform_vector::vector::lifecycle::State;
 use dfe_transform_vector::vector::{BackoffConfig, Lifecycle, run_lifecycle};
 
@@ -269,6 +275,7 @@ async fn run_transform_service(
     debug!(
         vector_binary = %config.vector.binary,
         vector_data_dir = %config.vector.data_dir,
+        vector_api_enabled = config.vector.api_enabled,
         vector_api_address = %config.vector.api_address,
         vector_log_level = %config.vector.log_level,
         config_path = ?config.reload.enabled.then_some("reload enabled"),
@@ -333,12 +340,17 @@ async fn run_transform_service(
     spawn_circuit_gate_task(&lifecycle, runtime.scaling.clone());
 
     // Merge Vector's loopback exporter into this registry on scalo's own
-    // metrics interval, so vector_* rides /metrics and the OTLP push.
+    // metrics interval, so vector_* rides /metrics and the OTLP push. The same
+    // scrape tells readiness whether the sink is still delivering.
+    let sink_stalled = Arc::new(AtomicBool::new(false));
+    health::register_sink_progress(sink_stalled.clone());
     spawn_vector_scrape_task(
         metrics.clone(),
         config.metrics.vector_metrics_address.clone(),
         scalo::metrics::MetricsConfig::default().update_interval,
         config.metrics.vector_metrics_expiry_ticks,
+        std::time::Duration::from_secs(config.metrics.sink_stall_secs),
+        sink_stalled,
     );
 
     // Keep uptime_seconds fresh between scrapes.
@@ -425,11 +437,44 @@ async fn run_transform_service(
     // Direct transport: carry records between DFE's Push protocol and Vector's.
     // Bound before Vector is spawned, so a port that cannot be taken fails
     // startup rather than surfacing once the pod is already Ready.
-    if bridge::is_enabled(&config) {
-        let bridge = bridge::Bridge::build(&config).await?;
-        let bridge_shutdown = shutdown_tx.subscribe();
-        tokio::spawn(bridge.run(bridge_shutdown));
-    }
+    let inbound_stop = CancellationToken::new();
+    let outbound_stop = CancellationToken::new();
+    let bridge_task = if bridge::is_enabled(&config) {
+        let lent = BridgeRuntime {
+            pool: runtime.worker_pool.clone(),
+            pressure: runtime.governor.as_ref().map(|g| g.pressure()),
+            memory_guard: Some(Arc::clone(&runtime.memory_guard)),
+        };
+        let bridge = bridge::Bridge::build(&config, lent).await?;
+        // Intake stops with the shutdown signal; the leg back from Vector stays
+        // up until Vector has flushed and exited.
+        let mut signal = shutdown_tx.subscribe();
+        let stop = inbound_stop.clone();
+        tokio::spawn(async move {
+            while !*signal.borrow() {
+                if signal.changed().await.is_err() {
+                    break;
+                }
+            }
+            stop.cancel();
+        });
+        // A failed leg shuts the service down as SIGTERM would, so the process
+        // exits non-zero and the pod restarts.
+        let failed = CancellationToken::new();
+        let on_failure = failed.clone();
+        let shutdown_on_failure = shutdown_tx.clone();
+        tokio::spawn(async move {
+            on_failure.cancelled().await;
+            let _ = shutdown_on_failure.send(true);
+        });
+        Some(tokio::spawn(bridge.run(
+            inbound_stop.clone(),
+            outbound_stop.clone(),
+            failed,
+        )))
+    } else {
+        None
+    };
 
     // Run Vector subprocess lifecycle loop
     let backoff = BackoffConfig::default();
@@ -449,10 +494,32 @@ async fn run_transform_service(
         error!(error = %e, "Vector lifecycle exited with error");
     }
 
+    // Vector is gone, so nothing more comes back from it: let both legs drain
+    // what they hold before the process exits.
+    inbound_stop.cancel();
+    outbound_stop.cancel();
+    let bridged = match bridge_task {
+        Some(task) => match tokio::time::timeout(BRIDGE_DRAIN_LIMIT, task).await {
+            Ok(Ok(ended)) => ended.map_err(anyhow::Error::from),
+            Ok(Err(join)) => Err(anyhow::anyhow!("bridge task ended abnormally: {join}")),
+            Err(_) => {
+                error!(
+                    limit_secs = BRIDGE_DRAIN_LIMIT.as_secs(),
+                    "bridge did not finish draining; what it still holds is answered \
+                     unavailable and retried by its senders"
+                );
+                Ok(())
+            }
+        },
+        None => Ok(()),
+    };
+
     // Update final metrics
     let final_state = lifecycle.state();
     metrics.set_lifecycle_state(final_state);
 
+    result?;
+    bridged?;
     info!("shutdown complete");
     Ok(())
 }

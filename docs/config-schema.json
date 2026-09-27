@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API address, log level\n  set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA triggers (consumer-group lag and CPU), gated by the\n  subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,\n  which this app does not initialise, so the engine keys\n  (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API switch and address,\n  log level set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA triggers (consumer-group lag and CPU), gated by the\n  subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,\n  which this app does not initialise, so the engine keys\n  (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.",
   "type": "object",
   "properties": {
     "dfe_source": {
@@ -39,7 +39,8 @@
           "enabled": false,
           "mechanism": "scram_sha_512",
           "username": "",
-          "password": ""
+          "password": "",
+          "secret_dir": null
         },
         "tls": {
           "enabled": false,
@@ -53,7 +54,10 @@
         "commit_interval_ms": 5000,
         "drain_timeout_ms": null,
         "topic_lag_metric": true,
-        "librdkafka_options": {}
+        "librdkafka_options": {},
+        "acknowledgements": {
+          "enabled": true
+        }
       }
     },
     "sink": {
@@ -73,7 +77,8 @@
           "enabled": false,
           "mechanism": "scram_sha_512",
           "username": "",
-          "password": ""
+          "password": "",
+          "secret_dir": null
         },
         "tls": {
           "enabled": false,
@@ -93,7 +98,7 @@
           "max_bytes": null,
           "timeout_secs": 1
         },
-        "message_timeout_ms": 300000,
+        "message_timeout_ms": 0,
         "socket_timeout_ms": 60000,
         "librdkafka_options": {}
       }
@@ -122,7 +127,8 @@
         "binary": "/usr/local/bin/vector",
         "data_dir": "/var/lib/vector",
         "config_dir": "/var/run/vector/config",
-        "api_address": "0.0.0.0:8686",
+        "api_enabled": false,
+        "api_address": "127.0.0.1:8686",
         "log_level": "info",
         "version": "0.58.0",
         "version_check": "strict",
@@ -135,7 +141,8 @@
       "default": {
         "address": "0.0.0.0:9090",
         "vector_metrics_address": "127.0.0.1:9598",
-        "vector_metrics_expiry_ticks": 4
+        "vector_metrics_expiry_ticks": 4,
+        "sink_stall_secs": 60
       }
     },
     "logging": {
@@ -227,7 +234,8 @@
             "enabled": false,
             "mechanism": "scram_sha_512",
             "username": "",
-            "password": ""
+            "password": "",
+            "secret_dir": null
           }
         },
         "tls": {
@@ -282,6 +290,13 @@
             "type": "string"
           },
           "default": {}
+        },
+        "acknowledgements": {
+          "description": "Hold each record's source acknowledgement until the sink has it.\n\nOn (the default) a Kafka offset is committed, and a push is answered,\nonly once the record is delivered, so a crash redelivers rather than\nloses it. Off, both happen at receipt.",
+          "$ref": "#/$defs/AcknowledgementsConfig",
+          "default": {
+            "enabled": true
+          }
         }
       }
     },
@@ -312,7 +327,7 @@
       }
     },
     "SaslConfig": {
-      "description": "SASL authentication for Kafka.\n\nNOTE: `password` is `String`, not `SensitiveString`, because the config\ngoes through a figment serialize→merge→deserialize round-trip in\n`apply_figment_env()`. `SensitiveString` serialises as `***REDACTED***`\nwhich destroys the value during the round-trip. Password protection is\nhandled by: (1) `flat_env_string_sensitive` which masks the env var in\nlogs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`\nenv-var interpolation — the actual secret never appears in our config.",
+      "description": "SASL authentication for Kafka.\n\nThe credentials reach Vector through its `directory` secret backend, never\nas text in the Vector config: either a mounted directory holding `username`\nand `password` files (`secret_dir`), or `username`/`password` here, which\nthe assembler writes to owner-only files beside the Vector config.\n\n`password` is `String`, not `SensitiveString`, because the config goes\nthrough a figment serialize-merge-deserialize round trip in\n`apply_figment_env()`, and `SensitiveString` serialises as `***REDACTED***`.\n`Debug` redacts it instead.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -326,16 +341,24 @@
           "default": "scram_sha_512"
         },
         "username": {
-          "description": "SASL username. Supports Vector env interpolation: `${KAFKA_SASL_USERNAME}`.",
+          "description": "SASL username. Leave empty when `secret_dir` supplies it.",
           "type": "string",
           "default": ""
         },
         "password": {
-          "description": "SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.",
+          "description": "SASL password. Leave empty when `secret_dir` supplies it.\n\nTaken literally: Vector does not expand `${VAR}` placeholders, so a\nvalue holding one is refused.",
           "type": "string",
           "x-dfe-secret": true,
           "writeOnly": true,
           "default": ""
+        },
+        "secret_dir": {
+          "description": "Directory holding the credentials as files named `username` and\n`password`, such as a mounted Kubernetes Secret. Vector reads them\nitself; replaces `username` and `password`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       }
     },
@@ -376,6 +399,17 @@
           "description": "Skip hostname verification (dev/test only).",
           "type": "boolean",
           "default": false
+        }
+      }
+    },
+    "AcknowledgementsConfig": {
+      "description": "The `acknowledgements` section of an ack-capable transport.\n\nWith `enabled: true` (the default) a source releases its acknowledgement --\na Kafka offset commit, a gRPC or HTTP response -- only once every piece of\nwork built from the record has been delivered, dead-lettered with the DLQ's\nconfirmation, or dropped by policy. A failed delivery withholds it, so the\nrecord is delivered again: duplicates are possible, loss is not.\n\nWith `enabled: false` the source acknowledges at receipt, before the record\nis processed: a crash or a failed delivery loses what was acknowledged.\n\n```yaml\nkafka:\n  acknowledgements:\n    enabled: true\n```",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Hold the source acknowledgement until every piece is delivered.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -430,7 +464,8 @@
             "enabled": false,
             "mechanism": "scram_sha_512",
             "username": "",
-            "password": ""
+            "password": "",
+            "secret_dir": null
           }
         },
         "tls": {
@@ -464,11 +499,11 @@
           }
         },
         "message_timeout_ms": {
-          "description": "Local message timeout (ms). Default: 300000 (5 min).",
+          "description": "Local message timeout (ms). Default: 0, no limit.\n\nlibrdkafka rejects a record still undelivered at this limit, and the\nrejection drops it. With no limit a broker outage holds the record and\nback-pressures the source instead.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "default": 300000
+          "default": 0
         },
         "socket_timeout_ms": {
           "description": "Network request timeout (ms). Default: 60000 (60s).",
@@ -620,10 +655,15 @@
           "type": "string",
           "default": "/var/run/vector/config"
         },
+        "api_enabled": {
+          "description": "Run Vector's API (GraphQL, health, `vector top`). Default: off.\n\nNothing in this process is a client, and the API accepts unauthenticated\nrequests, so it stays off unless an operator wants it for debugging.",
+          "type": "boolean",
+          "default": false
+        },
         "api_address": {
-          "description": "Vector API server address (host:port).",
+          "description": "Vector API bind address (host:port), used only with `api_enabled`.\n\nMust be a loopback address: reach it with `kubectl port-forward` or\n`docker exec`, never from the network.",
           "type": "string",
-          "default": "0.0.0.0:8686"
+          "default": "127.0.0.1:8686"
         },
         "log_level": {
           "description": "Vector log level.",
@@ -667,6 +707,13 @@
           "format": "uint32",
           "minimum": 0,
           "default": 4
+        },
+        "sink_stall_secs": {
+          "description": "Seconds the sink may hold records without delivering or dropping any\nbefore `/readyz` reports not ready. 0 never does. Default: 60.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 60
         }
       }
     },

@@ -56,7 +56,9 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # `vector.Vector/PushEvents` to the subprocess, and scalo has both halves of the
 # Vector protocol (`VectorCompatClient`, `VectorCompatService`). `lifecycle`
 # carries the idle gate a transform with no source topics reports through.
-scalo = { version = ">=2.12.1, <3", features = [
+# `worker-batch` carries the `BatchEngine` pipeline the bridge runs each leg on,
+# which holds a push until its records are delivered.
+scalo = { version = ">=2.13.0, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -70,6 +72,7 @@ scalo = { version = ">=2.12.1, <3", features = [
     "transport-grpc",
     "transport-grpc-vector-compat",
     "version-check",
+    "worker-batch",
 ] }
 
 # Configuration
@@ -131,8 +134,14 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.12.1, <3", features = [
+scalo = { version = ">=2.13.0, <3", features = [
     "transport-kafka",
+] }
+# A stand-in Vector source for the bridge tests; scalo already builds this tonic.
+tonic = { version = ">=0.14.6, <0.15", features = ["gzip"] }
+# Reads back what the app counted; the Prometheus exporter already builds it.
+metrics-util = { version = ">=0.20.4, <0.21", default-features = false, features = [
+    "debugging",
 ] }
 
 [profile.release]

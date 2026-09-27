@@ -80,13 +80,22 @@ transforms:
       #   .parsed_at = now()
       .
 
+  # Fixed label. The supervisor generates this step and wires `inputs` to the
+  # last transform in the chain. librdkafka refuses a record over
+  # `message.max.bytes` (1000000 by default) and Vector drops a refused record,
+  # so this drops it first, counted, with room left for the key and headers.
+  dfe_size_cap:
+    type: filter
+    inputs:
+      - dfe_transform
+    condition: length(encode_json(.)) <= 999872
+
 sinks:
-  # Fixed label. The supervisor generates this block from `sink.*` and wires
-  # `inputs` to the last transform in the chain.
+  # Fixed label. The supervisor generates this block from `sink.*`.
   dfe_sink:
     type: kafka
     inputs:
-      - dfe_transform
+      - dfe_size_cap
     bootstrap_servers: "kafka:9092"
     # The loaded topic. The loader reads <source>_load when it exists and falls
     # back to <source>_land, so a leftover _load topic with nothing writing to
@@ -95,6 +104,13 @@ sinks:
     encoding:
       codec: json
     compression: zstd
+    # No local delivery limit: a broker outage holds the record and
+    # back-pressures the source, where a limit would reject and drop it.
+    message_timeout_ms: 0
+    librdkafka_options:
+      # Retries without limit on a producer that is not idempotent reorder and
+      # duplicate records within a partition.
+      enable.idempotence: "true"
     acknowledgements:
       # The source does not commit an offset until the sink has the record.
       # Without this a broker outage loses whatever was in flight.

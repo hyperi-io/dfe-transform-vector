@@ -431,10 +431,22 @@ async fn unreachable_exporter_counts_and_does_not_panic() {
     let manager = metrics_manager();
     let metrics = Arc::new(WrapperMetrics::register(manager, "scrape-fail-test"));
 
-    let task = spawn_vector_scrape_task(metrics.clone(), dead, Duration::from_millis(20), 4);
+    let stalled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task = spawn_vector_scrape_task(
+        metrics.clone(),
+        dead,
+        Duration::from_millis(20),
+        4,
+        Duration::from_millis(1),
+        stalled.clone(),
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!task.is_finished(), "the scrape loop must survive failures");
     task.abort();
+    assert!(
+        !stalled.load(std::sync::atomic::Ordering::Relaxed),
+        "a scrape that never lands says nothing about the sink"
+    );
 
     let output = manager.render();
     let value = output

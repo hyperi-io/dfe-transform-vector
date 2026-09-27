@@ -36,17 +36,21 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
-    // The probe paths above are all served on metrics_port; the extra ports are
-    // the direct transport's Push listener and Vector's own API, and nothing else.
+    // The probe paths above are all served on metrics_port; the one extra port
+    // is the direct transport's Push listener, and it listens only there.
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(port_names, vec!["push", "vector-api"]);
-
-    let vector_api = c
-        .extra_ports
-        .iter()
-        .find(|p| p.name == "vector-api")
-        .unwrap();
-    assert_eq!(vector_api.port, 8686);
+    assert_eq!(port_names, vec!["push"]);
+    let push = &c.extra_ports[0];
+    assert_eq!(
+        push.when.as_ref().map(ToString::to_string).as_deref(),
+        Some("config.source.transport is \"direct\""),
+        "the Push port must render only on the direct transport"
+    );
+    assert!(
+        c.undeclared_listeners().is_empty(),
+        "every listener in default_config needs a port: {:?}",
+        c.undeclared_listeners()
+    );
 
     // KEDA config present
     assert!(c.keda.is_some(), "KEDA contract must be defined");
@@ -326,8 +330,8 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
 #[test]
 fn committed_chart_matches_the_generator() {
     // Each of these addresses app-specific values the generator does not model:
-    // the `config.source.*` Kafka addressing, the direct-transport Push port,
-    // and the Kafka credential env names Vector expands itself.
+    // the `config.source.*` Kafka addressing, the configurable Push port, and
+    // the kafka secret mounted as the files Vector reads its credentials from.
     const HAND_FIXED: &[&str] = &[
         "values.yaml",
         "templates/deployment.yaml",
@@ -521,8 +525,8 @@ fn chart_expects_the_vector_version_the_image_ships() {
 /// asserting on substrings covers every rule it enforces, not just today's.
 ///
 /// It does NOT prove a stock install can authenticate: `kafka.username` is
-/// empty until an operator sets it, so the placeholders below expand to
-/// nothing. This is the config-shape half only.
+/// empty until an operator sets it, so the mounted secret holds nothing to
+/// log in with. This is the config-shape half only.
 #[test]
 fn chart_default_values_are_a_config_the_app_accepts() {
     use dfe_transform_vector::config::loader::Config;
@@ -568,14 +572,15 @@ fn the_contract_default_config_is_one_the_app_accepts() {
         .expect("deployment::contract()'s default_config does not validate");
 }
 
-/// SASL credentials reach Vector only as `${VAR}` placeholders it expands from
-/// the pod environment, so both ends of that wiring have to agree.
+/// SASL credentials reach Vector as files in the mounted kafka secret, so both
+/// ends of that wiring have to agree.
 ///
 /// A literal credential in `config.source.sasl` would land in the ConfigMap
-/// instead of the Secret. Renaming either env var in the Deployment, or
-/// dropping either placeholder, leaves the pod authenticating as nobody.
+/// instead of the Secret, and a `${VAR}` placeholder reaches the broker as the
+/// credential itself. A mount path that differs from `secret_dir` leaves Vector
+/// failing its start on a file that is not there.
 #[test]
-fn the_sasl_placeholders_name_the_env_vars_the_deployment_injects() {
+fn the_sasl_secret_dir_is_where_the_deployment_mounts_the_secret() {
     let values = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
     )
@@ -589,30 +594,160 @@ fn the_sasl_placeholders_name_the_env_vars_the_deployment_injects() {
             .and_then(|c| c.get(side))
             .and_then(|s| s.get("sasl"))
             .unwrap_or_else(|| panic!("chart values have no config.{side}.sasl"));
-        for (key, expected) in [
-            ("username", "${KAFKA_SASL_USERNAME}"),
-            ("password", "${KAFKA_SASL_PASSWORD}"),
-        ] {
-            assert_eq!(
-                sasl.get(key).and_then(serde_yaml_ng::Value::as_str),
-                Some(expected),
-                "chart values.yaml config.{side}.sasl.{key} must be the placeholder {expected}, \
-                 not a literal -- `toYaml .Values.config` puts it in the ConfigMap"
+        assert_eq!(
+            sasl.get("secret_dir")
+                .and_then(serde_yaml_ng::Value::as_str),
+            Some(deployment::KAFKA_SECRET_DIR),
+            "config.{side}.sasl.secret_dir must name the kafka secret mount"
+        );
+        for key in ["username", "password"] {
+            assert!(
+                sasl.get(key).is_none(),
+                "config.{side}.sasl.{key} must be left to the mounted secret -- \
+                 `toYaml .Values.config` would put it in the ConfigMap"
             );
         }
     }
 
-    // The other end: the Deployment must still set the vars they name.
+    // The other end: the Deployment mounts the secret there, as the two files.
     let deployment_yaml = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/templates/deployment.yaml"),
     )
     .expect("read deployment template");
-    for env_var in ["KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD"] {
+    assert!(
+        deployment_yaml.contains(&format!("mountPath: {}", deployment::KAFKA_SECRET_DIR)),
+        "chart/templates/deployment.yaml no longer mounts the kafka secret at {}",
+        deployment::KAFKA_SECRET_DIR
+    );
+    for file in ["path: username", "path: password"] {
         assert!(
-            deployment_yaml.contains(env_var),
-            "chart/templates/deployment.yaml no longer sets {env_var}, which the values.yaml \
-             placeholders expand from -- Vector would get an empty credential"
+            deployment_yaml.contains(file),
+            "the kafka secret volume must project `{file}`, the name Vector reads"
         );
+    }
+    assert!(
+        !deployment_yaml.contains("KAFKA_SASL_PASSWORD"),
+        "no credential is exported to the environment any more"
+    );
+}
+
+/// Vector's API takes unauthenticated requests and nothing here is a client,
+/// so no shipped artefact may publish its port.
+#[test]
+fn no_artefact_publishes_the_vector_api() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for rel in [
+        "chart/templates/deployment.yaml",
+        "chart/templates/service.yaml",
+        "Dockerfile",
+    ] {
+        let text = std::fs::read_to_string(root.join(rel)).expect("read artefact");
+        assert!(
+            !text.contains("8686"),
+            "{rel} still publishes Vector's API port"
+        );
+    }
+    let default_config = deployment::contract()
+        .default_config
+        .expect("contract carries default config");
+    assert_eq!(default_config["vector"]["api_enabled"], false);
+}
+
+/// Every config the product ships, as the app reads it.
+fn shipped_configs() -> Vec<(String, dfe_transform_vector::config::loader::Config)> {
+    use dfe_transform_vector::config::loader::Config;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+
+    let values: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(root.join("chart/values.yaml")).expect("read chart values"),
+    )
+    .expect("parse chart values");
+    out.push((
+        "chart/values.yaml".to_string(),
+        serde_yaml_ng::from_value::<Config>(values["config"].clone()).expect("chart config"),
+    ));
+
+    out.push((
+        "deployment::contract().default_config".to_string(),
+        serde_json::from_value::<Config>(
+            deployment::contract()
+                .default_config
+                .expect("contract default config"),
+        )
+        .expect("contract config"),
+    ));
+
+    for entry in std::fs::read_dir(root.join("tests/fixtures/configs")).expect("fixture configs") {
+        let path = entry.expect("fixture entry").path();
+        let text = std::fs::read_to_string(&path).expect("read fixture");
+        out.push((
+            path.display().to_string(),
+            serde_yaml_ng::from_str::<Config>(&text).expect("fixture config"),
+        ));
+    }
+    out
+}
+
+/// Vector 0.57+ expands no `${VAR}` unless started with
+/// `--dangerously-allow-env-var-interpolation`, which the supervisor never
+/// passes. A placeholder that survives assembly therefore reaches Vector as
+/// literal text: a SASL credential logs in to the broker as the string
+/// `${KAFKA_SASL_PASSWORD}`.
+#[test]
+fn no_env_placeholder_survives_assembly_of_a_shipped_config() {
+    let flag = "--dangerously-allow-env-var-interpolation";
+    assert!(
+        !dfe_transform_vector::vector::vector_args(std::path::Path::new("/cfg"))
+            .iter()
+            .any(|a| a == flag),
+        "the supervisor must not start Vector with {flag}"
+    );
+
+    for (label, mut config) in shipped_configs() {
+        let work = tempfile::tempdir().expect("work dir");
+        // Where the chart mounts the secret; stand one up so assembly can
+        // check the files are there.
+        let mounted = work.path().join("secret");
+        std::fs::create_dir_all(&mounted).expect("secret dir");
+        std::fs::write(mounted.join("username"), "u").expect("username file");
+        std::fs::write(mounted.join("password"), "p").expect("password file");
+        for sasl in [&mut config.source.sasl, &mut config.sink.sasl] {
+            if sasl.secret_dir.is_some() {
+                sasl.secret_dir = Some(mounted.to_string_lossy().into_owned());
+            }
+        }
+        // The chart names a transforms mount this machine does not have.
+        if config
+            .transforms
+            .dir
+            .as_ref()
+            .is_some_and(|d| !std::path::Path::new(d).is_dir())
+        {
+            config.transforms.dir = None;
+        }
+
+        let assembled = work.path().join("config");
+        dfe_transform_vector::config::assembler::assemble(&config, &assembled)
+            .unwrap_or_else(|e| panic!("{label} does not assemble: {e}"));
+        // The credential files Vector reads count as much as the YAML does.
+        let mut pending = vec![assembled];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("assembled dir") {
+                let path = entry.expect("assembled entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("assembled file");
+                assert!(
+                    !text.contains("${"),
+                    "{label}: {} carries a ${{...}} placeholder Vector will read literally",
+                    path.display()
+                );
+            }
+        }
     }
 }
 

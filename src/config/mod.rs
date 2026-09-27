@@ -20,6 +20,7 @@ pub mod generate;
 pub mod kafka_defaults;
 pub mod loader;
 pub mod reload;
+pub mod secrets;
 pub mod transforms;
 pub mod validate;
 pub mod wiring;

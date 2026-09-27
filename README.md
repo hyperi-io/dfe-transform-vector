@@ -56,9 +56,15 @@ On `direct` Vector does not speak scalo's `Transport/Push`, so the supervisor
 translates. It accepts records on `source.listen`, hands them to Vector over
 `bridge.to_vector`, takes them back on `bridge.from_vector`, and pushes them to
 `sink.endpoint`. Both inner legs are loopback -- they exist inside one pod.
-Nothing on that path drops a record: a hop that cannot move on holds and
-retries, which stops the listener behind it draining, so the caller upstream is
-back-pressured instead.
+A push is answered only once the next hop has its records. A hop that cannot
+move on is retried until the push's hold runs out, 18 s at `source.listen` and
+16.5 s at `bridge.from_vector`, each send to the next stage giving up after
+15 s, and then the push is answered `Unavailable` so its sender retries. A record
+no retry would get through is dropped and counted in
+`pipeline_dead_letters_dropped_total`: one over the next stage's message-size
+ceiling, or one Vector refused for good because a sink it feeds rejected it
+(`reason="rejected"`). Under memory pressure only
+`source.listen` sheds pushes; the leg back from Vector keeps draining.
 
 ## Features
 
@@ -141,7 +147,7 @@ pod ready".
 | Endpoint | Port | Purpose |
 |----------|------|---------|
 | `GET /livez` | 9090 | K8s liveness and startup probes (the supervisor is up) |
-| `GET /readyz` | 9090 | K8s readiness probe (200 only while the Vector subprocess is up -- see below) |
+| `GET /readyz` | 9090 | K8s readiness probe (200 only while the Vector subprocess is up and its sink is delivering -- see below) |
 | `GET /metrics` | 9090 | Prometheus scrape (wrapper + merged Vector metrics) |
 | `GET /metrics` | 9598 | Vector's own exporter, loopback only, for debugging |
 | `Transport/Push` | 6000 | Records in, on the direct transport only |
@@ -168,6 +174,9 @@ because Vector, not the wrapper, owns the Kafka client:
 |----------------|---------------|
 | `records_received_total` | `vector_component_received_events_total{component_id="dfe_source"}` |
 | `records_processed_total`, `records_delivered_total` | `vector_component_sent_events_total{component_id="dfe_sink"}` |
+| `records_error_total` | `vector_component_discarded_events_total` on `dfe_sink` (records it rejected) and on `dfe_size_cap` (records over the producer's `message.max.bytes`) |
+| `transform_vector_sink_errors_total` | `vector_component_errors_total{component_id="dfe_sink"}` |
+| `pipeline_dead_letters_dropped_total{reason="too_large"}` | what `vector_component_discarded_events_total{component_id="dfe_size_cap"}` grew by since the last scrape, so each drop counts once, as every other app counts a record over its ceiling |
 
 An unreachable exporter is not fatal: the scrape warns at most once every five
 minutes, counts `transform_vector_scrape_failures_total`, and leaves readiness
@@ -179,13 +188,18 @@ zeroed after `metrics.vector_metrics_expiry_ticks` scrapes without it (default
 4), rather than reading their last value until the pod restarts. Its counters
 are left flat, which already rates to zero.
 
-`/readyz` reports whether the Vector subprocess EXISTS, not whether it is
-carrying traffic. The gate is that the child was still alive 500ms after spawn,
-which rules out the crash-on-start cases (bad argv, unreadable config) and a
-pod sitting in crash-recovery backoff. Vector's own startup routinely takes
-longer than that, so there is a window where the pod reports ready and Vector
-is still coming up. Proving traffic would mean reading Vector's own API, which
-the wrapper does not do today.
+`/readyz` reports two things. First, whether the Vector subprocess EXISTS: the
+child was still alive 500ms after spawn, which rules out the crash-on-start
+cases (bad argv, unreadable config) and a pod sitting in crash-recovery
+backoff. Vector's own startup routinely takes longer than that, so there is a
+window where the pod reports ready and Vector is still coming up.
+
+Second, whether the sink is delivering. The sink never gives up on a record
+(`sink.message_timeout_ms: 0`), so a partition with no leader would otherwise
+hold records indefinitely under a live, Ready process. When the sink holds
+records and has delivered or dropped none of them for `metrics.sink_stall_secs`
+(default 60), `/readyz` answers 503 until it moves again. An idle sink is never
+stalled.
 
 ## Development
 
@@ -304,7 +318,8 @@ What green does NOT mean:
 | Point `emit-chart` at `chart/` | Render to a scratch directory and diff | `chart/` carries KEDA hand-edits the generator does not produce, including a ScaledObject addressed at `config.source.*` where the generator emits `config.kafka.*`. A test asserts the committed chart matches the generator except for four exempted files |
 | Bump the Vector version in one place | Change `VECTOR_VERSION` in `src/deployment.rs` and carry it to `chart/values.yaml` | The chart once said 0.48.0 while the image baked 0.57.0, nine minor versions apart, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
 | Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials, so Vector would run two sources and two sinks |
-| Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs, and the generated Vector YAML interpolates `${KAFKA_SASL_PASSWORD}` |
+| Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs and `Debug`, and Vector reads the credential from files through its `directory` secret backend, so it never lands in the Vector config |
+| Put a `${VAR}` placeholder in a credential or a transform | Mount the secret and set `sasl.secret_dir`, or give the credential through `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`; read the environment in VRL with `get_env_var` | Vector 0.57+ expands no `${VAR}` without `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, so the placeholder reaches the broker as the password |
 | Assume a config key you added is wired because it parses and validates | Prove it changes behaviour, and add it to the standing check that every committed config file loads | `metrics.address` and `logging.level` never left the struct. A config saying `metrics.address: 0.0.0.0:19099` still listened on 9090, so a deployment moving the metrics port lost every probe |
 | Set `enable.auto.commit: false` here, as the shared DFE consumer baseline does | Leave auto-commit on | Vector's kafka source only stores offsets and leaves librdkafka's commit timer to flush them, and that timer is armed only when auto-commit is on. Consumer lag sat at 72 across a quiet 90-second window while the app's own metrics said it had processed those same 72 events |
 | Read `/readyz` as "carrying traffic" | Read it as "the child was alive 500ms after spawn" | It once answered an unconditional 200 because nothing published a readiness signal, so Vector could crash and restart hundreds of times with the pod still Ready and zero restarts |

@@ -48,9 +48,6 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            - name: vector-api
-              containerPort: 8686
-              protocol: TCP
             {{- if eq (default "bus" ((.Values.config).source).transport) "direct" }}
             - name: push
               containerPort: {{ .Values.service.pushPort | default 6000 }}
@@ -83,21 +80,6 @@ spec:
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: {{ .Values.otel.protocol | quote }}
             {{- end }}
-            # Kafka credentials via Secret. These are NOT config overrides: the
-            # env cascade strips DFE_TRANSFORM_, so these names match no config
-            # key. Vector expands the ${KAFKA_SASL_*} placeholders in
-            # .Values.config.{source,sink}.sasl from the child process
-            # environment, which it inherits from this container.
-            - name: KAFKA_SASL_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "dfe-transform-vector.kafkaSecretName" . }}
-                  key: {{ .Values.kafka.secretKeys.username }}
-            - name: KAFKA_SASL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "dfe-transform-vector.kafkaSecretName" . }}
-                  key: {{ .Values.kafka.secretKeys.password }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -122,6 +104,13 @@ spec:
             - name: config
               mountPath: /etc/dfe-transform-vector
               readOnly: true
+            # Kafka credentials as files. config.{source,sink}.sasl.secret_dir
+            # names this path, and Vector's directory secret backend reads the
+            # two files itself, so no credential reaches the environment, the
+            # ConfigMap or the assembled Vector config.
+            - name: kafka-credentials
+              mountPath: /var/run/secrets/dfe-kafka
+              readOnly: true
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -130,6 +119,17 @@ spec:
         - name: config
           configMap:
             name: {{ include "dfe-transform-vector.fullname" . }}-config
+        - name: kafka-credentials
+          secret:
+            secretName: {{ include "dfe-transform-vector.kafkaSecretName" . }}
+            # Group-readable: the kubelet gives the files fsGroup, and the
+            # container runs as that group.
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.kafka.secretKeys.username }}
+                path: username
+              - key: {{ .Values.kafka.secretKeys.password }}
+                path: password
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

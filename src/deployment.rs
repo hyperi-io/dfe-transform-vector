@@ -43,22 +43,20 @@ pub fn contract() -> DeploymentContract {
         // /metrics, and is the only port the generated probes target. `push` is
         // the scalo Push listener the direct transport receives records on --
         // 6000 is the platform convention every DFE stage's listener uses.
+        // Vector's API gets no port: it binds loopback, when it runs at all.
         extra_ports: vec![
-            PortContract {
-                name: "push".into(),
-                port: 6000,
-                protocol: "TCP".into(),
-            },
-            PortContract {
-                name: "vector-api".into(),
-                port: 8686,
-                protocol: "TCP".into(),
-            },
+            PortContract::tcp("push", 6000)
+                .when_equals("config.source.transport", "direct")
+                .bound_from("source.listen"),
         ],
+        unbound_listen_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vector/config.yaml".into(),
         ],
+        // Drives the chart's kafka Secret and its `kafka.*` values. The committed
+        // Deployment mounts that Secret at KAFKA_SECRET_DIR rather than
+        // exporting these env vars, which nothing reads.
         secrets: vec![SecretGroupContract {
             group_name: "kafka".into(),
             env_vars: vec![
@@ -85,17 +83,16 @@ pub fn contract() -> DeploymentContract {
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vector-default",
                 "decoding": { "codec": "json" },
-                // Vector expands these when it reads its own config, from the
-                // env vars the generated Deployment fills out of the kafka
-                // secret. A literal here would land in the ConfigMap instead,
-                // and leaving them out fails validation before Vector starts.
+                // The chart mounts the kafka secret here, and Vector reads the
+                // username and password files itself, so no credential sits in
+                // the ConfigMap or in the assembled Vector config.
                 "sasl": {
                     "enabled": true,
                     "mechanism": "scram_sha_512",
-                    "username": "${KAFKA_SASL_USERNAME}",
-                    "password": "${KAFKA_SASL_PASSWORD}"
+                    "secret_dir": KAFKA_SECRET_DIR
                 },
-                "tls": { "enabled": false }
+                "tls": { "enabled": false },
+                "acknowledgements": { "enabled": true }
             },
             "sink": {
                 "transport": "bus",
@@ -108,8 +105,7 @@ pub fn contract() -> DeploymentContract {
                 "sasl": {
                     "enabled": true,
                     "mechanism": "scram_sha_512",
-                    "username": "${KAFKA_SASL_USERNAME}",
-                    "password": "${KAFKA_SASL_PASSWORD}"
+                    "secret_dir": KAFKA_SECRET_DIR
                 },
                 "tls": { "enabled": false }
             },
@@ -126,7 +122,8 @@ pub fn contract() -> DeploymentContract {
             "vector": {
                 "binary": "/usr/local/bin/vector",
                 "data_dir": "/var/lib/vector",
-                "api_address": "0.0.0.0:8686",
+                "api_enabled": false,
+                "api_address": "127.0.0.1:8686",
                 "log_level": "info",
                 "version": VECTOR_VERSION,
                 "version_check": "warn"
@@ -137,7 +134,8 @@ pub fn contract() -> DeploymentContract {
             "metrics": {
                 "address": "0.0.0.0:9090",
                 "vector_metrics_address": "127.0.0.1:9598",
-                "vector_metrics_expiry_ticks": 4
+                "vector_metrics_expiry_ticks": 4,
+                "sink_stall_secs": 60
             },
             "logging": {
                 "level": "info",
@@ -209,6 +207,9 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
     ]
 }
 
+/// Where the chart mounts the kafka secret, one file per credential.
+pub const KAFKA_SECRET_DIR: &str = "/var/run/secrets/dfe-kafka";
+
 /// Vector.dev version bundled into the published image.
 ///
 /// Pinned. Update deliberately — Vector minor versions can change CLI
@@ -267,13 +268,22 @@ pub fn emit_dockerfile() -> String {
     // breaks if the generator's shape changes. Panicking is deliberate -- the
     // alternative is emitting a Dockerfile that silently drops the Vector
     // install and produces an image whose second binary is simply absent.
-    let Some(idx) = base.find("\nUSER ") else {
+    let Some(user) = base.find("\nUSER ") else {
         panic!(
             "scalo generate_dockerfile() output has no `USER ` directive to \
              splice the Vector install before. scalo's generator shape changed; \
              review this override rather than working around it."
         );
     };
+
+    // The comment lines directly above `USER` describe it, so they stay with it.
+    let mut idx = user;
+    while let Some(prev) = base[..idx].rfind('\n') {
+        if !base[prev + 1..idx].starts_with('#') {
+            break;
+        }
+        idx = prev;
+    }
 
     // +1 to keep the newline with `before`, so the splice starts on its own line.
     let (before, after) = base.split_at(idx + 1);
