@@ -59,8 +59,11 @@ pub struct KafkaFixture {
 
 /// Opaque wrapper around the testcontainers Kafka container.
 /// Drop = stop container (handled by testcontainers-rs).
-struct KafkaContainerHandle {
-    _inner: testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>,
+enum KafkaContainerHandle {
+    /// The PLAINTEXT broker from the testcontainers module.
+    Plaintext(testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>),
+    /// The SASL/SCRAM-SHA-512 broker [`KafkaFixture::scram`] starts.
+    Scram(testcontainers::ContainerAsync<testcontainers::GenericImage>),
 }
 
 impl KafkaFixture {
@@ -120,6 +123,27 @@ impl KafkaFixture {
             }
             Err(e) => {
                 eprintln!("kafka fixture: UNAVAILABLE — testcontainers failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Acquire a broker this test OWNS that only accepts SASL/SCRAM-SHA-512,
+    /// the way every DFE tier's broker does.
+    ///
+    /// Every other fixture is PLAINTEXT, so nothing else here exercises the
+    /// credential path. Returns `None` when no container can be started.
+    pub async fn scram(test: &str) -> Option<Self> {
+        match try_scram_testcontainer(test).await {
+            Ok(fixture) => {
+                eprintln!(
+                    "kafka fixture: using an OWNED SCRAM TESTCONTAINER at {:?}",
+                    fixture.config.brokers
+                );
+                Some(fixture)
+            }
+            Err(e) => {
+                eprintln!("kafka fixture: UNAVAILABLE — SCRAM testcontainer failed: {e}");
                 None
             }
         }
@@ -402,7 +426,99 @@ async fn try_testcontainer(test: &str) -> Result<KafkaFixture, String> {
     Ok(KafkaFixture {
         config,
         mode: FixtureMode::Testcontainer,
-        container: Some(KafkaContainerHandle { _inner: container }),
+        container: Some(KafkaContainerHandle::Plaintext(container)),
+    })
+}
+
+/// Username the SCRAM broker bootstraps at format time.
+const SCRAM_USERNAME: &str = "dfe-test-user";
+
+/// Password of [`SCRAM_USERNAME`]; a fixture's, never a deployment's.
+const SCRAM_PASSWORD: &str = "scram-test-password";
+
+/// One KRaft node that serves SASL_PLAINTEXT with SCRAM-SHA-512 only, its user
+/// written in at format time -- the shape of the DFE single tier's broker.
+const SCRAM_BROKER_SCRIPT: &str = r#"set -e
+CONF=/tmp/server.properties
+cat > "$CONF" <<EOF
+process.roles=broker,controller
+node.id=1
+controller.quorum.voters=1@localhost:9093
+listeners=SASL_PLAINTEXT://:9092,CONTROLLER://:9093
+advertised.listeners=SASL_PLAINTEXT://${ADVERTISED_ADDRESS}
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+controller.listener.names=CONTROLLER
+inter.broker.listener.name=SASL_PLAINTEXT
+sasl.enabled.mechanisms=SCRAM-SHA-512
+sasl.mechanism.inter.broker.protocol=SCRAM-SHA-512
+listener.name.sasl_plaintext.scram-sha-512.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="${SCRAM_USERNAME}" password="${SCRAM_PASSWORD}";
+log.dirs=/tmp/kafka-data
+offsets.topic.replication.factor=1
+transaction.state.log.replication.factor=1
+transaction.state.log.min.isr=1
+group.initial.rebalance.delay.ms=0
+EOF
+/opt/kafka/bin/kafka-storage.sh format -t "$(/opt/kafka/bin/kafka-storage.sh random-uuid)" -c "$CONF" \
+  --add-scram "SCRAM-SHA-512=[name=${SCRAM_USERNAME},password=${SCRAM_PASSWORD}]"
+exec /opt/kafka/bin/kafka-server-start.sh "$CONF"
+"#;
+
+/// Spawn an ephemeral Apache Kafka container that only accepts
+/// SASL/SCRAM-SHA-512, and a fixture config that authenticates to it.
+///
+/// `test` names the calling test and goes into the container name, so
+/// concurrent tests do not collide on it.
+async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
+    use testcontainers::core::{IntoContainerPort, WaitFor};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::{GenericImage, ImageExt};
+
+    // The broker image the single tier runs, digest-pinned.
+    // renovate: datasource=docker depName=apache/kafka
+    const KAFKA_TAG: &str =
+        "4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837";
+
+    // The broker tells clients to reconnect to the address it advertises, so
+    // the host port is chosen before it starts rather than read back after.
+    let address = free_port().await;
+    let host_port: u16 = address
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .ok_or_else(|| format!("no port in {address}"))?;
+
+    let name = container_name(Some(test), "kafka-scram");
+    reap_stale(&name);
+    let container = GenericImage::new("apache/kafka", KAFKA_TAG)
+        .with_entrypoint("/bin/sh")
+        .with_exposed_port(9092.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
+        .with_cmd(["-c", SCRAM_BROKER_SCRIPT])
+        .with_env_var("ADVERTISED_ADDRESS", address.clone())
+        .with_env_var("SCRAM_USERNAME", SCRAM_USERNAME)
+        .with_env_var("SCRAM_PASSWORD", SCRAM_PASSWORD)
+        .with_mapped_port(host_port, 9092.tcp())
+        .with_container_name(&name)
+        .with_labels(test_labels("kafka-scram"))
+        .start()
+        .await
+        .map_err(|e| format!("start SCRAM kafka container: {e}"))?;
+
+    let config = KafkaConfig {
+        profile: KafkaProfile::DevTest,
+        brokers: vec![address],
+        group: "dfe-transform-vector-tests".into(),
+        security_protocol: "SASL_PLAINTEXT".into(),
+        sasl_mechanism: Some("SCRAM-SHA-512".into()),
+        sasl_username: Some(SCRAM_USERNAME.into()),
+        sasl_password: Some(SensitiveString::new(SCRAM_PASSWORD)),
+        ..Default::default()
+    };
+
+    Ok(KafkaFixture {
+        config,
+        mode: FixtureMode::Testcontainer,
+        container: Some(KafkaContainerHandle::Scram(container)),
     })
 }
 

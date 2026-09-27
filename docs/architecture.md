@@ -169,12 +169,7 @@ Vector's `directory` secret backend reads it from files: the mounted secret at
 `<config_dir>/.secrets` from a credential given as text. Changing the type to
 look safer breaks authentication.
 
-**Vector expands no `${VAR}`.** Since 0.57 interpolation needs
-`--dangerously-allow-env-var-interpolation`, which the supervisor never passes,
-so a `${...}` in the config reaches Vector as literal text. `validate()` refuses
-one in a SASL credential, and `vector validate` does not resolve `SECRET[...]`
-either: a missing secret file fails only when Vector starts, which is why the
-assembler checks `secret_dir` itself.
+**Vector expands no `${VAR}`, and `vector validate` resolves no `SECRET[...]`.** Since 0.57 interpolation needs `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, and `validate()` refuses a `${...}` in a SASL credential. Validate would hand the broker the literal `SECRET[...]` reference, so the supervisor runs it with `--no-environment`, and a missing secret file fails only when Vector starts -- which is why the assembler checks `secret_dir` itself.
 
 **Vector is redistributed unmodified under MPL-2.0.** That carries two
 obligations -- ship the licence text and tell recipients where the source is.

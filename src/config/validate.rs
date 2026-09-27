@@ -8,12 +8,13 @@
 
 //! Vector validate integration.
 //!
-//! Shells out to `vector validate --config-dir <path>` and interprets
-//! the exit code:
+//! Shells out to `vector validate --no-environment --config-dir <path>` and
+//! interprets the exit code:
 //! - 0: valid configuration
 //! - 78: configuration error (YAML syntax, VRL type mismatch, etc.)
 //! - Other: system error (binary not found, permissions, etc.)
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -26,7 +27,26 @@ use crate::Result;
 /// Exit code for Vector configuration errors.
 const VECTOR_CONFIG_ERROR_EXIT: i32 = 78;
 
+/// The argv `vector validate` is run with.
+///
+/// `--no-environment`: validate loads the config without its secret backends,
+/// so a `SECRET[...]` credential would reach the broker as the literal
+/// reference. The running Vector resolves the secrets and runs the health
+/// checks itself.
+#[must_use]
+pub fn validate_args(config_dir: &Path) -> Vec<OsString> {
+    vec![
+        "validate".into(),
+        "--no-environment".into(),
+        "--config-dir".into(),
+        config_dir.as_os_str().to_owned(),
+    ]
+}
+
 /// Run `vector validate` against the assembled config directory.
+///
+/// Checks the config itself, the VRL of every transform included, and nothing
+/// that needs the broker -- see [`validate_args`].
 ///
 /// Returns `Ok(())` if validation passes, or an error with details
 /// from Vector's stderr output.
@@ -40,9 +60,7 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
     );
 
     let mut cmd = tokio::process::Command::new(binary);
-    cmd.arg("validate")
-        .arg("--config-dir")
-        .arg(config_dir)
+    cmd.args(validate_args(config_dir))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -353,6 +371,25 @@ pub fn warn_if_disk_buffer_is_ephemeral(config_dir: &Path, vector_config: &Vecto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without `--no-environment`, validate hands a SASL broker the literal
+    /// `SECRET[...]` reference and startup fails on "invalid credentials".
+    #[test]
+    fn startup_validation_stays_off_the_broker() {
+        let args: Vec<String> = validate_args(Path::new("/var/run/vector/config"))
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "validate",
+                "--no-environment",
+                "--config-dir",
+                "/var/run/vector/config"
+            ]
+        );
+    }
 
     #[test]
     fn parse_version_standard() {

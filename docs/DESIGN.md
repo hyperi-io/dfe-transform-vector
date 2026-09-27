@@ -693,7 +693,7 @@ The two-layer restart model (wrapper restarts Vector, K8s restarts wrapper) prov
 6. Load user transform YAMLs
 7. Run DAG wiring + validation
 8. Assemble config directory
-9. Run `vector validate --config-dir`
+9. Run `vector validate --no-environment --config-dir` (the broker is Vector's to reach, at runtime)
 10. Publish the lifecycle into scalo's health registry (readiness: NOT READY)
 11. Spawn Vector child process
 12. Wait out the settle window (`SPAWN_SETTLE`, 500ms)
