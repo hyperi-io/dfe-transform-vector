@@ -144,9 +144,8 @@ impl Default for DecodingConfig {
 /// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
 ///   chart's KEDA triggers (consumer-group lag and CPU), gated by the
 ///   subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
-///   scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
-///   which this app does not initialise, so the engine keys
-///   (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
+///   scalo's runtime reads its own `scaling.enabled` and
+///   `scaling.memory_gate_threshold` from the cascade, not this key.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
@@ -657,6 +656,26 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
 
+/// Set up scalo's cascade with the loaded config file as its settings layer.
+///
+/// This app reads its own sections from the file directly, but the sections
+/// scalo's runtime owns (`version_check`, `metrics` and the rest) resolve from
+/// the cascade alone. A reload re-enters here, and the cascade is set once per
+/// process.
+fn init_cascade(path: Option<&str>) -> Result<()> {
+    let opts = scalo::config::ConfigOptions {
+        env_prefix: ENV_PREFIX.to_string(),
+        config_paths: path.map(std::path::PathBuf::from).into_iter().collect(),
+        // `Config::load` has already read `.env` into the process environment.
+        load_dotenv: false,
+        ..Default::default()
+    };
+    match scalo::config::setup(opts) {
+        Ok(()) | Err(scalo::config::ConfigError::AlreadyInitialised) => Ok(()),
+        Err(e) => Err(crate::Error::Config(format!("failed to setup config: {e}"))),
+    }
+}
+
 /// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
 fn apply_figment_env(config: &mut Config) -> Result<()> {
     use figment::Figment;
@@ -825,6 +844,7 @@ impl Config {
 
         // Start with defaults
         let mut config = Config::default();
+        let mut loaded_from = None;
 
         // Load YAML config file (overrides defaults).
         //
@@ -845,6 +865,7 @@ impl Config {
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
             config = serde_yaml_ng::from_str(&content)?;
             debug!(path, "loaded configuration file");
+            loaded_from = Some(path);
         } else {
             for path in &["config.yaml", "config.yml"] {
                 if Path::new(path).exists() {
@@ -852,10 +873,13 @@ impl Config {
                         .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
                     config = serde_yaml_ng::from_str(&content)?;
                     debug!(path, "loaded configuration file");
+                    loaded_from = Some(*path);
                     break;
                 }
             }
         }
+
+        init_cascade(loaded_from)?;
 
         // Apply figment env vars (DFE_TRANSFORM_SECTION__FIELD)
         apply_figment_env(&mut config)?;
@@ -915,9 +939,10 @@ impl Config {
     ///
     /// `ServiceRuntime` binds [`CommonArgs::effective_metrics_addr`] and the
     /// logger is built from `effective_log_level`/`effective_log_format`. Those
-    /// fall through to scalo's OWN config cascade, which this app never
-    /// initialises -- so a value set in this app's config file reaches nothing
-    /// unless it is put where the resolvers look.
+    /// fall through to scalo's config cascade, which reads `logger.*` rather
+    /// than `logging.*` and none of the flat `DFE_TRANSFORM_*` overrides -- so
+    /// a value set here reaches nothing unless it is put where the resolvers
+    /// look.
     ///
     /// Only fills a slot the CLI flag and its environment variable both left
     /// empty, so the documented precedence still holds: flag, then environment,

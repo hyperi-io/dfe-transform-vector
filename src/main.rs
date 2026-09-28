@@ -240,10 +240,9 @@ async fn main() {
 
     // `run_app` binds the metrics listener on `CommonArgs::effective_metrics_addr()`
     // and builds the logger from `effective_log_level()`/`effective_log_format()`.
-    // Unset, those fall through to scalo's OWN config cascade -- which this app
-    // never initialises -- so `metrics.address` and `logging.*` from THIS app's
-    // config file reached nothing: the listener bound 0.0.0.0:9090 whatever the
-    // ConfigMap said. Fill the args from the loaded config first; the flags and
+    // Unset, those fall through to scalo's config cascade, which reads `logger.*`
+    // rather than this app's `logging.*` and none of the flat `DFE_TRANSFORM_*`
+    // overrides. Fill the args from the loaded config first; the flags and
     // their env vars are already set by then, so they still win.
     //
     // A load error is swallowed here on purpose: `run_app` loads the same config
@@ -522,4 +521,83 @@ async fn run_transform_service(
     bridged?;
     info!("shutdown complete");
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// The env opt-out the charts render from the shared transform prefix.
+    const ENABLED_VAR: &str = "DFE_TRANSFORM_VERSION_CHECK__ENABLED";
+
+    /// Serialises the tests that set process-wide env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A config that passes `validate`, plus `extra` top-level YAML.
+    fn config_yaml(extra: &str) -> String {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/configs/minimal.yaml"
+        );
+        let base = std::fs::read_to_string(fixture).expect("read fixture");
+        format!("{base}{extra}")
+    }
+
+    /// The version check `ServiceRuntime::build` resolves after `load_config`
+    /// reads `yaml` as the `--config` file, with the env opt-out at `enabled`.
+    ///
+    /// The cascade is a process-global `OnceLock`, so each caller needs its own
+    /// process, which nextest gives every test.
+    #[allow(unsafe_code)]
+    fn resolved_version_check(yaml: &str, enabled: Option<&str>) -> VersionCheckConfig {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("transform.yaml");
+        std::fs::write(&path, yaml).expect("write config");
+        let path = path.to_str().expect("utf-8 path");
+
+        // SAFETY: test-only, serialised by ENV_LOCK
+        unsafe {
+            match enabled {
+                Some(v) => std::env::set_var(ENABLED_VAR, v),
+                None => std::env::remove_var(ENABLED_VAR),
+            }
+        }
+        let app = App::parse_from(["dfe-transform-vector", "--config", path]);
+        app.load_config(Some(path)).expect("config loads");
+        let resolved =
+            VersionCheckConfig::from_cascade_or(app.name(), "0.0.0", app.version_check_defaults());
+        // SAFETY: test-only, serialised by ENV_LOCK
+        unsafe { std::env::remove_var(ENABLED_VAR) };
+        resolved
+    }
+
+    #[test]
+    fn version_check_env_opt_out_stops_the_check() {
+        let resolved = resolved_version_check(&config_yaml(""), Some("false"));
+        assert!(
+            !resolved.enabled,
+            "{ENABLED_VAR}=false must stop the check under --config"
+        );
+    }
+
+    #[test]
+    fn version_check_config_file_opt_out_stops_the_check() {
+        let yaml = config_yaml("\nversion_check:\n  enabled: false\n");
+        let resolved = resolved_version_check(&yaml, None);
+        assert!(
+            !resolved.enabled,
+            "version_check.enabled: false in the --config file must stop the check"
+        );
+    }
+
+    #[test]
+    fn version_check_stays_on_by_default() {
+        let resolved = resolved_version_check(&config_yaml(""), None);
+        assert!(resolved.enabled, "phone-home is on unless opted out");
+        assert_eq!(resolved.api_url, "https://releases.hyperi.io/api/v1/check");
+    }
 }

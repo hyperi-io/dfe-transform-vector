@@ -25,9 +25,8 @@ description: |-
   - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
     chart's KEDA triggers (consumer-group lag and CPU), gated by the
     subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
-    scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
-    which this app does not initialise, so the engine keys
-    (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
+    scalo's runtime reads its own `scaling.enabled` and
+    `scaling.memory_gate_threshold` from the cascade, not this key.
 type: object
 properties:
   dfe_source:
