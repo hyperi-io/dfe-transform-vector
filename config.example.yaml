@@ -177,13 +177,10 @@ logging:
 # -----------------------------------------------------------------------------
 # Scaling pressure
 # -----------------------------------------------------------------------------
-# NOTHING IN THIS PROCESS READS THIS BLOCK. It is accepted for parity with the
-# `scaling:` block every DFE service takes, and `pressure_threshold` is
-# range-checked, but no code consumes either half:
-#   - the engine keys (enabled / interval_secs / transport / params) belong to
-#     scalo's ScalingEngine, which reads them from scalo's own config cascade.
-#     This app does not initialise that cascade, so they never arrive.
-#   - `pressure_threshold` has no reader here at all.
+# NOTHING IN THIS APP READS `pressure_threshold`. It is accepted for parity
+# with the `scaling:` block every DFE service takes, and range-checked. scalo's
+# runtime reads its own `enabled` and `memory_gate_threshold` keys from this
+# block for the pressure gauge the subprocess circuit gates.
 #
 # What actually scales this app is the chart's KEDA triggers -- consumer-group
 # lag and CPU -- gated by the Vector subprocess circuit, which pins pressure to
