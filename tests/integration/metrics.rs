@@ -460,6 +460,72 @@ async fn unreachable_exporter_counts_and_does_not_panic() {
     assert!(value >= 1.0, "scrape failures were not counted:\n{output}");
 }
 
+/// An ACL or missing-topic outage on the bus: the broker refuses every record,
+/// Vector drops each one and commits past it, and nothing reaches the topic.
+///
+/// Only the sink's discard count moves, which must neither read as delivery --
+/// the pod stays not ready -- nor go uncounted where an operator alerts.
+#[tokio::test]
+async fn a_sink_the_broker_refuses_everything_is_not_ready_and_counts_rejected() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use dfe_transform_vector::metrics::scrape::spawn_vector_scrape_task;
+
+    let (addr, server) = crate::common::serve_expositions(|n| {
+        let refused = 5 * (n + 1);
+        format!(
+            "# TYPE vector_component_received_events_total counter\n\
+             vector_component_received_events_total{{component_id=\"dfe_sink\"}} {}\n\
+             # TYPE vector_component_sent_events_total counter\n\
+             vector_component_sent_events_total{{component_id=\"dfe_sink\"}} 10\n\
+             # TYPE vector_component_discarded_events_total counter\n\
+             vector_component_discarded_events_total{{component_id=\"dfe_sink\",intentional=\"false\"}} {refused}\n",
+            10 + refused
+        )
+    })
+    .await;
+
+    let manager = metrics_manager();
+    let metrics = Arc::new(WrapperMetrics::register(manager, "refused-sink-test"));
+    let stalled = Arc::new(AtomicBool::new(false));
+    let task = spawn_vector_scrape_task(
+        metrics,
+        addr,
+        Duration::from_millis(20),
+        4,
+        Duration::from_millis(300),
+        stalled.clone(),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !stalled.load(Ordering::Relaxed) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let reported_stalled = stalled.load(Ordering::Relaxed);
+    task.abort();
+    server.abort();
+
+    assert!(
+        reported_stalled,
+        "every record refused and none delivered, yet the sink still reads as making progress"
+    );
+    let output = manager.render();
+    let rejected = output
+        .lines()
+        .find(|l| {
+            l.starts_with("dfe_pipeline_dead_letters_dropped_total")
+                && l.contains("reason=\"rejected\"")
+        })
+        .and_then(|l| l.rsplit(' ').next())
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    assert!(
+        rejected >= 5.0,
+        "the refused records are not counted as rejected dead letters:\n{output}"
+    );
+}
+
 // The probe endpoints are exercised in `tests/integration/lifecycle.rs`, which
 // registers into scalo's process-global health registry and must be the only
 // test that does.

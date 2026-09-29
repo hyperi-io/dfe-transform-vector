@@ -345,7 +345,7 @@ pub struct SinkConfig {
     pub key_field: String,
     /// Encoding codec: json, raw_bytes.
     pub encoding: String,
-    /// Compression: none, gzip, lz4, snappy, zstd.
+    /// Compression: none, gzip, lz4, snappy, zstd. Default: zstd.
     pub compression: String,
     /// SASL authentication.
     pub sasl: SaslConfig,
@@ -376,7 +376,7 @@ impl Default for SinkConfig {
             topic: String::new(),
             key_field: String::new(),
             encoding: "json".to_string(),
-            compression: "none".to_string(),
+            compression: "zstd".to_string(),
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
             buffer: BufferConfig::default(),
@@ -571,8 +571,9 @@ pub struct MetricsConfig {
     /// Scrape ticks a merged `vector_*` gauge may go unseen before it is
     /// zeroed, so a component Vector drops stops reporting its last value.
     pub vector_metrics_expiry_ticks: u32,
-    /// Seconds the sink may hold records without delivering or dropping any
-    /// before `/readyz` reports not ready. 0 never does. Default: 60.
+    /// Seconds the sink may hold records, or have the broker refuse them,
+    /// without delivering any before `/readyz` reports not ready. 0 never does.
+    /// Default: 60.
     pub sink_stall_secs: u64,
 }
 

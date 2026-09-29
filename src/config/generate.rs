@@ -1186,6 +1186,33 @@ mod tests {
         assert!(text.contains("timeout_secs: 2"));
     }
 
+    /// The stack's producer compression is zstd, so a sink that names none
+    /// compresses with it rather than sending batches raw.
+    #[test]
+    fn a_sink_that_names_no_compression_uses_zstd() {
+        assert_eq!(SinkConfig::default().compression, "zstd");
+        let yaml = generate_sink_yaml(
+            &SinkConfig::default(),
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+        );
+        let sink = yaml
+            .get("sinks")
+            .and_then(|s| s.get(SINK_LABEL))
+            .expect("the kafka sink");
+        assert_eq!(
+            sink.get("compression").and_then(Value::as_str),
+            Some("zstd")
+        );
+        assert_eq!(
+            sink.get("librdkafka_options")
+                .and_then(|o| o.get("compression.type"))
+                .and_then(Value::as_str),
+            Some("zstd")
+        );
+    }
+
     #[test]
     fn sink_yaml_no_compression_sets_none_in_librdkafka() {
         let sink = SinkConfig {

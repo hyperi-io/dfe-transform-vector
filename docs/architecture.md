@@ -105,12 +105,7 @@ S3-backed mounts -- s3fs, goofys, Mountpoint for S3 -- generate no filesystem
 notification events. Swapping in inotify would work on every developer laptop
 and silently stop reloading in production.
 
-**Only transforms hot-reload.** A transform change is validated and then
-SIGHUPed into Vector. Everything else needs a pod restart, and not by policy:
-the consumer and the Push listener are established at startup, the bridge legs
-bind at startup, the consumer group id and metrics labels are set at startup,
-and the ops listener is bound at startup. A change that classifies as
-transforms-only when it is not logs a successful reload for work it never did.
+**Only transforms hot-reload.** A transform change is validated, SIGHUPed into Vector, and reported from Vector's reload counters, since the signal succeeds even when Vector refuses it. Everything else needs a pod restart, and not by policy: the consumer, the Push listener, the bridge legs, the consumer group id, the metrics labels and the ops listener are all set at startup. A change that classifies as transforms-only when it is not logs a successful reload for work it never did.
 
 **A push on the direct path is answered only once the next hop has it.** Both
 bridge listeners are built armed, so a push is held until the pipeline releases

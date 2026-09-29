@@ -72,7 +72,7 @@
         "topic": "",
         "key_field": "",
         "encoding": "json",
-        "compression": "none",
+        "compression": "zstd",
         "sasl": {
           "enabled": false,
           "mechanism": "scram_sha_512",
@@ -453,9 +453,9 @@
           "default": "json"
         },
         "compression": {
-          "description": "Compression: none, gzip, lz4, snappy, zstd.",
+          "description": "Compression: none, gzip, lz4, snappy, zstd. Default: zstd.",
           "type": "string",
-          "default": "none"
+          "default": "zstd"
         },
         "sasl": {
           "description": "SASL authentication.",
@@ -709,7 +709,7 @@
           "default": 4
         },
         "sink_stall_secs": {
-          "description": "Seconds the sink may hold records without delivering or dropping any\nbefore `/readyz` reports not ready. 0 never does. Default: 60.",
+          "description": "Seconds the sink may hold records, or have the broker refuse them,\nwithout delivering any before `/readyz` reports not ready. 0 never does.\nDefault: 60.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0,

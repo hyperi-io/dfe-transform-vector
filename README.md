@@ -73,8 +73,7 @@ ceiling, or one Vector refused for good because a sink it feeds rejected it
 - **DAG auto-wiring**: User-supplied transform YAMLs are loaded, validated, and
   wired between `dfe_source` and `dfe_sink` automatically
 - **Crash recovery**: Exponential backoff restarts (1s-60s), K8s-aware readiness
-- **Hot-reload**: Poll-based file watcher detects transform changes, validates,
-  then SIGHUPs Vector (source/sink changes require pod restart)
+- **Hot-reload**: Poll-based file watcher detects transform changes, validates, SIGHUPs Vector, then reads Vector's own counters for whether it applied the change (source/sink changes require pod restart)
 - **Version pinning**: Config-level Vector version check (strict/warn/disabled)
 - **Production Kafka tuning**: librdkafka defaults baked in with 4-layer cascade
 - **Metrics**: Vector's own `vector_*` merged into the wrapper's registry, so one
@@ -139,6 +138,8 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 - `metrics.*` -- the ops HTTP server is bound at startup
 - `logging.*` -- tracing subscriber configured at startup
 
+A transform change is re-assembled and validated first, including that every enrichment table file it names can be read: `vector validate --no-environment` never opens those files. Vector then applies the change, or refuses it and keeps the config it was running, and the SIGHUP succeeds either way. So the supervisor reads the outcome from Vector's `vector_reloaded_total` and `vector_component_errors_total{error_code="reload"}`, counts it in `transform_vector_config_reloads_total` as `success`, `error` or `unconfirmed`, and on a refusal puts the assembled config back to what Vector runs.
+
 ## Endpoints
 
 One port carries the whole ops surface, so there is a single answer to "is this
@@ -177,6 +178,7 @@ because Vector, not the wrapper, owns the Kafka client:
 | `records_error_total` | `vector_component_discarded_events_total` on `dfe_sink` (records it rejected) and on `dfe_size_cap` (records over the producer's `message.max.bytes`) |
 | `transform_vector_sink_errors_total` | `vector_component_errors_total{component_id="dfe_sink"}` |
 | `pipeline_dead_letters_dropped_total{reason="too_large"}` | what `vector_component_discarded_events_total{component_id="dfe_size_cap"}` grew by since the last scrape, so each drop counts once, as every other app counts a record over its ceiling |
+| `pipeline_dead_letters_dropped_total{reason="rejected"}` | what `vector_component_discarded_events_total{component_id="dfe_sink"}` grew by since the last scrape: records the broker refused for good -- an unknown topic, a failed authorisation, an invalid record |
 
 An unreachable exporter is not fatal: the scrape warns at most once every five
 minutes, counts `transform_vector_scrape_failures_total`, and leaves readiness
@@ -194,12 +196,7 @@ cases (bad argv, unreadable config) and a pod sitting in crash-recovery
 backoff. Vector's own startup routinely takes longer than that, so there is a
 window where the pod reports ready and Vector is still coming up.
 
-Second, whether the sink is delivering. The sink never gives up on a record
-(`sink.message_timeout_ms: 0`), so a partition with no leader would otherwise
-hold records indefinitely under a live, Ready process. When the sink holds
-records and has delivered or dropped none of them for `metrics.sink_stall_secs`
-(default 60), `/readyz` answers 503 until it moves again. An idle sink is never
-stalled.
+Second, whether the sink is delivering. The sink never gives up on a record (`sink.message_timeout_ms: 0`), so a partition with no leader would otherwise hold records indefinitely under a live, Ready process. A record the broker refuses for good is dropped instead, so an ACL or missing-topic outage loses everything while the counters move. When the sink holds records, or has had records refused, and has delivered none for `metrics.sink_stall_secs` (default 60), `/readyz` answers 503 until it delivers again. An idle sink is never stalled.
 
 ## Development
 
