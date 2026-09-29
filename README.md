@@ -274,7 +274,6 @@ deployment asks for it.
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
 | `pipelines/filebeat/` | The shipped filebeat pipeline |
 | `chart/` | The committed Helm chart. Carries KEDA hand-edits, so NOT pure generator output |
-| `deploy/` | Argo Application and the helm kustomization overlays |
 | `docs/` | `architecture.md` for the shape and the invariants, `DESIGN.md` for field-by-field depth, `MIGRATION.md`, `LIBRDKAFKA.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
