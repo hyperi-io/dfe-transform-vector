@@ -375,6 +375,19 @@ pub fn reap_stale(name: &str) {
         .status();
 }
 
+/// The broker image the single tier runs, for both fixtures, digest-pinned. The JVM image:
+/// `apache/kafka-native` before 4.4.0 segfaults in `getpwuid` on ~2% of starts.
+///
+/// renovate: datasource=docker depName=apache/kafka
+const KAFKA_TAG: &str = "4.3.1";
+
+/// Digest of `KAFKA_TAG`, apart from it because the Renovate regex stops at a colon.
+const KAFKA_DIGEST: &str =
+    "sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837";
+
+/// A JVM broker takes 5-12 s to become ready, longer on a busy runner, so 60 s is too tight.
+const KAFKA_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Spawn an ephemeral Apache Kafka container (testcontainers).
 ///
 /// The container runs in PLAINTEXT mode (no SASL/TLS) — sufficient for
@@ -388,18 +401,14 @@ async fn try_testcontainer(test: &str) -> Result<KafkaFixture, String> {
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::kafka::apache;
 
-    // Pinned here, not left to the module default of 3.8.0. A tag baked into a
-    // dependency's source is invisible to dependency review: Renovate reads
-    // Cargo.toml, correctly reports the crate current, and never sees the image.
-    // renovate: datasource=docker depName=apache/kafka-native
-    const KAFKA_TAG: &str = "4.3.1";
-
     let name = container_name(Some(test), "kafka");
     reap_stale(&name);
     let container = apache::Kafka::default()
-        .with_tag(KAFKA_TAG)
+        .with_jvm_image()
+        .with_tag(format!("{KAFKA_TAG}@{KAFKA_DIGEST}"))
         .with_container_name(&name)
         .with_labels(test_labels("kafka"))
+        .with_startup_timeout(KAFKA_STARTUP_TIMEOUT)
         .start()
         .await
         .map_err(|e| format!("start kafka container: {e}"))?;
@@ -473,11 +482,6 @@ async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
     use testcontainers::runners::AsyncRunner;
     use testcontainers::{GenericImage, ImageExt};
 
-    // The broker image the single tier runs, digest-pinned.
-    // renovate: datasource=docker depName=apache/kafka
-    const KAFKA_TAG: &str =
-        "4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837";
-
     // The broker tells clients to reconnect to the address it advertises, so
     // the host port is chosen before it starts rather than read back after.
     let address = free_port().await;
@@ -489,7 +493,8 @@ async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
 
     let name = container_name(Some(test), "kafka-scram");
     reap_stale(&name);
-    let container = GenericImage::new("apache/kafka", KAFKA_TAG)
+    let image_tag = format!("{KAFKA_TAG}@{KAFKA_DIGEST}");
+    let container = GenericImage::new("apache/kafka", image_tag.as_str())
         .with_entrypoint("/bin/sh")
         .with_exposed_port(9092.tcp())
         .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
@@ -500,6 +505,7 @@ async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
         .with_mapped_port(host_port, 9092.tcp())
         .with_container_name(&name)
         .with_labels(test_labels("kafka-scram"))
+        .with_startup_timeout(KAFKA_STARTUP_TIMEOUT)
         .start()
         .await
         .map_err(|e| format!("start SCRAM kafka container: {e}"))?;
