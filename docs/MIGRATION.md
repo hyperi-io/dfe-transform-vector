@@ -101,9 +101,9 @@ Key differences:
 
 ### What Stays the Same
 
-- **ExternalSecrets**: Same `kafka-sasl-secret` and `tenant-artifactory` — no changes
-- **KEDA TriggerAuthentication**: Same secret references — no changes
-- **Karpenter NodePools**: Same `vector_node` role and `dedicated: vector` taint — no changes
+- **Secrets**: the chart creates none. The Kafka SASL secret and any artefact-store credential come from wherever your deployment already supplies them
+- **KEDA TriggerAuthentication**: keeps pointing at the same Kafka credential secret
+- **Node placement**: set the chart's `nodeSelector` and `tolerations` to match your existing pool
 - **Transform YAML delivery**: Same Artifactory ZIP download pattern via init container
 
 ### What Changes
