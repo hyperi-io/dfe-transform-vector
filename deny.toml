@@ -23,7 +23,7 @@ allow = [
     "OpenSSL",
     # webpki-root-certs/webpki-roots (via reqwest -> rustls-platform-verifier)
     # relicensed MPL-2.0 -> CDLA-Permissive-2.0; the CCADB cert data is a
-    # permissive data licence. Matches rustlib's own deny.toml allowance.
+    # permissive data licence. Matches scalo's own deny.toml allowance.
     "CDLA-Permissive-2.0",
 ]
 

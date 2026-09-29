@@ -36,17 +36,21 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
-    // The probe paths above are all served on metrics_port; the extra ports are
-    // the direct transport's Push listener and Vector's own API, and nothing else.
+    // The probe paths above are all served on metrics_port; the one extra port
+    // is the direct transport's Push listener, and it listens only there.
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(port_names, vec!["push", "vector-api"]);
-
-    let vector_api = c
-        .extra_ports
-        .iter()
-        .find(|p| p.name == "vector-api")
-        .unwrap();
-    assert_eq!(vector_api.port, 8686);
+    assert_eq!(port_names, vec!["push"]);
+    let push = &c.extra_ports[0];
+    assert_eq!(
+        push.when.as_ref().map(ToString::to_string).as_deref(),
+        Some("config.source.transport is \"direct\""),
+        "the Push port must render only on the direct transport"
+    );
+    assert!(
+        c.undeclared_listeners().is_empty(),
+        "every listener in default_config needs a port: {:?}",
+        c.undeclared_listeners()
+    );
 
     // KEDA config present
     assert!(c.keda.is_some(), "KEDA contract must be defined");
@@ -220,10 +224,12 @@ fn emit_chart_generates_without_panic() {
 /// The committed KEDA ScaledObject is a deliberate hand-edit of the generated
 /// one, and a fresh `emit-chart` over `chart/` silently clobbers it.
 ///
-/// The generator addresses `.Values.config.kafka.*`. This app has no
-/// `config.kafka` block, so a regenerated ScaledObject renders empty
-/// `bootstrapServers`, `consumerGroup` and `topic` — valid YAML that KEDA
-/// accepts and then never scales on, with nothing logged.
+/// The generator addresses `.Values.config.kafka.*`, which this app has no
+/// block for, and hardcodes the broker's SASL mechanism and TLS mode. A
+/// regenerated ScaledObject therefore renders empty `bootstrapServers`,
+/// `consumerGroup` and `topic`, and describes an auth posture the app may not
+/// be using — all valid YAML that KEDA accepts and then never scales on, with
+/// nothing logged.
 #[test]
 fn checked_in_keda_scaledobject_survives_emit_chart() {
     let committed_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -244,14 +250,17 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
     for (key, expected) in [
         ("bootstrapServers", ".Values.config.source.brokers"),
         ("consumerGroup", ".Values.config.source.group_id"),
+        ("sasl", ".Values.config.source.sasl"),
+        ("tls", ".Values.config.source.tls"),
+        ("unsafeSsl", ".Values.config.source.tls"),
     ] {
         let line = directive(key);
         assert!(
             line.contains(expected),
             "chart/templates/keda-scaledobject.yaml has been overwritten by `emit-chart`: \
              `{line}` does not read {expected}. The generator addresses config.kafka.*, which \
-             this chart does not define, so KEDA would get an empty value here and stop \
-             scaling with nothing logged."
+             this chart does not define, and hardcodes the mechanism and TLS mode, so KEDA \
+             would get an empty or wrong value here and stop scaling with nothing logged."
         );
     }
     assert!(
@@ -273,6 +282,21 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
         assert!(
             source.get(key).is_some(),
             "chart values.yaml has no config.source.{key} for the ScaledObject to read"
+        );
+    }
+    // The trigger reads these to decide the scaler's auth posture. Omitting a
+    // block is safe -- the parenthesised lookups fall back to SASL off, TLS
+    // off -- but silently descending to `none` when the app is using SCRAM
+    // gives a scaler that cannot authenticate, so the values must say.
+    for (block, key) in [
+        ("sasl", "enabled"),
+        ("sasl", "mechanism"),
+        ("tls", "enabled"),
+    ] {
+        assert!(
+            source.get(block).and_then(|b| b.get(key)).is_some(),
+            "chart values.yaml has no config.source.{block}.{key}; the ScaledObject trigger \
+             would fall back to an unauthenticated scaler against an authenticated broker"
         );
     }
 
@@ -306,8 +330,8 @@ fn checked_in_keda_scaledobject_survives_emit_chart() {
 #[test]
 fn committed_chart_matches_the_generator() {
     // Each of these addresses app-specific values the generator does not model:
-    // the `config.source.*` Kafka addressing, the direct-transport Push port,
-    // and the Kafka credential env names Vector expands itself.
+    // the `config.source.*` Kafka addressing, the configurable Push port, and
+    // the kafka secret mounted as the files Vector reads its credentials from.
     const HAND_FIXED: &[&str] = &[
         "values.yaml",
         "templates/deployment.yaml",
@@ -369,6 +393,101 @@ fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, Strin
     out
 }
 
+/// Render the chart and read the trigger Helm actually produces.
+///
+/// Every other guard here reads the template as text, which cannot tell a
+/// working conditional from one that renders the wrong branch or refuses
+/// outright. The nil-safe parentheses and the `eq ... "true"` comparison exist
+/// because Go truthiness reads a quoted `"false"` as true and a missing block
+/// as a fatal dereference; both are invisible to a substring check.
+///
+/// Skips without helm on PATH. It is not on the CI test runner today, so treat
+/// this as a developer-machine gate until it is.
+#[test]
+fn the_keda_trigger_renders_the_auth_posture_the_app_uses() {
+    let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
+    let render = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("helm")
+            .args(["template", "t"])
+            .arg(&chart)
+            .args(["--show-only", "templates/keda-scaledobject.yaml"])
+            .args(args)
+            .output()
+            .map_err(|e| format!("run helm: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).to_string())
+        }
+    };
+
+    if render(&[]).is_err()
+        && std::process::Command::new("helm")
+            .arg("version")
+            .output()
+            .is_err()
+    {
+        eprintln!("SKIP: helm not on PATH, cannot render the chart");
+        return;
+    }
+
+    for (case, args, expected) in [
+        (
+            "stock values",
+            vec![],
+            vec!["sasl: scram_sha512", "tls: disable", "unsafeSsl: \"false\""],
+        ),
+        (
+            "both optional blocks omitted",
+            vec![
+                "--set",
+                "config.source.sasl=null",
+                "--set",
+                "config.source.tls=null",
+            ],
+            vec!["sasl: none", "tls: disable"],
+        ),
+        (
+            "sasl off as a quoted string, which Go truthiness reads as true",
+            vec!["--set-string", "config.source.sasl.enabled=false"],
+            vec!["sasl: none"],
+        ),
+        (
+            "plain maps to KEDA's spelling",
+            vec!["--set", "config.source.sasl.mechanism=plain"],
+            vec!["sasl: plaintext"],
+        ),
+        (
+            "tls on with skip_verify reaches KEDA too",
+            vec![
+                "--set",
+                "config.source.tls.enabled=true",
+                "--set",
+                "config.source.tls.skip_verify=true",
+            ],
+            vec!["tls: enable", "unsafeSsl: \"true\""],
+        ),
+    ] {
+        let rendered =
+            render(&args).unwrap_or_else(|e| panic!("{case}: helm refused to render: {e}"));
+        for want in expected {
+            assert!(
+                rendered.contains(want),
+                "{case}: rendered trigger has no `{want}`:\n{rendered}"
+            );
+        }
+    }
+
+    // A mechanism the app rejects must stop the chart rather than emit an
+    // empty `sasl:`, which KEDA would fail on with nothing pointing back here.
+    let err = render(&["--set", "config.source.sasl.mechanism=oauthbearer"])
+        .expect_err("an unmapped mechanism must fail the render");
+    assert!(
+        err.contains("no KEDA sasl mechanism"),
+        "unmapped mechanism failed for the wrong reason: {err}"
+    );
+}
+
 /// The chart's expected Vector version must match the one the Dockerfile bakes.
 ///
 /// They drifted by nine minor versions once already -- the chart said 0.48.0
@@ -395,6 +514,356 @@ fn chart_expects_the_vector_version_the_image_ships() {
         deployment::VECTOR_VERSION,
         "chart/values.yaml expects Vector {charted}, the image ships {}",
         deployment::VECTOR_VERSION
+    );
+}
+
+/// The chart's `config` block must deserialise and validate.
+///
+/// The ConfigMap is `toYaml .Values.config` verbatim, so that block is the
+/// config the pod reads, and anything `validate()` rejects is a crash-loop
+/// before Vector starts. Going through the real validator rather than
+/// asserting on substrings covers every rule it enforces, not just today's.
+///
+/// It does NOT prove a stock install can authenticate: `kafka.username` is
+/// empty until an operator sets it, so the mounted secret holds nothing to
+/// log in with. This is the config-shape half only.
+#[test]
+fn chart_default_values_are_a_config_the_app_accepts() {
+    use dfe_transform_vector::config::loader::Config;
+
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let values: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+    let block = values
+        .get("config")
+        .expect("chart values define a config block")
+        .clone();
+
+    let config: Config = serde_yaml_ng::from_value(block)
+        .expect("the chart's config block must deserialise into the app's Config");
+
+    config.validate().expect(
+        "chart/values.yaml does not validate -- `helm install` with stock values would \
+         crash-loop the pod before Vector starts",
+    );
+}
+
+/// The same check one level up, on the contract the generator reads.
+///
+/// `chart/values.yaml` is emitted from `default_config`, so a chart generated
+/// anywhere -- a fresh `emit-chart`, a sibling repo's tooling -- is only as
+/// good as this. Guarding the committed file alone would let the next
+/// regeneration ship a broken chart and pass.
+#[test]
+fn the_contract_default_config_is_one_the_app_accepts() {
+    use dfe_transform_vector::config::loader::Config;
+
+    let default_config = deployment::contract()
+        .default_config
+        .expect("contract carries a default config");
+    let config: Config = serde_json::from_value(default_config)
+        .expect("the contract's default config must deserialise into the app's Config");
+
+    config
+        .validate()
+        .expect("deployment::contract()'s default_config does not validate");
+}
+
+/// SASL credentials reach Vector as files in the mounted kafka secret, so both
+/// ends of that wiring have to agree.
+///
+/// A literal credential in `config.source.sasl` would land in the ConfigMap
+/// instead of the Secret, and a `${VAR}` placeholder reaches the broker as the
+/// credential itself. A mount path that differs from `secret_dir` leaves Vector
+/// failing its start on a file that is not there.
+#[test]
+fn the_sasl_secret_dir_is_where_the_deployment_mounts_the_secret() {
+    let values = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+    )
+    .expect("read chart values");
+    let parsed: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&values).expect("parse chart values");
+
+    for side in ["source", "sink"] {
+        let sasl = parsed
+            .get("config")
+            .and_then(|c| c.get(side))
+            .and_then(|s| s.get("sasl"))
+            .unwrap_or_else(|| panic!("chart values have no config.{side}.sasl"));
+        assert_eq!(
+            sasl.get("secret_dir")
+                .and_then(serde_yaml_ng::Value::as_str),
+            Some(deployment::KAFKA_SECRET_DIR),
+            "config.{side}.sasl.secret_dir must name the kafka secret mount"
+        );
+        for key in ["username", "password"] {
+            assert!(
+                sasl.get(key).is_none(),
+                "config.{side}.sasl.{key} must be left to the mounted secret -- \
+                 `toYaml .Values.config` would put it in the ConfigMap"
+            );
+        }
+    }
+
+    // The other end: the Deployment mounts the secret there, as the two files.
+    let deployment_yaml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/templates/deployment.yaml"),
+    )
+    .expect("read deployment template");
+    assert!(
+        deployment_yaml.contains(&format!("mountPath: {}", deployment::KAFKA_SECRET_DIR)),
+        "chart/templates/deployment.yaml no longer mounts the kafka secret at {}",
+        deployment::KAFKA_SECRET_DIR
+    );
+    for file in ["path: username", "path: password"] {
+        assert!(
+            deployment_yaml.contains(file),
+            "the kafka secret volume must project `{file}`, the name Vector reads"
+        );
+    }
+    assert!(
+        !deployment_yaml.contains("KAFKA_SASL_PASSWORD"),
+        "no credential is exported to the environment any more"
+    );
+}
+
+/// Vector's API takes unauthenticated requests and nothing here is a client,
+/// so no shipped artefact may publish its port.
+#[test]
+fn no_artefact_publishes_the_vector_api() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for rel in [
+        "chart/templates/deployment.yaml",
+        "chart/templates/service.yaml",
+        "Dockerfile",
+    ] {
+        let text = std::fs::read_to_string(root.join(rel)).expect("read artefact");
+        assert!(
+            !text.contains("8686"),
+            "{rel} still publishes Vector's API port"
+        );
+    }
+    let default_config = deployment::contract()
+        .default_config
+        .expect("contract carries default config");
+    assert_eq!(default_config["vector"]["api_enabled"], false);
+}
+
+/// Every config the product ships, as the app reads it.
+fn shipped_configs() -> Vec<(String, dfe_transform_vector::config::loader::Config)> {
+    use dfe_transform_vector::config::loader::Config;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+
+    let values: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(root.join("chart/values.yaml")).expect("read chart values"),
+    )
+    .expect("parse chart values");
+    out.push((
+        "chart/values.yaml".to_string(),
+        serde_yaml_ng::from_value::<Config>(values["config"].clone()).expect("chart config"),
+    ));
+
+    out.push((
+        "deployment::contract().default_config".to_string(),
+        serde_json::from_value::<Config>(
+            deployment::contract()
+                .default_config
+                .expect("contract default config"),
+        )
+        .expect("contract config"),
+    ));
+
+    for entry in std::fs::read_dir(root.join("tests/fixtures/configs")).expect("fixture configs") {
+        let path = entry.expect("fixture entry").path();
+        let text = std::fs::read_to_string(&path).expect("read fixture");
+        out.push((
+            path.display().to_string(),
+            serde_yaml_ng::from_str::<Config>(&text).expect("fixture config"),
+        ));
+    }
+    out
+}
+
+/// Vector 0.57+ expands no `${VAR}` unless started with
+/// `--dangerously-allow-env-var-interpolation`, which the supervisor never
+/// passes. A placeholder that survives assembly therefore reaches Vector as
+/// literal text: a SASL credential logs in to the broker as the string
+/// `${KAFKA_SASL_PASSWORD}`.
+#[test]
+fn no_env_placeholder_survives_assembly_of_a_shipped_config() {
+    let flag = "--dangerously-allow-env-var-interpolation";
+    assert!(
+        !dfe_transform_vector::vector::vector_args(std::path::Path::new("/cfg"))
+            .iter()
+            .any(|a| a == flag),
+        "the supervisor must not start Vector with {flag}"
+    );
+
+    for (label, mut config) in shipped_configs() {
+        let work = tempfile::tempdir().expect("work dir");
+        // Where the chart mounts the secret; stand one up so assembly can
+        // check the files are there.
+        let mounted = work.path().join("secret");
+        std::fs::create_dir_all(&mounted).expect("secret dir");
+        std::fs::write(mounted.join("username"), "u").expect("username file");
+        std::fs::write(mounted.join("password"), "p").expect("password file");
+        for sasl in [&mut config.source.sasl, &mut config.sink.sasl] {
+            if sasl.secret_dir.is_some() {
+                sasl.secret_dir = Some(mounted.to_string_lossy().into_owned());
+            }
+        }
+        // A container path is read inside the filesystem the stock chart gives
+        // the pod, so a mount that hides it fails assembly here as it would there.
+        let pod = work.path().join("pod");
+        stock_pod_filesystem(&pod);
+        if let Some(dir) = config
+            .transforms
+            .dir
+            .clone()
+            .filter(|d| std::path::Path::new(d).is_absolute())
+        {
+            config.transforms.dir = Some(inside(&pod, &dir).to_string_lossy().into_owned());
+        }
+
+        let assembled = work.path().join("config");
+        dfe_transform_vector::config::assembler::assemble(&config, &assembled)
+            .unwrap_or_else(|e| panic!("{label} does not assemble: {e}"));
+        // The credential files Vector reads count as much as the YAML does.
+        let mut pending = vec![assembled];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("assembled dir") {
+                let path = entry.expect("assembled entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("assembled file");
+                assert!(
+                    !text.contains("${"),
+                    "{label}: {} carries a ${{...}} placeholder Vector will read literally",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+/// `path`, a container path, inside the pod filesystem stood up at `root`.
+fn inside(root: &std::path::Path, path: &str) -> std::path::PathBuf {
+    root.join(path.trim_start_matches('/'))
+}
+
+/// One entry under the Deployment's `volumeMounts`.
+#[derive(Debug, Default)]
+struct VolumeMount {
+    path: String,
+    sub_path: Option<String>,
+}
+
+/// The container's volume mounts, read from the Deployment template.
+///
+/// Read as text because the template is not YAML until Helm renders it, and
+/// Helm is not on the CI runner.
+fn chart_volume_mounts() -> Vec<VolumeMount> {
+    let template = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/templates/deployment.yaml"),
+    )
+    .expect("read deployment template");
+    let mut mounts: Vec<VolumeMount> = Vec::new();
+    let mut in_mounts = false;
+    for line in template.lines().map(str::trim) {
+        match line {
+            "volumeMounts:" => in_mounts = true,
+            "volumes:" => in_mounts = false,
+            _ if !in_mounts => {}
+            _ if line.starts_with("- name:") => mounts.push(VolumeMount::default()),
+            _ => {
+                let Some(mount) = mounts.last_mut() else {
+                    continue;
+                };
+                if let Some(path) = line.strip_prefix("mountPath:") {
+                    mount.path = path.trim().to_string();
+                } else if let Some(sub) = line.strip_prefix("subPath:") {
+                    mount.sub_path = Some(sub.trim().to_string());
+                }
+            }
+        }
+    }
+    assert!(
+        mounts.iter().all(|m| !m.path.is_empty()),
+        "a volume mount without a mountPath: {mounts:?}"
+    );
+    mounts
+}
+
+/// Stand up under `root` the filesystem the stock chart gives the app: the
+/// directories the image creates, then each volume the Deployment mounts. A
+/// directory mount replaces whatever the image put at that path; a `subPath`
+/// mount places one file.
+fn stock_pod_filesystem(root: &std::path::Path) {
+    let dockerfile = deployment::emit_dockerfile();
+    let created = dockerfile
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("RUN mkdir -p "))
+        .expect("the image creates its directories with one mkdir");
+    for dir in created
+        .split_whitespace()
+        .take_while(|t| t.starts_with('/'))
+    {
+        std::fs::create_dir_all(inside(root, dir)).expect("image directory");
+    }
+    for mount in chart_volume_mounts() {
+        let at = inside(root, &mount.path);
+        if mount.sub_path.is_some() {
+            std::fs::create_dir_all(at.parent().expect("a file mount has a parent"))
+                .expect("mount parent");
+            std::fs::write(&at, "").expect("file mount");
+        } else {
+            if at.exists() {
+                std::fs::remove_dir_all(&at).expect("clear what the mount hides");
+            }
+            std::fs::create_dir_all(&at).expect("directory mount");
+        }
+    }
+}
+
+/// With stock values the app must find the directory `transforms.dir` names.
+///
+/// The ConfigMap mounted over the whole of /etc/dfe-transform-vector hid the
+/// image's transforms/ beside config.yaml, and assembly refuses a missing
+/// transforms dir, so a stock install crash-looped before Vector started.
+#[test]
+fn the_stock_chart_leaves_the_transforms_dir_its_config_names() {
+    let values: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+        )
+        .expect("read chart values"),
+    )
+    .expect("parse chart values");
+    let dir = values["config"]["transforms"]["dir"]
+        .as_str()
+        .expect("the chart names a transforms dir")
+        .to_string();
+
+    let pod = tempfile::tempdir().expect("pod root");
+    stock_pod_filesystem(pod.path());
+
+    assert!(
+        inside(pod.path(), &dir).is_dir(),
+        "{dir} is not in the pod: the image creates it, but a volume mount hides it. \
+         Mounts: {:?}",
+        chart_volume_mounts()
+    );
+    assert!(
+        inside(pod.path(), "/etc/dfe-transform-vector/config.yaml").is_file(),
+        "the config file the entrypoint reads is not mounted"
     );
 }
 

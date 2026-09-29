@@ -212,8 +212,9 @@ fn vector_validate_full_chain_sasl_tls() {
     let sasl = SaslConfig {
         enabled: true,
         mechanism: "scram_sha_512".into(),
-        username: "${KAFKA_SASL_USERNAME}".into(),
-        password: "${KAFKA_SASL_PASSWORD}".into(),
+        username: "test-user".into(),
+        password: "test-pass".into(),
+        secret_dir: None,
     };
     let tls = TlsConfig {
         enabled: true,
@@ -285,6 +286,11 @@ fn vector_validate_full_chain_sasl_tls() {
         sink_yaml.contains("security.protocol: SASL_SSL"),
         "security.protocol missing from sink"
     );
+    assert!(
+        sink_yaml.contains("SECRET[dfe_credentials.sink_sasl_password]")
+            && !sink_yaml.contains("test-pass"),
+        "the sink must name its password by secret reference: {sink_yaml}"
+    );
 
     let vector_bin = common::vector_binary_path()
         .expect("Vector binary should be available (checked by caller)");
@@ -294,8 +300,6 @@ fn vector_validate_full_chain_sasl_tls() {
         .arg("--config-dir")
         .arg(&config_dir)
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
-        .env("KAFKA_SASL_USERNAME", "test-user")
-        .env("KAFKA_SASL_PASSWORD", "test-pass")
         .output()
         .expect("failed to run vector validate");
 
@@ -306,6 +310,158 @@ fn vector_validate_full_chain_sasl_tls() {
         output.status.success(),
         "vector validate failed with SASL+TLS:\nstdout: {stdout}\nstderr: {stderr}"
     );
+}
+
+/// `vector validate` does not resolve `SECRET[...]` references -- a missing key
+/// validates clean -- so only a running Vector proves the assembled backend,
+/// the files the assembler writes and the names the components use line up.
+///
+/// Runs Vector on the assembled global file beside a stdin -> console pipeline
+/// that prints both credentials, and reads them back.
+#[test]
+fn a_running_vector_reads_the_credentials_the_assembler_hands_it() {
+    let Some(vector_bin) = common::vector_binary_path() else {
+        common::require_service_in_ci("Vector binary", "scripts/fetch-vector.sh found nothing");
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+
+    let work = TempDir::new().expect("work dir");
+    let data_dir = work.path().join("data");
+    fs::create_dir_all(&data_dir).expect("data dir");
+    let (mut config, _unused) = build_config(BufferConfig::default());
+    config.vector.data_dir = data_dir.to_string_lossy().into_owned();
+    config.transforms = TransformConfig::default();
+    config.source.sasl = SaslConfig {
+        enabled: true,
+        username: "probe-user".into(),
+        password: "probe-pass".into(),
+        ..SaslConfig::default()
+    };
+    config.sink.sasl = config.source.sasl.clone();
+
+    let assembled = work.path().join("config");
+    assembler::assemble(&config, &assembled).expect("assembly should succeed");
+
+    // The assembled global file, with the secret backend, plus a pipeline that
+    // prints what the source's references resolve to.
+    let probe = work.path().join("probe");
+    fs::create_dir_all(&probe).expect("probe dir");
+    fs::copy(
+        assembled.join("00_global.yaml"),
+        probe.join("00_global.yaml"),
+    )
+    .expect("global");
+    let source_yaml = fs::read_to_string(assembled.join("00_source.yaml")).unwrap();
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source_yaml).unwrap();
+    let sasl = &parsed["sources"]["dfe_source"]["sasl"];
+    let username_ref = sasl["username"].as_str().expect("username reference");
+    let password_ref = sasl["password"].as_str().expect("password reference");
+    fs::write(
+        probe.join("50_probe.yaml"),
+        format!(
+            "sources:\n  in:\n    type: stdin\ntransforms:\n  show:\n    type: remap\n    \
+             inputs: [in]\n    source: |\n      .user = \"{username_ref}\"\n      \
+             .pass = \"{password_ref}\"\nsinks:\n  out:\n    type: console\n    \
+             inputs: [show]\n    encoding:\n      codec: json\n"
+        ),
+    )
+    .expect("probe pipeline");
+
+    let mut child = Command::new(vector_bin)
+        .arg("--quiet")
+        .arg("--config-dir")
+        .arg(&probe)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run vector");
+    {
+        use std::io::Write as _;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(b"hello\n").expect("write event");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("vector exits at end of input");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "vector failed on the assembled secret backend: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let event: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("vector printed no event ({e}): {stdout}");
+    });
+    assert_eq!(event["user"], "probe-user");
+    assert_eq!(event["pass"], "probe-pass");
+}
+
+/// `vector validate --no-environment` compiles VRL against stub tables and
+/// never opens a table file, so a table mounted at the wrong path passes it and
+/// Vector exits on it at load. The supervisor's own validation must not pass it.
+#[tokio::test]
+async fn a_table_file_vector_validate_passes_but_cannot_load_fails_validation() {
+    use dfe_transform_vector::config::validate::vector_validate;
+
+    let Some(vector_bin) = common::vector_binary_path() else {
+        common::require_service_in_ci("Vector binary", "scripts/fetch-vector.sh found nothing");
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+
+    let (mut config, work_dir) = build_config(BufferConfig::default());
+    config.vector.binary = vector_bin.to_string_lossy().into_owned();
+    let transforms = work_dir.path().join("transforms");
+    fs::create_dir_all(&transforms).expect("transforms dir");
+    let table = work_dir.path().join("data/timezones.csv");
+    fs::write(
+        transforms.join("01_filebeat.yaml"),
+        format!(
+            "enrichment_tables:\n  timezones:\n    type: file\n    file:\n      path: {}\n      \
+             encoding:\n        type: csv\n    schema:\n      abbreviation: string\n\
+             transforms:\n  filebeat:\n    type: remap\n    inputs: [dfe_source]\n    \
+             source: |\n      .seen = true\n",
+            table.display()
+        ),
+    )
+    .expect("transform with a table");
+    config.transforms = TransformConfig {
+        dir: Some(transforms.to_string_lossy().into_owned()),
+        files: None,
+    };
+    let config_dir = work_dir.path().join("config");
+    assembler::assemble(&config, &config_dir).expect("assembly should succeed");
+
+    let raw = Command::new(vector_bin)
+        .args(dfe_transform_vector::config::validate::validate_args(
+            &config_dir,
+        ))
+        .env("VECTOR_DATA_DIR", &config.vector.data_dir)
+        .output()
+        .expect("run vector validate");
+    assert!(
+        raw.status.success(),
+        "vector validate --no-environment now opens table files, so the supervisor's own \
+         check may be redundant: {}",
+        String::from_utf8_lossy(&raw.stdout)
+    );
+
+    let err = vector_validate(&config.vector, &config_dir)
+        .await
+        .expect_err("a table file that is not there must fail validation");
+    assert!(
+        err.to_string().contains(&table.display().to_string()),
+        "the error must name the file: {err}"
+    );
+
+    fs::create_dir_all(table.parent().expect("parent")).expect("data dir");
+    fs::write(&table, "abbreviation\nUTC\n").expect("write table");
+    vector_validate(&config.vector, &config_dir)
+        .await
+        .expect("the same config validates once the file is there");
 }
 
 #[test]
@@ -320,8 +476,9 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
     let sasl = SaslConfig {
         enabled: true,
         mechanism: "scram_sha_512".into(),
-        username: "${KAFKA_SASL_USERNAME}".into(),
-        password: "${KAFKA_SASL_PASSWORD}".into(),
+        username: "test-user".into(),
+        password: "test-pass".into(),
+        secret_dir: None,
     };
     let tls = TlsConfig {
         enabled: true,
@@ -406,8 +563,6 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         .arg("--config-dir")
         .arg(&config_dir)
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
-        .env("KAFKA_SASL_USERNAME", "test-user")
-        .env("KAFKA_SASL_PASSWORD", "test-pass")
         .output()
         .expect("failed to run vector validate");
 

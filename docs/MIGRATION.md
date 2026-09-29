@@ -74,14 +74,10 @@ config:
   pipeline:
     name: syslog-enrichment
   source:
-    brokers:
-      - "${KAFKA_BROKERS_SASL_SCRAM}"
     topics:
       - raw_syslog_land
     group_id: dfe-transform-vector-syslog
   sink:
-    brokers:
-      - "${KAFKA_BROKERS_SASL_SCRAM}"
     topic: enriched_syslog_land
     key_field: .org_id
     compression: zstd
@@ -97,7 +93,11 @@ Key differences:
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
 - **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
 - **KEDA** configured declaratively, inherits defaults from common.yaml
-- **Kafka brokers** use `${KAFKA_BROKERS_SASL_SCRAM}` env var (injected by ExternalSecret)
+- **Kafka brokers** come from `DFE_TRANSFORM_SOURCE_BROKERS` and
+  `DFE_TRANSFORM_SINK_BROKERS`. A `${VAR}` in the config is not expanded:
+  neither the wrapper nor Vector 0.57+ interpolates environment variables
+- **SASL credentials** are files in the mounted secret at `sasl.secret_dir`,
+  read by Vector's directory secret backend
 
 ### What Stays the Same
 

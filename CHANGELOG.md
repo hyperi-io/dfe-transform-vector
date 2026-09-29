@@ -3,6 +3,30 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.44](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.43...v1.0.44) (2026-09-27)
+
+### Bug Fixes
+
+* clear the Quality advisory warning and find the pgo driver under CARGO_TARGET_DIR ([#93](https://github.com/hyperi-io/dfe-transform-vector/issues/93)) ([130d438](https://github.com/hyperi-io/dfe-transform-vector/commit/130d438895c6f58f5ba30e4f3aab0bb7fb49eb6d))
+* keep startup vector validate off the broker ([#94](https://github.com/hyperi-io/dfe-transform-vector/issues/94)) ([21e52e1](https://github.com/hyperi-io/dfe-transform-vector/commit/21e52e1cb4aa955c9ecb3f97f13a1f3a76d881f2))
+
+## [1.0.43](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.42...v1.0.43) (2026-09-27)
+
+### Bug Fixes
+
+* **chart:** scale on the auth the app uses, install with stock values, mark the secrets ([#90](https://github.com/hyperi-io/dfe-transform-vector/issues/90)) ([45ffb44](https://github.com/hyperi-io/dfe-transform-vector/commit/45ffb44be82b15a6e4dd7d104a81c11bfc50a776))
+* rc.14 security and delivery fixes ([#91](https://github.com/hyperi-io/dfe-transform-vector/issues/91)) ([d54e012](https://github.com/hyperi-io/dfe-transform-vector/commit/d54e012f420761512c6b112f95a66505dbb12c01))
+
+## [1.0.42](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.41...v1.0.42) (2026-09-24)
+
+### Bug Fixes
+
+* **chart:** let the KEDA Kafka scaler authenticate, and guard the chart ([#81](https://github.com/hyperi-io/dfe-transform-vector/issues/81)) ([6fa2714](https://github.com/hyperi-io/dfe-transform-vector/commit/6fa27148729c22fa620c3565ae96b1aaadd8ed27))
+* **ci:** accept the unoptimised release consent inputs ([#89](https://github.com/hyperi-io/dfe-transform-vector/issues/89)) ([a0ac7ec](https://github.com/hyperi-io/dfe-transform-vector/commit/a0ac7ecb566bce59102d67832f784444e01f9db5))
+* **ci:** skip PGO and BOLT for the rc.14 workstream ([#87](https://github.com/hyperi-io/dfe-transform-vector/issues/87)) ([fa27008](https://github.com/hyperi-io/dfe-transform-vector/commit/fa270086a649516e070c35ac59be908add4eaeec))
+* **docs:** give the README a Context section and write the architecture doc ([#83](https://github.com/hyperi-io/dfe-transform-vector/issues/83)) ([f08d86f](https://github.com/hyperi-io/dfe-transform-vector/commit/f08d86f47c6d6fa9153ce927b5c9e77f3d02075e))
+* **docs:** name scalo, not rustlib ([#86](https://github.com/hyperi-io/dfe-transform-vector/issues/86)) ([7591dc0](https://github.com/hyperi-io/dfe-transform-vector/commit/7591dc0c9dc7b1f586dac7636b39e295b06f9e91))
+
 ## [1.0.41](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.40...v1.0.41) (2026-09-15)
 
 ### Bug Fixes

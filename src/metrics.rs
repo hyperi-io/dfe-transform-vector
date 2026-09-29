@@ -31,11 +31,51 @@ use metrics::{Counter, Gauge};
 use scalo::metrics::MetricsManager;
 use scalo::metrics::groups::AppMetrics;
 use scalo::metrics::service::ServiceMetrics;
+use scalo::transport::DeadLetterReason;
 use tokio::sync::watch;
 use tracing::debug;
 
 use crate::vector::Lifecycle;
 use crate::vector::lifecycle::State;
+
+/// scalo's counter of records dropped with nowhere to go, by `reason`.
+pub const DEAD_LETTERS_DROPPED: &str = "pipeline_dead_letters_dropped_total";
+
+/// The `reason` scalo counts a record over a size ceiling under.
+pub const TOO_LARGE: &str = DeadLetterReason::TooLarge { bytes: 0, limit: 0 }.as_str();
+
+/// Count `records` dropped with nowhere to go under `reason`, in the series
+/// scalo counts its own drops in.
+pub fn count_dropped_dead_letters(reason: &'static str, records: u64) {
+    if records > 0 {
+        metrics::counter!(DEAD_LETTERS_DROPPED, "reason" => reason).increment(records);
+    }
+}
+
+/// What [`DEAD_LETTERS_DROPPED`] gained under `reason` since `snapshotter`'s
+/// last snapshot.
+#[cfg(test)]
+pub(crate) fn dropped_since(
+    snapshotter: &metrics_util::debugging::Snapshotter,
+    reason: &str,
+) -> u64 {
+    snapshotter
+        .snapshot()
+        .into_vec()
+        .into_iter()
+        .filter(|(key, ..)| {
+            key.key().name() == DEAD_LETTERS_DROPPED
+                && key
+                    .key()
+                    .labels()
+                    .any(|l| l.key() == "reason" && l.value() == reason)
+        })
+        .map(|(.., value)| match value {
+            metrics_util::debugging::DebugValue::Counter(n) => n,
+            _ => 0,
+        })
+        .sum()
+}
 
 /// Wrapper-specific metrics, registered on a shared `MetricsManager`.
 ///
@@ -54,6 +94,8 @@ pub struct WrapperMetrics {
     pub restarts_total: Counter,
     pub config_validation_errors_total: Counter,
     pub scrape_failures_total: Counter,
+    /// Vector's own error count on the generated sink.
+    pub sink_errors_total: Counter,
     pub uptime_seconds: Gauge,
     pub app: AppMetrics,
     pub service: ServiceMetrics,
@@ -90,6 +132,10 @@ impl WrapperMetrics {
             "transform_vector_scrape_failures_total",
             "Failed scrapes of Vector's prometheus_exporter",
         );
+        let sink_errors_total = manager.counter(
+            "transform_vector_sink_errors_total",
+            "Errors Vector reported on the generated sink",
+        );
         let uptime_seconds = manager.gauge("uptime_seconds", "Vector subprocess uptime in seconds");
 
         // Describe the labelled metrics (recorded via macros in
@@ -112,6 +158,7 @@ impl WrapperMetrics {
             restarts_total,
             config_validation_errors_total,
             scrape_failures_total,
+            sink_errors_total,
             uptime_seconds,
             app,
             service,
@@ -285,13 +332,37 @@ mod tests {
             "restarts_total",
             "config_validation_errors_total",
             "transform_vector_scrape_failures_total",
+            "transform_vector_sink_errors_total",
+            "records_error_total",
             "uptime_seconds",
             "pipeline_ready",
+            super::DEAD_LETTERS_DROPPED,
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "{expected} is missing from the catalogue: {names:?}"
             );
         }
+    }
+
+    /// Size-cap and broker refusals are counted in this series by `reason`, so
+    /// the catalogue has to carry the label an alert selects on.
+    #[test]
+    fn the_dead_letter_drop_counter_is_catalogued_with_its_reason_label() {
+        let manager = MetricsManager::with_config(MetricsConfig::offline(""));
+        let _metrics = WrapperMetrics::register(&manager, "test-commit");
+
+        let descriptor = manager
+            .registry()
+            .manifest()
+            .metrics
+            .into_iter()
+            .find(|d| d.name == super::DEAD_LETTERS_DROPPED)
+            .expect("the dead-letter drop counter is catalogued");
+        assert!(
+            descriptor.labels.iter().any(|l| l == "reason"),
+            "no reason label: {:?}",
+            descriptor.labels
+        );
     }
 }

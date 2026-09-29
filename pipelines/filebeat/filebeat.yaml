@@ -12,9 +12,10 @@
 # `inputs: [dfe_source]` binds it to whatever Kafka topic `dfe_source` derives,
 # and the wrapper wires the transform's output to `dfe_sink`.
 #
-# The `path` below is the container path this repo's image and the dfe-docker
-# compose stack both mount the table at; a bare install points it at its own
-# copy of timezones.csv.
+# The `path` below is where the dfe-docker compose stack mounts the table. The
+# image does not ship timezones.csv, so any other deployment mounts it at that
+# path or points `path` at its own copy; startup validation names the path when
+# the file is not there.
 #
 # The VRL body is byte-identical to dfe-transform-vrl pipelines/filebeat/
 # filebeat.vrl @ e0b7087, which is where it is maintained. Refresh by copying

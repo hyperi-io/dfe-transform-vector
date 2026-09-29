@@ -11,6 +11,16 @@ language: rust
 # Quality checks
 quality:
   enabled: true
+  # Advisory ignores fed to cargo-audit and osv-scanner.
+  ignore:
+    # GHSA-w9wp-h8wv-79jx / CVE-2026-48504: opentelemetry_sdk 0.31.0 reaches the
+    # lock only through scalo. The flaw is in BaggagePropagator's header parsing,
+    # and neither this repo nor scalo installs a text map propagator, so it is
+    # never called. scalo holds 0.31 until metrics-exporter-opentelemetry
+    # supports 0.32 (dfe-infra docs/THREAT-MODEL.md).
+    - tool: osv-scanner
+      id: GHSA-w9wp-h8wv-79jx
+      reason: "CVE-2026-48504, opentelemetry_sdk 0.31.0 via scalo: BaggagePropagator::extract_with_context is unreachable (no text map propagator, no baggage in dfe-transform-vector or scalo). Drop when scalo allows opentelemetry_sdk >= 0.32.1."
 
 # Testing
 test:
@@ -25,6 +35,12 @@ test:
 # Building
 build:
   enabled: true
+  # PGO and BOLT are off for the rc.14 workstream: each adds 30-60 min per arch
+  # and the workstream needs fast turnaround on everything else first. Tier 1
+  # (allocator + LTO) still applies. Turning this back off is the LAST rc.14
+  # task. A STABLE release meanwhile needs `release-unoptimized: true` at
+  # dispatch; a prerelease (rc) is never refused.
+  skip_optimize: true
   type: app
   strategies:
     - native
@@ -51,14 +67,9 @@ build:
       bolt:
         enabled: true  # Linux only; skipped on non-Linux targets
 
-# Publishing (on release)
-publish:
+# Release (where the artefacts go)
+release:
   enabled: true
-  # The release channel comes from the `publish-target: both` input the caller
-  # workflow passes (hyperi-ci rust-ci.yml:132); this key is legacy and ignored
-  # at runtime (hyperi_ci/config.py:90-98). Kept in step with the other apps.
-  target: both
-  binaries: both
   container:
     enabled: true
     dockerfile: Dockerfile
@@ -67,10 +78,7 @@ publish:
       - linux/arm64
     # Vector binary install + data dirs are spliced into the Dockerfile
     # by `src/deployment.rs::emit_dockerfile()` (consumer-side post-process
-    # over rustlib's base output). When hyperi-ci's overlay framework
-    # lands, this moves to `publish.container.overlays:` here.
-    # See: docs/superpowers/specs/2026-05-15-vector-binary-overlay-spec.md
+    # over scalo's base output). When hyperi-ci's overlay framework
+    # lands, this moves to `release.container.overlays:` here.
   helm:
     enabled: true
-
-# canary trigger touch — 2026-05-15T03:17:09Z

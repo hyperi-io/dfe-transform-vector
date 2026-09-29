@@ -23,19 +23,21 @@
 //! A component Vector drops stops being scraped, so its gauges are zeroed once
 //! they have gone unseen for `metrics.vector_metrics_expiry_ticks` ticks.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use metrics::Label;
 use prometheus_parse::{Scrape, Value};
+use scalo::transport::DEAD_LETTER_REJECTED;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
-use super::WrapperMetrics;
-use crate::config::generate::{SINK_LABEL, SOURCE_LABEL};
+use super::{TOO_LARGE, WrapperMetrics, count_dropped_dead_letters};
+use crate::config::generate::{SINK_LABEL, SIZE_CAP_LABEL, SOURCE_LABEL};
 
 /// Vector's per-component counter of events read in.
 const VECTOR_RECEIVED: &str = "vector_component_received_events_total";
@@ -43,8 +45,26 @@ const VECTOR_RECEIVED: &str = "vector_component_received_events_total";
 /// Vector's per-component counter of events emitted.
 const VECTOR_SENT: &str = "vector_component_sent_events_total";
 
+/// Vector's per-component counter of events dropped, on purpose or not.
+const VECTOR_DISCARDED: &str = "vector_component_discarded_events_total";
+
+/// Vector's per-component counter of errors.
+const VECTOR_ERRORS: &str = "vector_component_errors_total";
+
 /// Vector label naming the pipeline component a sample belongs to.
 const COMPONENT_ID: &str = "component_id";
+
+/// Vector's counter of config reloads it applied.
+const VECTOR_RELOADED: &str = "vector_reloaded_total";
+
+/// Label on `vector_component_errors_total` naming what failed.
+const ERROR_CODE: &str = "error_code";
+
+/// Label Vector adds to a refused reload's error, naming why.
+const REASON: &str = "reason";
+
+/// The `error_code` values Vector counts a reload it did not apply under.
+const RELOAD_ERROR_CODES: [&str; 3] = ["reload", "config_load", "recovery"];
 
 /// Connect timeout for one scrape.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -71,10 +91,36 @@ const WARN_EVERY: Duration = Duration::from_secs(300);
 /// Throughput totals lifted out of one exposition.
 #[derive(Debug, Default, PartialEq)]
 pub struct Derived {
-    /// `vector_component_received_events_total` on the wrapper's Kafka source.
+    /// `vector_component_received_events_total` on the wrapper's source.
     pub received: f64,
-    /// `vector_component_sent_events_total` on the wrapper's Kafka sink.
+    /// `vector_component_sent_events_total` on the wrapper's sink.
     pub sent: f64,
+    /// `vector_component_received_events_total` on the wrapper's sink: what it
+    /// has taken on, delivered or not.
+    pub sink_received: f64,
+    /// `vector_component_discarded_events_total` on the wrapper's sink: records
+    /// it rejected and dropped.
+    pub sink_discarded: f64,
+    /// `vector_component_errors_total` on the wrapper's sink.
+    pub sink_errors: f64,
+    /// `vector_component_discarded_events_total` on the size cap: records over
+    /// the producer's ceiling, held back from the sink.
+    pub oversize: f64,
+}
+
+impl Derived {
+    /// Records the pipeline lost after taking them in: rejected by the sink,
+    /// or held back by the size cap.
+    #[must_use]
+    pub fn rejected(&self) -> f64 {
+        self.sink_discarded + self.oversize
+    }
+
+    /// Records the sink has taken on and neither delivered nor dropped.
+    #[must_use]
+    pub fn outstanding(&self) -> f64 {
+        (self.sink_received - self.sent - self.sink_discarded).max(0.0)
+    }
 }
 
 /// Fetch the exposition from Vector's `prometheus_exporter`.
@@ -216,6 +262,10 @@ impl ExpositionMerger {
                 match (sample.metric.as_str(), sample.labels.get(COMPONENT_ID)) {
                     (VECTOR_RECEIVED, Some(SOURCE_LABEL)) => derived.received += v,
                     (VECTOR_SENT, Some(SINK_LABEL)) => derived.sent += v,
+                    (VECTOR_RECEIVED, Some(SINK_LABEL)) => derived.sink_received += v,
+                    (VECTOR_DISCARDED, Some(SINK_LABEL)) => derived.sink_discarded += v,
+                    (VECTOR_ERRORS, Some(SINK_LABEL)) => derived.sink_errors += v,
+                    (VECTOR_DISCARDED, Some(SIZE_CAP_LABEL)) => derived.oversize += v,
                     _ => {}
                 }
             }
@@ -380,25 +430,160 @@ pub fn apply_derived(metrics: &WrapperMetrics, derived: &Derived) {
     // The platform's sink-side counter is the same number by another name and
     // reads 0 without this. ServiceMetrics only exposes an increment.
     metrics::counter!("records_delivered_total").absolute(to_u64(derived.sent));
+    // A record Vector rejected or the size cap held back is gone, so it counts
+    // where every other app counts a lost record.
+    metrics
+        .app
+        .records_error
+        .absolute(to_u64(derived.rejected()));
+    metrics
+        .sink_errors_total
+        .absolute(to_u64(derived.sink_errors));
+}
+
+/// Counts one of Vector's drop totals in scalo's dead-letter drop counter,
+/// each drop once.
+///
+/// Vector's discard counters are running totals, so each exposition adds only
+/// what grew since the last one. A total below the last is a restarted Vector
+/// counting from zero again, and all of it is new.
+#[derive(Debug)]
+pub struct DeadLetterDrops {
+    /// The `reason` label the drops are counted under.
+    reason: &'static str,
+    /// Which of the exposition's totals this counts.
+    total: fn(&Derived) -> f64,
+    /// That total at the last exposition.
+    seen: f64,
+}
+
+impl DeadLetterDrops {
+    /// The size cap's drops, records over the producer's ceiling, under
+    /// `reason="too_large"`.
+    #[must_use]
+    pub fn too_large() -> Self {
+        Self {
+            reason: TOO_LARGE,
+            total: |d| d.oversize,
+            seen: 0.0,
+        }
+    }
+
+    /// The sink's drops, records the broker refused for good -- an unknown
+    /// topic, a failed authorisation, an invalid record -- under
+    /// `reason="rejected"`.
+    #[must_use]
+    pub fn rejected() -> Self {
+        Self {
+            reason: DEAD_LETTER_REJECTED,
+            total: |d| d.sink_discarded,
+            seen: 0.0,
+        }
+    }
+
+    /// Count the drops since the last exposition, and return how many.
+    pub fn record(&mut self, derived: &Derived) -> u64 {
+        let total = (self.total)(derived);
+        let fresh = if total >= self.seen {
+            total - self.seen
+        } else {
+            total
+        };
+        self.seen = total;
+        let fresh = to_u64(fresh);
+        count_dropped_dead_letters(self.reason, fresh);
+        fresh
+    }
+}
+
+/// Whether the sink is still delivering the records it takes on.
+///
+/// Vector with an unlimited producer timeout holds a record it cannot deliver
+/// -- a partition with no leader, a broker that is down -- for as long as that
+/// lasts, while the process stays healthy. A record the broker refuses for good
+/// is dropped instead, and Vector commits past it. Stalled means records are
+/// waiting, held or refused within `stall_after`, and none has been delivered
+/// for `stall_after`.
+#[derive(Debug)]
+pub struct SinkProgress {
+    stall_after: Duration,
+    /// Delivered at the last exposition.
+    delivered: f64,
+    /// Refused at the last exposition.
+    refused: f64,
+    /// When the sink last delivered, or last had nothing waiting.
+    last_advance: Instant,
+    /// When the refused total last grew.
+    last_refusal: Option<Instant>,
+}
+
+impl SinkProgress {
+    /// A tracker that calls the sink stalled after `stall_after` without
+    /// progress. A zero `stall_after` never does.
+    #[must_use]
+    pub fn new(stall_after: Duration, now: Instant) -> Self {
+        Self {
+            stall_after,
+            delivered: 0.0,
+            refused: 0.0,
+            last_advance: now,
+            last_refusal: None,
+        }
+    }
+
+    /// Record one exposition's totals; `true` when the sink is stalled.
+    pub fn observe(&mut self, derived: &Derived, now: Instant) -> bool {
+        // A restarted Vector starts its counters again from zero.
+        if derived.sent < self.delivered || derived.sink_discarded < self.refused {
+            self.delivered = 0.0;
+            self.refused = 0.0;
+            self.last_advance = now;
+        }
+        if derived.sink_discarded > self.refused {
+            self.last_refusal = Some(now);
+        }
+        self.refused = derived.sink_discarded;
+
+        // A refused record is lost, not moved on, so only a delivery is progress.
+        let refusing = self
+            .last_refusal
+            .is_some_and(|at| now.saturating_duration_since(at) < self.stall_after);
+        let waiting = derived.outstanding() > 0.0 || refusing;
+        if derived.sent > self.delivered || !waiting {
+            self.last_advance = now;
+        }
+        self.delivered = derived.sent;
+
+        !self.stall_after.is_zero()
+            && waiting
+            && now.saturating_duration_since(self.last_advance) >= self.stall_after
+    }
 }
 
 /// Scrape Vector's exporter on `interval` and merge each exposition.
 ///
 /// Spawns a background task and returns immediately. A scrape that fails bumps
 /// `transform_vector_scrape_failures_total` and warns at most once every five
-/// minutes; it never flips readiness and never aborts the loop. A gauge unseen
-/// for `expiry_ticks` ticks is zeroed.
+/// minutes; it never aborts the loop and leaves `stalled` as it was. A gauge
+/// unseen for `expiry_ticks` ticks is zeroed.
+///
+/// `stalled` is set while the sink has records waiting and has delivered none
+/// for `stall_after`, and cleared when it delivers again -- see [`SinkProgress`].
 pub fn spawn_vector_scrape_task(
     metrics: Arc<WrapperMetrics>,
     address: String,
     interval: Duration,
     expiry_ticks: u32,
+    stall_after: Duration,
+    stalled: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_warn: Option<Instant> = None;
         let mut merger = ExpositionMerger::new(expiry_ticks);
+        let mut progress = SinkProgress::new(stall_after, Instant::now());
+        let mut dead_letters = [DeadLetterDrops::too_large(), DeadLetterDrops::rejected()];
 
         loop {
             ticker.tick().await;
@@ -406,9 +591,28 @@ pub fn spawn_vector_scrape_task(
                 Ok(body) => {
                     let derived = merger.merge(&body);
                     apply_derived(&metrics, &derived);
+                    for drops in &mut dead_letters {
+                        drops.record(&derived);
+                    }
+                    let now_stalled = progress.observe(&derived, Instant::now());
+                    if stalled.swap(now_stalled, Ordering::Relaxed) != now_stalled {
+                        if now_stalled {
+                            warn!(
+                                outstanding = derived.outstanding(),
+                                refused = derived.sink_discarded,
+                                stall_secs = stall_after.as_secs(),
+                                "Vector's sink has delivered nothing it holds or was given; \
+                                 reporting not ready"
+                            );
+                        } else {
+                            info!("Vector's sink is delivering again; reporting ready");
+                        }
+                    }
                     debug!(
                         received = derived.received,
                         sent = derived.sent,
+                        outstanding = derived.outstanding(),
+                        rejected = derived.rejected(),
                         "merged Vector metrics into the scalo registry"
                     );
                 }
@@ -456,6 +660,66 @@ fn counter_value(value: &Value) -> Option<f64> {
     }
 }
 
+/// Vector's own count of the config reloads it has attempted, read from one
+/// exposition.
+///
+/// A reload Vector applies counts in `vector_reloaded_total`. One it does not
+/// apply counts in `vector_component_errors_total` under `error_code` `reload`
+/// (the new topology was refused, with a `reason`), `config_load` (the files did
+/// not load) or `recovery` (the old topology could not be put back either).
+/// Either way the process stays up, so these counters are the only report.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ReloadCounts {
+    /// Reloads Vector applied.
+    pub applied: f64,
+    /// Reloads Vector did not apply, by `error_code`, and `reason` where given.
+    pub refused: BTreeMap<String, f64>,
+}
+
+impl ReloadCounts {
+    /// Read the reload counters out of an exposition; `None` when it does not
+    /// parse. A counter Vector has not incremented yet is absent, and reads 0.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let scrape = Scrape::parse(text.lines().map(|l| Ok(l.to_string()))).ok()?;
+        let mut counts = Self::default();
+        for sample in &scrape.samples {
+            let Some(v) = counter_value(&sample.value) else {
+                continue;
+            };
+            match sample.metric.as_str() {
+                VECTOR_RELOADED => counts.applied += v,
+                VECTOR_ERRORS => {
+                    let Some(code) = sample
+                        .labels
+                        .get(ERROR_CODE)
+                        .filter(|c| RELOAD_ERROR_CODES.contains(c))
+                    else {
+                        continue;
+                    };
+                    let key = sample
+                        .labels
+                        .get(REASON)
+                        .map_or_else(|| code.to_string(), |reason| format!("{code}/{reason}"));
+                    *counts.refused.entry(key).or_default() += v;
+                }
+                _ => {}
+            }
+        }
+        Some(counts)
+    }
+
+    /// The refusals that grew since `before`, by `error_code` and `reason`.
+    #[must_use]
+    pub fn refused_since(&self, before: &Self) -> Vec<String> {
+        self.refused
+            .iter()
+            .filter(|(key, total)| **total > before.refused.get(*key).copied().unwrap_or(0.0))
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,9 +747,272 @@ vector_buffer_events 7
             derived,
             Derived {
                 received: 85.0,
-                sent: 84.0
+                sent: 84.0,
+                ..Derived::default()
             },
             "sent must come from the sink, not the source"
+        );
+    }
+
+    /// A record Vector rejected, or the size cap held back, is counted as
+    /// lost; the samples are the shapes Vector 0.58 exports.
+    #[test]
+    fn rejected_records_come_from_the_sink_and_the_size_cap() {
+        let text = "\
+# TYPE vector_component_received_events_total counter
+vector_component_received_events_total{component_id=\"dfe_sink\",component_kind=\"sink\"} 100
+# TYPE vector_component_sent_events_total counter
+vector_component_sent_events_total{component_id=\"dfe_sink\",component_kind=\"sink\"} 90
+# TYPE vector_component_discarded_events_total counter
+vector_component_discarded_events_total{component_id=\"dfe_sink\",intentional=\"false\"} 4
+vector_component_discarded_events_total{component_id=\"dfe_size_cap\",intentional=\"true\"} 3
+vector_component_discarded_events_total{component_id=\"user_filter\",intentional=\"true\"} 50
+# TYPE vector_component_errors_total counter
+vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_failed\",stage=\"sending\"} 2
+";
+        let derived = ExpositionMerger::default().merge(text);
+        assert_eq!(derived.sink_received, 100.0);
+        assert_eq!(derived.sink_discarded, 4.0);
+        assert_eq!(derived.oversize, 3.0);
+        assert_eq!(derived.sink_errors, 2.0);
+        assert_eq!(
+            derived.rejected(),
+            7.0,
+            "an operator's own filter is not a loss"
+        );
+        assert_eq!(derived.outstanding(), 6.0);
+    }
+
+    /// The size cap's running total reaches scalo's drop counter once: each
+    /// exposition adds what grew, and a restarted Vector's fresh total counts
+    /// whole.
+    #[test]
+    fn size_cap_drops_count_once_each_across_expositions() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let mut drops = DeadLetterDrops::too_large();
+        let at = |oversize: f64| Derived {
+            oversize,
+            ..Derived::default()
+        };
+
+        for (total, fresh) in [(3.0, 3), (3.0, 0), (5.0, 2), (1.0, 1), (0.0, 0)] {
+            let recorded = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
+            assert_eq!(recorded, fresh, "at a total of {total}");
+            assert_eq!(
+                crate::metrics::dropped_since(&snapshotter, TOO_LARGE),
+                fresh,
+                "at a total of {total}"
+            );
+        }
+        assert_eq!(TOO_LARGE, "too_large", "scalo's own label for the reason");
+    }
+
+    /// A record the broker refused for good counts once under scalo's own
+    /// `rejected`, the series an operator alerts on, and never as too large.
+    #[test]
+    fn sink_refusals_count_once_each_as_rejected() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let mut drops = DeadLetterDrops::rejected();
+        let at = |sink_discarded: f64| Derived {
+            sink_discarded,
+            oversize: 9.0,
+            ..Derived::default()
+        };
+
+        for (total, fresh) in [(4.0, 4), (4.0, 0), (10.0, 6), (2.0, 2)] {
+            let recorded = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
+            assert_eq!(recorded, fresh, "at a total of {total}");
+            assert_eq!(
+                crate::metrics::dropped_since(&snapshotter, DEAD_LETTER_REJECTED),
+                fresh,
+                "at a total of {total}"
+            );
+            assert_eq!(
+                crate::metrics::dropped_since(&snapshotter, TOO_LARGE),
+                0,
+                "a refusal is not a record over the size ceiling"
+            );
+        }
+        assert_eq!(DEAD_LETTER_REJECTED, "rejected");
+    }
+
+    fn holding(sink_received: f64, sent: f64) -> Derived {
+        Derived {
+            sink_received,
+            sent,
+            ..Derived::default()
+        }
+    }
+
+    #[test]
+    fn a_sink_that_holds_records_without_delivering_is_stalled_after_the_window() {
+        let start = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut progress = SinkProgress::new(window, start);
+
+        assert!(!progress.observe(&holding(100.0, 90.0), start));
+        assert!(
+            !progress.observe(&holding(120.0, 90.0), start + Duration::from_secs(59)),
+            "not yet stalled inside the window"
+        );
+        assert!(
+            progress.observe(&holding(140.0, 90.0), start + window),
+            "records outstanding and nothing delivered for the window"
+        );
+        assert!(
+            !progress.observe(
+                &holding(140.0, 95.0),
+                start + window + Duration::from_secs(1)
+            ),
+            "one delivery clears it"
+        );
+    }
+
+    #[test]
+    fn an_idle_sink_is_never_stalled() {
+        let start = Instant::now();
+        let mut progress = SinkProgress::new(Duration::from_secs(1), start);
+        assert!(!progress.observe(&holding(50.0, 50.0), start + Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn a_restarted_vector_resets_the_window_rather_than_reading_as_stalled() {
+        let start = Instant::now();
+        let mut progress = SinkProgress::new(Duration::from_secs(10), start);
+        assert!(!progress.observe(&holding(100.0, 90.0), start));
+        // Counters start from zero again after a restart.
+        assert!(!progress.observe(&holding(5.0, 1.0), start + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn a_zero_window_never_stalls() {
+        let start = Instant::now();
+        let mut progress = SinkProgress::new(Duration::ZERO, start);
+        assert!(!progress.observe(&holding(100.0, 0.0), start + Duration::from_secs(3600)));
+    }
+
+    /// What the sink took on, delivered and had refused.
+    fn refusing(sink_received: f64, sent: f64, sink_discarded: f64) -> Derived {
+        Derived {
+            sink_received,
+            sent,
+            sink_discarded,
+            ..Derived::default()
+        }
+    }
+
+    /// An ACL or missing-topic outage: every record is refused and dropped, so
+    /// nothing is outstanding, and the only thing moving is the discard count.
+    #[test]
+    fn a_sink_whose_every_record_is_refused_is_stalled_after_the_window() {
+        let start = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut progress = SinkProgress::new(window, start);
+
+        assert!(!progress.observe(&refusing(100.0, 90.0, 10.0), start));
+        assert!(
+            !progress.observe(
+                &refusing(200.0, 90.0, 110.0),
+                start + Duration::from_secs(30)
+            ),
+            "not yet stalled inside the window"
+        );
+        assert!(
+            progress.observe(&refusing(300.0, 90.0, 210.0), start + window),
+            "refusals are not progress: nothing delivered for the window"
+        );
+        assert!(
+            !progress.observe(
+                &refusing(310.0, 95.0, 215.0),
+                start + window + Duration::from_secs(1)
+            ),
+            "one delivery clears it"
+        );
+    }
+
+    #[test]
+    fn a_sink_that_stops_being_refused_and_goes_idle_is_ready_a_window_later() {
+        let start = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut progress = SinkProgress::new(window, start);
+
+        progress.observe(&refusing(100.0, 90.0, 10.0), start);
+        assert!(progress.observe(&refusing(150.0, 90.0, 60.0), start + window));
+        assert!(
+            progress.observe(
+                &refusing(150.0, 90.0, 60.0),
+                start + window + Duration::from_secs(59)
+            ),
+            "the last refusal is still inside the window"
+        );
+        assert!(
+            !progress.observe(&refusing(150.0, 90.0, 60.0), start + window + window),
+            "no refusal for a whole window, and nothing held"
+        );
+    }
+
+    #[test]
+    fn an_occasional_refusal_among_deliveries_is_not_a_stall() {
+        let start = Instant::now();
+        let window = Duration::from_secs(10);
+        let mut progress = SinkProgress::new(window, start);
+
+        for tick in 0..10u32 {
+            let t = f64::from(tick);
+            assert!(!progress.observe(
+                &refusing(100.0 * (t + 1.0), 99.0 * (t + 1.0), t + 1.0),
+                start + window * tick
+            ));
+        }
+    }
+
+    /// Samples in the shape Vector 0.58's `internal_metrics` exports them:
+    /// global counters carry `host`, a refused reload carries its `reason`.
+    const RELOADS: &str = "\
+# TYPE vector_reloaded_total counter
+vector_reloaded_total{host=\"pod-1\"} 2
+# TYPE vector_component_errors_total counter
+vector_component_errors_total{error_code=\"reload\",error_type=\"configuration_failed\",host=\"pod-1\",reason=\"global_options_changed\",stage=\"processing\"} 1
+vector_component_errors_total{error_code=\"config_load\",error_type=\"configuration_failed\",host=\"pod-1\",stage=\"processing\"} 3
+vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_failed\",host=\"pod-1\",stage=\"sending\"} 7
+";
+
+    #[test]
+    fn reload_counts_read_applied_and_refused_reloads_only() {
+        let counts = ReloadCounts::parse(RELOADS).expect("parses");
+        assert_eq!(counts.applied, 2.0);
+        assert_eq!(
+            counts.refused,
+            BTreeMap::from([
+                ("config_load".to_string(), 3.0),
+                ("reload/global_options_changed".to_string(), 1.0),
+            ]),
+            "a sink's own errors are not a reload"
+        );
+    }
+
+    #[test]
+    fn a_vector_that_has_not_reloaded_reads_zero() {
+        let counts = ReloadCounts::parse(EXPOSITION).expect("parses");
+        assert_eq!(counts, ReloadCounts::default());
+    }
+
+    #[test]
+    fn refused_since_names_only_the_refusals_that_grew() {
+        let before = ReloadCounts::parse(RELOADS).expect("parses");
+        let mut after = before.clone();
+        after.applied += 1.0;
+        assert!(after.refused_since(&before).is_empty());
+
+        after
+            .refused
+            .insert("reload/topology_build_failed".to_string(), 1.0);
+        *after.refused.get_mut("config_load").expect("present") += 1.0;
+        assert_eq!(
+            after.refused_since(&before),
+            ["config_load", "reload/topology_build_failed"]
         );
     }
 

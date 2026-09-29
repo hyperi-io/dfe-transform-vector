@@ -56,12 +56,8 @@ sources:
     type: vector
     # A BIND address: this end listens, the supervisor dials it.
     address: 127.0.0.1:6100
-    acknowledgements:
-      # This is what makes the whole path hold rather than drop. The supervisor's
-      # RPC does not return until the record has reached the sink, so a stalled
-      # downstream stalls the supervisor, which stops draining its own Push
-      # listener, which back-pressures whoever is sending to this transform.
-      enabled: true
+    # No `acknowledgements` here: Vector turns them on for a source whose sink
+    # has them, and deprecates setting them on the source.
 
 transforms:
   # THE STEP YOU REPLACE. A no-op: it takes the record and passes it on
@@ -88,10 +84,16 @@ sinks:
     # A URI, not a bind address: this end DIALS the supervisor's listener.
     address: http://127.0.0.1:6101
     acknowledgements:
-      # Completes the hold-rather-than-drop chain the source starts.
+      # This is what makes the whole path hold rather than drop. The supervisor's
+      # RPC into `dfe_source` does not return until the record has reached this
+      # sink, and the supervisor answers this push only once the next stage has
+      # the records, so a stalled downstream back-pressures whoever is sending to
+      # this transform.
       enabled: true
     healthcheck:
-      enabled: true
+      # The supervisor binds this address only after Vector's config validates,
+      # and its health is the supervisor's own readiness.
+      enabled: false
     buffer:
       # `block` is what makes a slow next stage back-pressure this one rather
       # than the pipeline dropping records.

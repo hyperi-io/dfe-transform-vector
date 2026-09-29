@@ -15,8 +15,8 @@ description: |-
   - `sink.*` — the producer or the Push client is established at startup
   - `bridge.*` — the two supervisor-to-Vector legs bind at startup
   - `pipeline.name` — used in consumer group_id and metrics labels at startup
-  - `vector.*` — binary path, data_dir, config_dir, API address, log level
-    set at Vector spawn
+  - `vector.*` — binary path, data_dir, config_dir, API switch and address,
+    log level set at Vector spawn
   - `metrics.address` -- the HTTP server binds at startup
   - `logging.*` -- tracing subscriber configured at startup
   - `reload.poll_interval_secs` -- captured at reload loop start
@@ -25,9 +25,8 @@ description: |-
   - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
     chart's KEDA triggers (consumer-group lag and CPU), gated by the
     subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
-    scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
-    which this app does not initialise, so the engine keys
-    (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
+    scalo's runtime reads its own `scaling.enabled` and
+    `scaling.memory_gate_threshold` from the cascade, not this key.
 type: object
 properties:
   dfe_source:
@@ -68,6 +67,7 @@ properties:
         mechanism: scram_sha_512
         username: ''
         password: ''
+        secret_dir: null
       tls:
         enabled: false
         ca_cert_file: null
@@ -80,6 +80,8 @@ properties:
       drain_timeout_ms: null
       topic_lag_metric: true
       librdkafka_options: {}
+      acknowledgements:
+        enabled: true
   sink:
     description: Sink (output), on either transport. **Requires restart.**
     $ref: '#/$defs/SinkConfig'
@@ -91,12 +93,13 @@ properties:
       topic: ''
       key_field: ''
       encoding: json
-      compression: none
+      compression: zstd
       sasl:
         enabled: false
         mechanism: scram_sha_512
         username: ''
         password: ''
+        secret_dir: null
       tls:
         enabled: false
         ca_cert_file: null
@@ -112,7 +115,7 @@ properties:
         max_events: 10000
         max_bytes: null
         timeout_secs: 1
-      message_timeout_ms: 300000
+      message_timeout_ms: 0
       socket_timeout_ms: 60000
       librdkafka_options: {}
   bridge:
@@ -135,7 +138,8 @@ properties:
       binary: /usr/local/bin/vector
       data_dir: /var/lib/vector
       config_dir: /var/run/vector/config
-      api_address: 0.0.0.0:8686
+      api_enabled: false
+      api_address: 127.0.0.1:8686
       log_level: info
       version: 0.58.0
       version_check: strict
@@ -147,6 +151,7 @@ properties:
       address: 0.0.0.0:9090
       vector_metrics_address: 127.0.0.1:9598
       vector_metrics_expiry_ticks: 4
+      sink_stall_secs: 60
   logging:
     description: Logging. **Requires restart** (subscriber configured at startup).
     $ref: '#/$defs/LoggingConfig'
@@ -218,6 +223,7 @@ $defs:
           mechanism: scram_sha_512
           username: ''
           password: ''
+          secret_dir: null
       tls:
         description: TLS configuration.
         $ref: '#/$defs/TlsConfig'
@@ -263,6 +269,16 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+      acknowledgements:
+        description: |-
+          Hold each record's source acknowledgement until the sink has it.
+
+          On (the default) a Kafka offset is committed, and a push is answered,
+          only once the record is delivered, so a crash redelivers rather than
+          loses it. Off, both happen at receipt.
+        $ref: '#/$defs/AcknowledgementsConfig'
+        default:
+          enabled: true
   Transport:
     description: |-
       Which transport a stage uses.
@@ -289,13 +305,15 @@ $defs:
     description: |-
       SASL authentication for Kafka.
 
-      NOTE: `password` is `String`, not `SensitiveString`, because the config
-      goes through a figment serialize→merge→deserialize round-trip in
-      `apply_figment_env()`. `SensitiveString` serialises as `***REDACTED***`
-      which destroys the value during the round-trip. Password protection is
-      handled by: (1) `flat_env_string_sensitive` which masks the env var in
-      logs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`
-      env-var interpolation — the actual secret never appears in our config.
+      The credentials reach Vector through its `directory` secret backend, never
+      as text in the Vector config: either a mounted directory holding `username`
+      and `password` files (`secret_dir`), or `username`/`password` here, which
+      the assembler writes to owner-only files beside the Vector config.
+
+      `password` is `String`, not `SensitiveString`, because the config goes
+      through a figment serialize-merge-deserialize round trip in
+      `apply_figment_env()`, and `SensitiveString` serialises as `***REDACTED***`.
+      `Debug` redacts it instead.
     type: object
     properties:
       enabled:
@@ -307,13 +325,28 @@ $defs:
         type: string
         default: scram_sha_512
       username:
-        description: 'SASL username. Supports Vector env interpolation: `${KAFKA_SASL_USERNAME}`.'
+        description: SASL username. Leave empty when `secret_dir` supplies it.
         type: string
         default: ''
       password:
-        description: 'SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.'
+        description: |-
+          SASL password. Leave empty when `secret_dir` supplies it.
+
+          Taken literally: Vector does not expand `${VAR}` placeholders, so a
+          value holding one is refused.
         type: string
+        x-dfe-secret: true
+        writeOnly: true
         default: ''
+      secret_dir:
+        description: |-
+          Directory holding the credentials as files named `username` and
+          `password`, such as a mounted Kubernetes Secret. Vector reads them
+          itself; replaces `username` and `password`.
+        type:
+        - string
+        - 'null'
+        default: null
   TlsConfig:
     description: TLS configuration for Kafka.
     type: object
@@ -344,6 +377,30 @@ $defs:
         description: Skip hostname verification (dev/test only).
         type: boolean
         default: false
+  AcknowledgementsConfig:
+    description: |-
+      The `acknowledgements` section of an ack-capable transport.
+
+      With `enabled: true` (the default) a source releases its acknowledgement --
+      a Kafka offset commit, a gRPC or HTTP response -- only once every piece of
+      work built from the record has been delivered, dead-lettered with the DLQ's
+      confirmation, or dropped by policy. A failed delivery withholds it, so the
+      record is delivered again: duplicates are possible, loss is not.
+
+      With `enabled: false` the source acknowledges at receipt, before the record
+      is processed: a crash or a failed delivery loses what was acknowledged.
+
+      ```yaml
+      kafka:
+        acknowledgements:
+          enabled: true
+      ```
+    type: object
+    properties:
+      enabled:
+        description: Hold the source acknowledgement until every piece is delivered.
+        type: boolean
+        default: true
   SinkConfig:
     description: |-
       Sink configuration: the bus topic to produce to, or the Push listener to
@@ -380,9 +437,9 @@ $defs:
         type: string
         default: json
       compression:
-        description: 'Compression: none, gzip, lz4, snappy, zstd.'
+        description: 'Compression: none, gzip, lz4, snappy, zstd. Default: zstd.'
         type: string
-        default: none
+        default: zstd
       sasl:
         description: SASL authentication.
         $ref: '#/$defs/SaslConfig'
@@ -391,6 +448,7 @@ $defs:
           mechanism: scram_sha_512
           username: ''
           password: ''
+          secret_dir: null
       tls:
         description: TLS configuration.
         $ref: '#/$defs/TlsConfig'
@@ -416,11 +474,16 @@ $defs:
           max_bytes: null
           timeout_secs: 1
       message_timeout_ms:
-        description: 'Local message timeout (ms). Default: 300000 (5 min).'
+        description: |-
+          Local message timeout (ms). Default: 0, no limit.
+
+          librdkafka rejects a record still undelivered at this limit, and the
+          rejection drops it. With no limit a broker outage holds the record and
+          back-pressures the source instead.
         type: integer
         format: uint32
         minimum: 0
-        default: 300000
+        default: 0
       socket_timeout_ms:
         description: 'Network request timeout (ms). Default: 60000 (60s).'
         type: integer
@@ -560,10 +623,22 @@ $defs:
           access there and must point this somewhere it owns.
         type: string
         default: /var/run/vector/config
+      api_enabled:
+        description: |-
+          Run Vector's API (GraphQL, health, `vector top`). Default: off.
+
+          Nothing in this process is a client, and the API accepts unauthenticated
+          requests, so it stays off unless an operator wants it for debugging.
+        type: boolean
+        default: false
       api_address:
-        description: Vector API server address (host:port).
+        description: |-
+          Vector API bind address (host:port), used only with `api_enabled`.
+
+          Must be a loopback address: reach it with `kubectl port-forward` or
+          `docker exec`, never from the network.
         type: string
-        default: 0.0.0.0:8686
+        default: 127.0.0.1:8686
       log_level:
         description: Vector log level.
         type: string
@@ -632,6 +707,15 @@ $defs:
         format: uint32
         minimum: 0
         default: 4
+      sink_stall_secs:
+        description: |-
+          Seconds the sink may hold records, or have the broker refuse them,
+          without delivering any before `/readyz` reports not ready. 0 never does.
+          Default: 60.
+        type: integer
+        format: uint64
+        minimum: 0
+        default: 60
   LoggingConfig:
     description: Logging configuration.
     type: object

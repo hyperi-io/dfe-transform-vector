@@ -20,29 +20,43 @@ use tracing::debug;
 
 use scalo::cli::CommonArgs;
 use scalo::kafka_config::{KafkaSource, ServiceRole};
+use scalo::transport::AcknowledgementsConfig;
 
 use crate::Result;
 
 /// SASL authentication for Kafka.
 ///
-/// NOTE: `password` is `String`, not `SensitiveString`, because the config
-/// goes through a figment serialize→merge→deserialize round-trip in
-/// `apply_figment_env()`. `SensitiveString` serialises as `***REDACTED***`
-/// which destroys the value during the round-trip. Password protection is
-/// handled by: (1) `flat_env_string_sensitive` which masks the env var in
-/// logs, and (2) the generated Vector YAML using `${KAFKA_SASL_PASSWORD}`
-/// env-var interpolation — the actual secret never appears in our config.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+/// The credentials reach Vector through its `directory` secret backend, never
+/// as text in the Vector config: either a mounted directory holding `username`
+/// and `password` files (`secret_dir`), or `username`/`password` here, which
+/// the assembler writes to owner-only files beside the Vector config.
+///
+/// `password` is `String`, not `SensitiveString`, because the config goes
+/// through a figment serialize-merge-deserialize round trip in
+/// `apply_figment_env()`, and `SensitiveString` serialises as `***REDACTED***`.
+/// `Debug` redacts it instead.
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SaslConfig {
     /// Enable SASL authentication.
     pub enabled: bool,
     /// SASL mechanism: plain, scram_sha_256, scram_sha_512.
     pub mechanism: String,
-    /// SASL username. Supports Vector env interpolation: `${KAFKA_SASL_USERNAME}`.
+    /// SASL username. Leave empty when `secret_dir` supplies it.
     pub username: String,
-    /// SASL password. Supports Vector env interpolation: `${KAFKA_SASL_PASSWORD}`.
+    /// SASL password. Leave empty when `secret_dir` supplies it.
+    ///
+    /// Taken literally: Vector does not expand `${VAR}` placeholders, so a
+    /// value holding one is refused.
+    // Typed `String` for the round-trip above, but schema'd as scalo's
+    // `SensitiveString` so the emitted config-schema carries `x-dfe-secret` and
+    // `writeOnly`, which is what tells the console to mask the field.
+    #[schemars(with = "scalo::SensitiveString")]
     pub password: String,
+    /// Directory holding the credentials as files named `username` and
+    /// `password`, such as a mounted Kubernetes Secret. Vector reads them
+    /// itself; replaces `username` and `password`.
+    pub secret_dir: Option<String>,
 }
 
 impl Default for SaslConfig {
@@ -52,7 +66,25 @@ impl Default for SaslConfig {
             mechanism: "scram_sha_512".to_string(),
             username: String::new(),
             password: String::new(),
+            secret_dir: None,
         }
+    }
+}
+
+impl std::fmt::Debug for SaslConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let password = if self.password.is_empty() {
+            ""
+        } else {
+            "***REDACTED***"
+        };
+        f.debug_struct("SaslConfig")
+            .field("enabled", &self.enabled)
+            .field("mechanism", &self.mechanism)
+            .field("username", &self.username)
+            .field("password", &password)
+            .field("secret_dir", &self.secret_dir)
+            .finish()
     }
 }
 
@@ -102,8 +134,8 @@ impl Default for DecodingConfig {
 /// - `sink.*` — the producer or the Push client is established at startup
 /// - `bridge.*` — the two supervisor-to-Vector legs bind at startup
 /// - `pipeline.name` — used in consumer group_id and metrics labels at startup
-/// - `vector.*` — binary path, data_dir, config_dir, API address, log level
-///   set at Vector spawn
+/// - `vector.*` — binary path, data_dir, config_dir, API switch and address,
+///   log level set at Vector spawn
 /// - `metrics.address` -- the HTTP server binds at startup
 /// - `logging.*` -- tracing subscriber configured at startup
 /// - `reload.poll_interval_secs` -- captured at reload loop start
@@ -112,9 +144,8 @@ impl Default for DecodingConfig {
 /// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
 ///   chart's KEDA triggers (consumer-group lag and CPU), gated by the
 ///   subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
-///   scalo's own `ScalingEngine` reads a `scaling:` block from ITS cascade,
-///   which this app does not initialise, so the engine keys
-///   (`enabled`/`interval_secs`/`transport`/`params`) are inert here too.
+///   scalo's runtime reads its own `scaling.enabled` and
+///   `scaling.memory_gate_threshold` from the cascade, not this key.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
@@ -266,6 +297,12 @@ pub struct SourceConfig {
     pub topic_lag_metric: bool,
     /// Extra librdkafka options (passed through to Vector).
     pub librdkafka_options: BTreeMap<String, String>,
+    /// Hold each record's source acknowledgement until the sink has it.
+    ///
+    /// On (the default) a Kafka offset is committed, and a push is answered,
+    /// only once the record is delivered, so a crash redelivers rather than
+    /// loses it. Off, both happen at receipt.
+    pub acknowledgements: AcknowledgementsConfig,
 }
 
 impl Default for SourceConfig {
@@ -285,6 +322,7 @@ impl Default for SourceConfig {
             drain_timeout_ms: None,
             topic_lag_metric: true,
             librdkafka_options: BTreeMap::new(),
+            acknowledgements: AcknowledgementsConfig::default(),
         }
     }
 }
@@ -307,7 +345,7 @@ pub struct SinkConfig {
     pub key_field: String,
     /// Encoding codec: json, raw_bytes.
     pub encoding: String,
-    /// Compression: none, gzip, lz4, snappy, zstd.
+    /// Compression: none, gzip, lz4, snappy, zstd. Default: zstd.
     pub compression: String,
     /// SASL authentication.
     pub sasl: SaslConfig,
@@ -317,7 +355,11 @@ pub struct SinkConfig {
     pub buffer: BufferConfig,
     /// Sink batch configuration (Vector-level batching).
     pub batch: BatchConfig,
-    /// Local message timeout (ms). Default: 300000 (5 min).
+    /// Local message timeout (ms). Default: 0, no limit.
+    ///
+    /// librdkafka rejects a record still undelivered at this limit, and the
+    /// rejection drops it. With no limit a broker outage holds the record and
+    /// back-pressures the source instead.
     pub message_timeout_ms: u32,
     /// Network request timeout (ms). Default: 60000 (60s).
     pub socket_timeout_ms: u32,
@@ -334,12 +376,12 @@ impl Default for SinkConfig {
             topic: String::new(),
             key_field: String::new(),
             encoding: "json".to_string(),
-            compression: "none".to_string(),
+            compression: "zstd".to_string(),
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
             buffer: BufferConfig::default(),
             batch: BatchConfig::default(),
-            message_timeout_ms: 300_000,
+            message_timeout_ms: 0,
             socket_timeout_ms: 60_000,
             librdkafka_options: BTreeMap::new(),
         }
@@ -454,7 +496,15 @@ pub struct VectorConfig {
     /// a bare install, or a test driving the binary directly -- has no write
     /// access there and must point this somewhere it owns.
     pub config_dir: String,
-    /// Vector API server address (host:port).
+    /// Run Vector's API (GraphQL, health, `vector top`). Default: off.
+    ///
+    /// Nothing in this process is a client, and the API accepts unauthenticated
+    /// requests, so it stays off unless an operator wants it for debugging.
+    pub api_enabled: bool,
+    /// Vector API bind address (host:port), used only with `api_enabled`.
+    ///
+    /// Must be a loopback address: reach it with `kubectl port-forward` or
+    /// `docker exec`, never from the network.
     pub api_address: String,
     /// Vector log level.
     pub log_level: String,
@@ -493,7 +543,8 @@ impl Default for VectorConfig {
             binary: "/usr/local/bin/vector".to_string(),
             data_dir: "/var/lib/vector".to_string(),
             config_dir: super::assembler::DEFAULT_CONFIG_DIR.to_string(),
-            api_address: "0.0.0.0:8686".to_string(),
+            api_enabled: false,
+            api_address: "127.0.0.1:8686".to_string(),
             log_level: "info".to_string(),
             version: crate::deployment::VECTOR_VERSION.to_string(),
             version_check: "strict".to_string(),
@@ -520,6 +571,10 @@ pub struct MetricsConfig {
     /// Scrape ticks a merged `vector_*` gauge may go unseen before it is
     /// zeroed, so a component Vector drops stops reporting its last value.
     pub vector_metrics_expiry_ticks: u32,
+    /// Seconds the sink may hold records, or have the broker refuse them,
+    /// without delivering any before `/readyz` reports not ready. 0 never does.
+    /// Default: 60.
+    pub sink_stall_secs: u64,
 }
 
 impl Default for MetricsConfig {
@@ -528,6 +583,7 @@ impl Default for MetricsConfig {
             address: "0.0.0.0:9090".to_string(),
             vector_metrics_address: "127.0.0.1:9598".to_string(),
             vector_metrics_expiry_ticks: crate::metrics::scrape::DEFAULT_EXPIRY_TICKS,
+            sink_stall_secs: 60,
         }
     }
 }
@@ -600,6 +656,26 @@ impl Default for ScalingConfig {
 const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
+
+/// Set up scalo's cascade with the loaded config file as its settings layer.
+///
+/// This app reads its own sections from the file directly, but the sections
+/// scalo's runtime owns (`version_check`, `metrics` and the rest) resolve from
+/// the cascade alone. A reload re-enters here, and the cascade is set once per
+/// process.
+fn init_cascade(path: Option<&str>) -> Result<()> {
+    let opts = scalo::config::ConfigOptions {
+        env_prefix: ENV_PREFIX.to_string(),
+        config_paths: path.map(std::path::PathBuf::from).into_iter().collect(),
+        // `Config::load` has already read `.env` into the process environment.
+        load_dotenv: false,
+        ..Default::default()
+    };
+    match scalo::config::setup(opts) {
+        Ok(()) | Err(scalo::config::ConfigError::AlreadyInitialised) => Ok(()),
+        Err(e) => Err(crate::Error::Config(format!("failed to setup config: {e}"))),
+    }
+}
 
 /// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
 fn apply_figment_env(config: &mut Config) -> Result<()> {
@@ -743,13 +819,12 @@ impl ApplyFlatEnv for Config {
 impl Normalize for Config {
     /// Apply side-effect normalisations after env overrides.
     ///
-    /// Credentials present → enable SASL automatically.
+    /// Credentials or a credential directory present → enable SASL automatically.
     fn normalize(&mut self) {
-        if !self.source.sasl.username.is_empty() || !self.source.sasl.password.is_empty() {
-            self.source.sasl.enabled = true;
-        }
-        if !self.sink.sasl.username.is_empty() || !self.sink.sasl.password.is_empty() {
-            self.sink.sasl.enabled = true;
+        for sasl in [&mut self.source.sasl, &mut self.sink.sasl] {
+            if !sasl.username.is_empty() || !sasl.password.is_empty() || sasl.secret_dir.is_some() {
+                sasl.enabled = true;
+            }
         }
     }
 }
@@ -770,6 +845,7 @@ impl Config {
 
         // Start with defaults
         let mut config = Config::default();
+        let mut loaded_from = None;
 
         // Load YAML config file (overrides defaults).
         //
@@ -790,6 +866,7 @@ impl Config {
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
             config = serde_yaml_ng::from_str(&content)?;
             debug!(path, "loaded configuration file");
+            loaded_from = Some(path);
         } else {
             for path in &["config.yaml", "config.yml"] {
                 if Path::new(path).exists() {
@@ -797,10 +874,13 @@ impl Config {
                         .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
                     config = serde_yaml_ng::from_str(&content)?;
                     debug!(path, "loaded configuration file");
+                    loaded_from = Some(*path);
                     break;
                 }
             }
         }
+
+        init_cascade(loaded_from)?;
 
         // Apply figment env vars (DFE_TRANSFORM_SECTION__FIELD)
         apply_figment_env(&mut config)?;
@@ -860,9 +940,10 @@ impl Config {
     ///
     /// `ServiceRuntime` binds [`CommonArgs::effective_metrics_addr`] and the
     /// logger is built from `effective_log_level`/`effective_log_format`. Those
-    /// fall through to scalo's OWN config cascade, which this app never
-    /// initialises -- so a value set in this app's config file reaches nothing
-    /// unless it is put where the resolvers look.
+    /// fall through to scalo's config cascade, which reads `logger.*` rather
+    /// than `logging.*` and none of the flat `DFE_TRANSFORM_*` overrides -- so
+    /// a value set here reaches nothing unless it is put where the resolvers
+    /// look.
     ///
     /// Only fills a slot the CLI flag and its environment variable both left
     /// empty, so the documented precedence still holds: flag, then environment,
@@ -1010,6 +1091,8 @@ impl Config {
                 valid_compressions.join(", ")
             )));
         }
+
+        self.validate_api()?;
 
         // Vector version check mode
         let valid_modes = ["strict", "warn", "disabled"];
@@ -1162,14 +1245,71 @@ impl Config {
                 valid_mechanisms.join(", ")
             )));
         }
-        // Username is required when SASL is enabled (password may use env var
-        // interpolation like ${KAFKA_SASL_PASSWORD} which appears non-empty).
-        if sasl.username.is_empty() {
-            return Err(crate::Error::Validation(format!(
-                "{prefix}.username must not be empty when SASL is enabled"
-            )));
+        // Vector expands no `${VAR}`, so a placeholder would reach the broker
+        // as the credential and every login would fail.
+        for (field, value) in [("username", &sasl.username), ("password", &sasl.password)] {
+            if value.contains("${") {
+                return Err(crate::Error::Validation(format!(
+                    "{prefix}.{field} holds a '${{...}}' placeholder, which nothing expands: \
+                     Vector reads it literally. Set the credential itself (the \
+                     DFE_TRANSFORM_{side}_SASL_{upper} environment variable does), or point \
+                     {prefix}.secret_dir at a directory holding username and password files",
+                    side = prefix
+                        .split('.')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_uppercase(),
+                    upper = field.to_ascii_uppercase(),
+                )));
+            }
+        }
+        match &sasl.secret_dir {
+            Some(dir) => {
+                if !sasl.username.is_empty() || !sasl.password.is_empty() {
+                    return Err(crate::Error::Validation(format!(
+                        "{prefix}.secret_dir and {prefix}.username/password both name the \
+                         credentials -- set one of them"
+                    )));
+                }
+                if !Path::new(dir).is_absolute() {
+                    return Err(crate::Error::Validation(format!(
+                        "{prefix}.secret_dir must be an absolute path (got '{dir}'): Vector \
+                         resolves it from its own working directory"
+                    )));
+                }
+            }
+            None => {
+                if sasl.username.is_empty() {
+                    return Err(crate::Error::Validation(format!(
+                        "{prefix}.username must not be empty when SASL is enabled, unless \
+                         {prefix}.secret_dir supplies it"
+                    )));
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Keep Vector's API off the network.
+    ///
+    /// It takes unauthenticated GraphQL requests and no part of this process
+    /// is a client, so it is opt-in and bound to loopback.
+    fn validate_api(&self) -> Result<()> {
+        if !self.vector.api_enabled {
+            return Ok(());
+        }
+        let address = &self.vector.api_address;
+        match address.parse::<std::net::SocketAddr>() {
+            Ok(addr) if addr.ip().is_loopback() => Ok(()),
+            Ok(_) => Err(crate::Error::Validation(format!(
+                "vector.api_address must be a loopback address when vector.api_enabled is true \
+                 (got '{address}'): the API takes unauthenticated requests, so reach it with \
+                 port-forward or exec rather than publishing it"
+            ))),
+            Err(_) => Err(crate::Error::Validation(format!(
+                "vector.api_address must be a host:port bind address (got '{address}')"
+            ))),
+        }
     }
 
     fn validate_buffer(&self, buffer: &BufferConfig) -> Result<()> {

@@ -260,6 +260,7 @@ async fn drain(
         .unwrap_or_else(|e| panic!("consumer on {topic}: {e}"));
     let mut out = Vec::with_capacity(want);
     let deadline = Instant::now() + timeout;
+    let mut last_err = None;
     while out.len() < want && Instant::now() < deadline {
         match consumer.recv(want).await {
             Ok(batch) => {
@@ -271,9 +272,20 @@ async fn drain(
                 }
                 let _ = consumer.commit(&batch.commit_tokens).await;
             }
-            Err(e) => panic!("recv on {topic} failed: {e}"),
+            // A broker the client is still reconnecting to answers with a
+            // transport error, which the deadline is already there to bound.
+            // Failing on the first one turns a loaded host into a red suite.
+            Err(e) => {
+                last_err = Some(e.to_string());
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
         }
     }
+    assert!(
+        out.len() >= want || last_err.is_none(),
+        "recv on {topic} never succeeded within {timeout:?}: {}",
+        last_err.unwrap_or_default()
+    );
     let _ = consumer.close().await;
     out
 }

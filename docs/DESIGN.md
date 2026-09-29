@@ -84,7 +84,6 @@ descriptor = ServiceDescriptor(
     consumer_group="dfe-transform-vector",
     liveness_paths=("/livez",),
     readiness_paths=("/readyz",),
-    extra_ports={"vector-api": 8686},
     description="Kafka-to-Kafka transform pipelines powered by Vector.dev",
 )
 ```
@@ -226,9 +225,11 @@ reports 503 instead of a healthy start.
 **What the settle window does NOT prove.** The check is `try_wait()` returning
 "still running" at t+500ms -- the process EXISTS. Vector's own startup routinely
 takes longer than that, so `/readyz` can answer 200 while Vector is still
-wiring up its topology and consuming nothing. The honest signal for "carrying
-traffic" is Vector's own API (`VECTOR_API_ADDRESS`, already enabled on 8686);
-the wrapper does not read it today.
+wiring up its topology and consuming nothing. The signal for "carrying
+traffic" is the sink's progress in Vector's own metrics: `/readyz` also reports
+not ready while the sink holds records and has delivered none of them for
+`metrics.sink_stall_secs` (60 by default). Vector's API is off by default and,
+when turned on, binds loopback only.
 
 During config reload, readiness stays healthy -- but only if it was healthy
 already. `Reloading` counts as ready, so it is entered by compare-and-set from
@@ -321,8 +322,9 @@ source:
   group_id: "dfe-transform-vector-${PIPELINE_NAME}"
   sasl:
     mechanism: scram_sha_512
-    username: "${KAFKA_SASL_USERNAME}"
-    password: "${KAFKA_SASL_PASSWORD}"
+    # A mounted Secret holding `username` and `password` files. Vector reads
+    # them through its directory secret backend; it expands no ${VAR}.
+    secret_dir: /var/run/secrets/dfe-kafka
   tls:
     enabled: true
 
@@ -339,7 +341,7 @@ transforms:
 vector:
   binary: /usr/local/bin/vector
   data_dir: /var/lib/vector
-  api_address: "0.0.0.0:8686"
+  api_enabled: false          # loopback only when turned on
   log_level: info
 
 metrics:
@@ -355,7 +357,7 @@ The config engine takes the big dials and produces a Vector config directory:
 
 ```
 /var/run/vector/config/
-  00_global.yaml          # data_dir + api settings
+  00_global.yaml          # data_dir, api switch, SASL secret backends
   00_source.yaml          # Generated from source big dials
   50_000_parse.yaml       # User transforms, flat (Vector --config-dir doesn't recurse)
   50_001_enrich.yaml      # Prefixed with 50_NNN_ for stable sort order
@@ -378,8 +380,8 @@ sources:
     sasl:
       enabled: true
       mechanism: SCRAM-SHA-512
-      username: "${KAFKA_SASL_USERNAME}"
-      password: "${KAFKA_SASL_PASSWORD}"
+      username: SECRET[dfe_source_sasl.username]
+      password: SECRET[dfe_source_sasl.password]
     tls:
       enabled: true
     librdkafka_options:
@@ -388,23 +390,31 @@ sources:
 
 **Generated sink (`90_sink.yaml`):**
 ```yaml
+transforms:
+  dfe_size_cap:                         # drops a record over message.max.bytes
+    type: filter
+    inputs: ["<last_transform_label>"]  # Auto-wired
+    condition: length(encode_json(.)) <= 999872
 sinks:
   dfe_sink:
     type: kafka
-    inputs: ["<last_transform_label>"]  # Auto-wired
+    inputs: ["dfe_size_cap"]
     bootstrap_servers: "kafka-1:9092,kafka-2:9092"
     topic: enriched_syslog_land
     key_field: ".org_id"
     encoding:
       codec: json
     compression: zstd
+    message_timeout_ms: 0               # an outage holds rather than rejects
     sasl:
       enabled: true
       mechanism: SCRAM-SHA-512
-      username: "${KAFKA_SASL_USERNAME}"
-      password: "${KAFKA_SASL_PASSWORD}"
+      username: SECRET[dfe_sink_sasl.username]
+      password: SECRET[dfe_sink_sasl.password]
     tls:
       enabled: true
+    librdkafka_options:
+      enable.idempotence: "true"
 ```
 
 **Generated observability (`99_observability.yaml`):**
@@ -447,10 +457,11 @@ Config change detected (file watcher or SIGHUP)
   ├─ Transform file change (safe)
   │   ├─ Re-read transform YAMLs
   │   ├─ Re-run DAG wiring + validation
-  │   ├─ Run `vector validate` on new config
+  │   ├─ Check every enrichment table file can be read, then `vector validate`
   │   ├─ If valid: write new config dir → SIGHUP to Vector child
-  │   ├─ If invalid: log error, increment metric, keep old config
-  │   └─ Emit config_reloads_total{result=success|failure}
+  │   ├─ Read vector_reloaded_total / component_errors_total{error_code} for the outcome
+  │   ├─ If invalid or refused: log error, increment metric, put back the running config dir
+  │   └─ Emit config_reloads_total{result=success|error|unconfirmed}
   │
   └─ Any other config change (unsafe — requires pod restart)
       ├─ Log warning: "config change requires pod restart"
@@ -656,8 +667,8 @@ tracking is a container image pipeline concern.
 | **Vector hang** | Health poll timeout (Vector API unresponsive) | After N consecutive failures (configurable, default 5): SIGTERM → wait → SIGKILL → restart |
 | **OOM** | Child killed by cgroup (exit 137) | Restart. Metric emitted. Scaling pressure increases. Triggers KEDA scale-up. |
 | **Kafka unreachable** | Vector consumer lag stops advancing | Scaling pressure stays low (no lag movement). Vector's own retry handles reconnection. |
-| **Config reload: new config invalid** | `vector validate` on new config | Keep old config running. Log error. Emit `config_reloads_total{result="failure"}`. |
-| **Config reload: Vector rejects SIGHUP** | Vector logs error, keeps old config | Wrapper detects via health + metrics. Falls back to full restart with new config. |
+| **Config reload: new config invalid** | Enrichment table files readable, then `vector validate` on new config | Keep old config running, and put its config dir back. Log error. Emit `config_reloads_total{result="error"}`. |
+| **Config reload: Vector rejects SIGHUP** | Vector keeps old config and counts `component_errors_total{error_code="reload"}` | Wrapper reads the counter, emits `config_reloads_total{result="error"}` and puts back the config dir Vector runs. |
 | **Version mismatch** | Startup version check | `strict` mode: refuse to start. `warn` mode: log + metric. |
 | **Disk buffer corruption** | Vector exits on startup | Wrapper restarts Vector. If persistent, Vector's WAL recovery handles it. |
 
@@ -683,7 +694,7 @@ The two-layer restart model (wrapper restarts Vector, K8s restarts wrapper) prov
 6. Load user transform YAMLs
 7. Run DAG wiring + validation
 8. Assemble config directory
-9. Run `vector validate --config-dir`
+9. Run `vector validate --no-environment --config-dir` (the broker is Vector's to reach, at runtime)
 10. Publish the lifecycle into scalo's health registry (readiness: NOT READY)
 11. Spawn Vector child process
 12. Wait out the settle window (`SPAWN_SETTLE`, 500ms)

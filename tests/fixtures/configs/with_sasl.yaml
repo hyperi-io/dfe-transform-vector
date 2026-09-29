@@ -1,5 +1,6 @@
 # Test fixture: config with SASL/SCRAM + TLS on both source and sink.
-# Tests that SASL credentials are passed through as Vector env-var references.
+# The credentials are files in a mounted directory, which Vector's directory
+# secret backend reads, so none is written into the config.
 
 pipeline:
   name: "sasl-pipeline"
@@ -15,8 +16,7 @@ source:
   sasl:
     enabled: true
     mechanism: "scram_sha_512"
-    username: "${KAFKA_SASL_USERNAME}"
-    password: "${KAFKA_SASL_PASSWORD}"
+    secret_dir: "/var/run/secrets/dfe-kafka"
   tls:
     enabled: true
 
@@ -30,8 +30,7 @@ sink:
   sasl:
     enabled: true
     mechanism: "scram_sha_512"
-    username: "${KAFKA_SASL_USERNAME}"
-    password: "${KAFKA_SASL_PASSWORD}"
+    secret_dir: "/var/run/secrets/dfe-kafka"
   tls:
     enabled: true
 

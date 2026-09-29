@@ -8,13 +8,17 @@
 
 //! Vector validate integration.
 //!
-//! Shells out to `vector validate --config-dir <path>` and interprets
-//! the exit code:
+//! Shells out to `vector validate --no-environment --config-dir <path>` and
+//! interprets the exit code:
 //! - 0: valid configuration
 //! - 78: configuration error (YAML syntax, VRL type mismatch, etc.)
 //! - Other: system error (binary not found, permissions, etc.)
+//!
+//! `--no-environment` compiles VRL against stub enrichment tables and never
+//! opens their files, so [`vector_validate`] checks those files itself first.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use scalo::logger::security;
@@ -26,11 +30,33 @@ use crate::Result;
 /// Exit code for Vector configuration errors.
 const VECTOR_CONFIG_ERROR_EXIT: i32 = 78;
 
+/// The argv `vector validate` is run with.
+///
+/// `--no-environment`: validate loads the config without its secret backends,
+/// so a `SECRET[...]` credential would reach the broker as the literal
+/// reference. The running Vector resolves the secrets and runs the health
+/// checks itself.
+#[must_use]
+pub fn validate_args(config_dir: &Path) -> Vec<OsString> {
+    vec![
+        "validate".into(),
+        "--no-environment".into(),
+        "--config-dir".into(),
+        config_dir.as_os_str().to_owned(),
+    ]
+}
+
 /// Run `vector validate` against the assembled config directory.
 ///
-/// Returns `Ok(())` if validation passes, or an error with details
-/// from Vector's stderr output.
+/// Checks the config itself, the VRL of every transform included, that every
+/// enrichment table file can be read, and nothing that needs the broker -- see
+/// [`validate_args`].
+///
+/// Returns `Ok(())` if validation passes, or an error naming each unreadable
+/// table file, or with details from Vector's stderr output.
 pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) -> Result<()> {
+    check_enrichment_tables(config_dir).await?;
+
     let binary = &vector_config.binary;
 
     debug!(
@@ -40,9 +66,7 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
     );
 
     let mut cmd = tokio::process::Command::new(binary);
-    cmd.arg("validate")
-        .arg("--config-dir")
-        .arg(config_dir)
+    cmd.args(validate_args(config_dir))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -228,26 +252,120 @@ pub fn classify_data_dir(mountinfo: Option<&str>, data_dir: &Path) -> DataDirBac
 /// Helm-time guard never sees those.
 #[must_use]
 pub fn assembled_config_uses_disk_buffer(config_dir: &Path) -> bool {
+    assembled_documents(config_dir)
+        .into_iter()
+        .find(|(_, value)| yaml_declares_disk_buffer(value))
+        .inspect(|(path, _)| debug!(path = %path.display(), "config declares a disk buffer"))
+        .is_some()
+}
+
+/// Every YAML document in the assembled directory, with the file it came from.
+///
+/// A file that cannot be read or parsed is left out: `vector validate` reports it.
+fn assembled_documents(config_dir: &Path) -> Vec<(PathBuf, serde_yaml_ng::Value)> {
     let Ok(entries) = std::fs::read_dir(config_dir) else {
-        return false;
+        return Vec::new();
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "yaml" && e != "yml") {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "yaml" || e == "yml"))
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text).ok()?;
+            Some((path, value))
+        })
+        .collect()
+}
+
+/// An enrichment table whose file Vector cannot load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableTable {
+    /// The table's name under `enrichment_tables`.
+    pub name: String,
+    /// The file the table loads.
+    pub path: PathBuf,
+    /// Why the file cannot be read.
+    pub reason: String,
+}
+
+impl std::fmt::Display for UnreadableTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "enrichment table '{}' cannot load {}: {}",
+            self.name,
+            self.path.display(),
+            self.reason
+        )
+    }
+}
+
+/// Every enrichment table in the assembled config whose file cannot be read.
+///
+/// Parsed rather than grepped, and across every assembled file, because an
+/// operator's transform file declares its own tables. A `file` table loads
+/// `file.path`; `geoip` and `mmdb` load `path`.
+#[must_use]
+pub fn unreadable_enrichment_tables(config_dir: &Path) -> Vec<UnreadableTable> {
+    let mut unreadable = Vec::new();
+    for (_, document) in assembled_documents(config_dir) {
+        let Some(tables) = document
+            .get("enrichment_tables")
+            .and_then(serde_yaml_ng::Value::as_mapping)
+        else {
             continue;
         };
-        let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
-            continue;
-        };
-        if yaml_declares_disk_buffer(&value) {
-            debug!(path = %path.display(), "config declares a disk buffer");
-            return true;
+        for (name, table) in tables {
+            let Some(path) = enrichment_table_file(table) else {
+                continue;
+            };
+            if let Some(reason) = unreadable_file(Path::new(path)) {
+                unreadable.push(UnreadableTable {
+                    name: name.as_str().unwrap_or_default().to_string(),
+                    path: PathBuf::from(path),
+                    reason,
+                });
+            }
         }
     }
-    false
+    unreadable
+}
+
+/// The file an enrichment table loads, for the table types that load one.
+fn enrichment_table_file(table: &serde_yaml_ng::Value) -> Option<&str> {
+    use serde_yaml_ng::Value;
+
+    match table.get("type").and_then(Value::as_str)? {
+        "file" => table.get("file")?.get("path")?.as_str(),
+        "geoip" | "mmdb" => table.get("path")?.as_str(),
+        _ => None,
+    }
+}
+
+/// Why `path` cannot be read as a file, or `None` when it can.
+fn unreadable_file(path: &Path) -> Option<String> {
+    match std::fs::File::open(path).and_then(|file| file.metadata()) {
+        Ok(meta) if meta.is_file() => None,
+        Ok(_) => Some("not a regular file".to_string()),
+        Err(e) => Some(e.to_string()),
+    }
+}
+
+/// Fail when an enrichment table file in the assembled config cannot be read.
+///
+/// Vector fails on such a table only when it loads it: a crash-loop at startup,
+/// and on a reload a rollback the reload never reports.
+async fn check_enrichment_tables(config_dir: &Path) -> Result<()> {
+    let dir = config_dir.to_path_buf();
+    let unreadable = tokio::task::spawn_blocking(move || unreadable_enrichment_tables(&dir))
+        .await
+        .map_err(|e| crate::Error::Vector(format!("enrichment table check did not finish: {e}")))?;
+    if unreadable.is_empty() {
+        return Ok(());
+    }
+    let tables: Vec<String> = unreadable.iter().map(ToString::to_string).collect();
+    Err(crate::Error::Validation(tables.join("; ")))
 }
 
 /// Recursively look for a `buffer` whose `type` is `disk`.
@@ -353,6 +471,25 @@ pub fn warn_if_disk_buffer_is_ephemeral(config_dir: &Path, vector_config: &Vecto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without `--no-environment`, validate hands a SASL broker the literal
+    /// `SECRET[...]` reference and startup fails on "invalid credentials".
+    #[test]
+    fn startup_validation_stays_off_the_broker() {
+        let args: Vec<String> = validate_args(Path::new("/var/run/vector/config"))
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "validate",
+                "--no-environment",
+                "--config-dir",
+                "/var/run/vector/config"
+            ]
+        );
+    }
 
     #[test]
     fn parse_version_standard() {
@@ -518,5 +655,131 @@ mod tests {
         assert!(!assembled_config_uses_disk_buffer(Path::new(
             "/nonexistent/dfe-transform-vector/config"
         )));
+    }
+
+    /// A transform file declaring a `file` table at `path`, the shape the
+    /// bundled filebeat pipeline ships.
+    fn file_table(path: &Path) -> String {
+        format!(
+            "enrichment_tables:\n  timezones:\n    type: file\n    file:\n      path: {}\n      \
+             encoding:\n        type: csv\n    schema:\n      abbreviation: string\n",
+            path.display()
+        )
+    }
+
+    #[test]
+    fn a_missing_table_file_is_named_with_its_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("data/timezones.csv");
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&missing));
+
+        let unreadable = unreadable_enrichment_tables(tmp.path());
+        assert_eq!(unreadable.len(), 1, "{unreadable:?}");
+        assert_eq!(unreadable[0].name, "timezones");
+        assert_eq!(unreadable[0].path, missing);
+        assert!(
+            unreadable[0]
+                .to_string()
+                .contains(&missing.display().to_string()),
+            "the error must carry the path: {}",
+            unreadable[0]
+        );
+    }
+
+    #[test]
+    fn a_readable_table_file_passes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let table = tmp.path().join("timezones.csv");
+        std::fs::write(&table, "abbreviation\nUTC\n").expect("write table");
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&table));
+
+        assert!(unreadable_enrichment_tables(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn a_directory_where_the_table_file_should_be_is_unreadable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("timezones.csv");
+        std::fs::create_dir(&dir).expect("create dir");
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&dir));
+
+        let unreadable = unreadable_enrichment_tables(tmp.path());
+        assert_eq!(unreadable.len(), 1, "{unreadable:?}");
+        assert_eq!(unreadable[0].reason, "not a regular file");
+    }
+
+    #[test]
+    fn geoip_and_mmdb_tables_load_a_file_too() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_yaml_file(
+            tmp.path(),
+            "50_000_geo.yaml",
+            "enrichment_tables:\n  city:\n    type: geoip\n    path: /nonexistent/GeoLite2-City.mmdb\n  \
+             asn:\n    type: mmdb\n    path: /nonexistent/asn.mmdb\n",
+        );
+
+        let mut names: Vec<String> = unreadable_enrichment_tables(tmp.path())
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, ["asn", "city"]);
+    }
+
+    #[test]
+    fn a_table_that_loads_no_file_is_not_checked() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_yaml_file(
+            tmp.path(),
+            "50_000_memory.yaml",
+            "enrichment_tables:\n  cache:\n    type: memory\n    ttl: 60\n",
+        );
+
+        assert!(unreadable_enrichment_tables(tmp.path()).is_empty());
+    }
+
+    /// A stand-in for a Vector binary whose `validate` passes, as the real one
+    /// does with `--no-environment` whatever the table files are.
+    fn always_valid_binary(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("vector-that-validates");
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write the fake binary");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the fake binary executable");
+        path
+    }
+
+    /// Startup and reload both validate through `vector_validate`, so a table
+    /// Vector would fail to load must fail here, before Vector is asked.
+    #[tokio::test]
+    async fn vector_validate_refuses_a_table_file_it_cannot_read() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir(&config_dir).expect("config dir");
+        let missing = tmp.path().join("timezones.csv");
+        write_yaml_file(&config_dir, "50_000_filebeat.yaml", &file_table(&missing));
+
+        let vector_config = VectorConfig {
+            binary: always_valid_binary(tmp.path())
+                .to_string_lossy()
+                .into_owned(),
+            data_dir: String::new(),
+            ..VectorConfig::default()
+        };
+
+        let err = vector_validate(&vector_config, &config_dir)
+            .await
+            .expect_err("a table file that cannot be read must fail validation");
+        assert!(
+            matches!(err, crate::Error::Validation(_))
+                && err.to_string().contains(&missing.display().to_string()),
+            "the error must be a validation failure naming the file: {err}"
+        );
+
+        std::fs::write(&missing, "abbreviation\nUTC\n").expect("write table");
+        vector_validate(&vector_config, &config_dir)
+            .await
+            .expect("the same config validates once the file is there");
     }
 }
