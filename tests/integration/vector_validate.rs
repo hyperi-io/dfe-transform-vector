@@ -399,6 +399,71 @@ fn a_running_vector_reads_the_credentials_the_assembler_hands_it() {
     assert_eq!(event["pass"], "probe-pass");
 }
 
+/// `vector validate --no-environment` compiles VRL against stub tables and
+/// never opens a table file, so a table mounted at the wrong path passes it and
+/// Vector exits on it at load. The supervisor's own validation must not pass it.
+#[tokio::test]
+async fn a_table_file_vector_validate_passes_but_cannot_load_fails_validation() {
+    use dfe_transform_vector::config::validate::vector_validate;
+
+    let Some(vector_bin) = common::vector_binary_path() else {
+        common::require_service_in_ci("Vector binary", "scripts/fetch-vector.sh found nothing");
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+
+    let (mut config, work_dir) = build_config(BufferConfig::default());
+    config.vector.binary = vector_bin.to_string_lossy().into_owned();
+    let transforms = work_dir.path().join("transforms");
+    fs::create_dir_all(&transforms).expect("transforms dir");
+    let table = work_dir.path().join("data/timezones.csv");
+    fs::write(
+        transforms.join("01_filebeat.yaml"),
+        format!(
+            "enrichment_tables:\n  timezones:\n    type: file\n    file:\n      path: {}\n      \
+             encoding:\n        type: csv\n    schema:\n      abbreviation: string\n\
+             transforms:\n  filebeat:\n    type: remap\n    inputs: [dfe_source]\n    \
+             source: |\n      .seen = true\n",
+            table.display()
+        ),
+    )
+    .expect("transform with a table");
+    config.transforms = TransformConfig {
+        dir: Some(transforms.to_string_lossy().into_owned()),
+        files: None,
+    };
+    let config_dir = work_dir.path().join("config");
+    assembler::assemble(&config, &config_dir).expect("assembly should succeed");
+
+    let raw = Command::new(vector_bin)
+        .args(dfe_transform_vector::config::validate::validate_args(
+            &config_dir,
+        ))
+        .env("VECTOR_DATA_DIR", &config.vector.data_dir)
+        .output()
+        .expect("run vector validate");
+    assert!(
+        raw.status.success(),
+        "vector validate --no-environment now opens table files, so the supervisor's own \
+         check may be redundant: {}",
+        String::from_utf8_lossy(&raw.stdout)
+    );
+
+    let err = vector_validate(&config.vector, &config_dir)
+        .await
+        .expect_err("a table file that is not there must fail validation");
+    assert!(
+        err.to_string().contains(&table.display().to_string()),
+        "the error must name the file: {err}"
+    );
+
+    fs::create_dir_all(table.parent().expect("parent")).expect("data dir");
+    fs::write(&table, "abbreviation\nUTC\n").expect("write table");
+    vector_validate(&config.vector, &config_dir)
+        .await
+        .expect("the same config validates once the file is there");
+}
+
 #[test]
 #[ignore] // requires Vector binary
 fn vector_validate_full_chain_sasl_tls_skip_verify() {

@@ -718,14 +718,17 @@ fn no_env_placeholder_survives_assembly_of_a_shipped_config() {
                 sasl.secret_dir = Some(mounted.to_string_lossy().into_owned());
             }
         }
-        // The chart names a transforms mount this machine does not have.
-        if config
+        // A container path is read inside the filesystem the stock chart gives
+        // the pod, so a mount that hides it fails assembly here as it would there.
+        let pod = work.path().join("pod");
+        stock_pod_filesystem(&pod);
+        if let Some(dir) = config
             .transforms
             .dir
-            .as_ref()
-            .is_some_and(|d| !std::path::Path::new(d).is_dir())
+            .clone()
+            .filter(|d| std::path::Path::new(d).is_absolute())
         {
-            config.transforms.dir = None;
+            config.transforms.dir = Some(inside(&pod, &dir).to_string_lossy().into_owned());
         }
 
         let assembled = work.path().join("config");
@@ -749,6 +752,119 @@ fn no_env_placeholder_survives_assembly_of_a_shipped_config() {
             }
         }
     }
+}
+
+/// `path`, a container path, inside the pod filesystem stood up at `root`.
+fn inside(root: &std::path::Path, path: &str) -> std::path::PathBuf {
+    root.join(path.trim_start_matches('/'))
+}
+
+/// One entry under the Deployment's `volumeMounts`.
+#[derive(Debug, Default)]
+struct VolumeMount {
+    path: String,
+    sub_path: Option<String>,
+}
+
+/// The container's volume mounts, read from the Deployment template.
+///
+/// Read as text because the template is not YAML until Helm renders it, and
+/// Helm is not on the CI runner.
+fn chart_volume_mounts() -> Vec<VolumeMount> {
+    let template = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/templates/deployment.yaml"),
+    )
+    .expect("read deployment template");
+    let mut mounts: Vec<VolumeMount> = Vec::new();
+    let mut in_mounts = false;
+    for line in template.lines().map(str::trim) {
+        match line {
+            "volumeMounts:" => in_mounts = true,
+            "volumes:" => in_mounts = false,
+            _ if !in_mounts => {}
+            _ if line.starts_with("- name:") => mounts.push(VolumeMount::default()),
+            _ => {
+                let Some(mount) = mounts.last_mut() else {
+                    continue;
+                };
+                if let Some(path) = line.strip_prefix("mountPath:") {
+                    mount.path = path.trim().to_string();
+                } else if let Some(sub) = line.strip_prefix("subPath:") {
+                    mount.sub_path = Some(sub.trim().to_string());
+                }
+            }
+        }
+    }
+    assert!(
+        mounts.iter().all(|m| !m.path.is_empty()),
+        "a volume mount without a mountPath: {mounts:?}"
+    );
+    mounts
+}
+
+/// Stand up under `root` the filesystem the stock chart gives the app: the
+/// directories the image creates, then each volume the Deployment mounts. A
+/// directory mount replaces whatever the image put at that path; a `subPath`
+/// mount places one file.
+fn stock_pod_filesystem(root: &std::path::Path) {
+    let dockerfile = deployment::emit_dockerfile();
+    let created = dockerfile
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("RUN mkdir -p "))
+        .expect("the image creates its directories with one mkdir");
+    for dir in created
+        .split_whitespace()
+        .take_while(|t| t.starts_with('/'))
+    {
+        std::fs::create_dir_all(inside(root, dir)).expect("image directory");
+    }
+    for mount in chart_volume_mounts() {
+        let at = inside(root, &mount.path);
+        if mount.sub_path.is_some() {
+            std::fs::create_dir_all(at.parent().expect("a file mount has a parent"))
+                .expect("mount parent");
+            std::fs::write(&at, "").expect("file mount");
+        } else {
+            if at.exists() {
+                std::fs::remove_dir_all(&at).expect("clear what the mount hides");
+            }
+            std::fs::create_dir_all(&at).expect("directory mount");
+        }
+    }
+}
+
+/// With stock values the app must find the directory `transforms.dir` names.
+///
+/// The ConfigMap mounted over the whole of /etc/dfe-transform-vector hid the
+/// image's transforms/ beside config.yaml, and assembly refuses a missing
+/// transforms dir, so a stock install crash-looped before Vector started.
+#[test]
+fn the_stock_chart_leaves_the_transforms_dir_its_config_names() {
+    let values: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart/values.yaml"),
+        )
+        .expect("read chart values"),
+    )
+    .expect("parse chart values");
+    let dir = values["config"]["transforms"]["dir"]
+        .as_str()
+        .expect("the chart names a transforms dir")
+        .to_string();
+
+    let pod = tempfile::tempdir().expect("pod root");
+    stock_pod_filesystem(pod.path());
+
+    assert!(
+        inside(pod.path(), &dir).is_dir(),
+        "{dir} is not in the pod: the image creates it, but a volume mount hides it. \
+         Mounts: {:?}",
+        chart_volume_mounts()
+    );
+    assert!(
+        inside(pod.path(), "/etc/dfe-transform-vector/config.yaml").is_file(),
+        "the config file the entrypoint reads is not mounted"
+    );
 }
 
 #[test]

@@ -38,7 +38,7 @@ use dfe_transform_vector::config::loader::{
     TlsConfig, TransformConfig, VectorConfig,
 };
 use dfe_transform_vector::config::validate::vector_validate;
-use dfe_transform_vector::metrics::scrape::OversizeDrops;
+use dfe_transform_vector::metrics::scrape::DeadLetterDrops;
 use dfe_transform_vector::metrics::{DEAD_LETTERS_DROPPED, TOO_LARGE};
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
 use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
@@ -561,7 +561,7 @@ async fn run_oversize_assertions(
 
     let recorder = metrics_util::debugging::DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
-    let mut drops = OversizeDrops::default();
+    let mut drops = DeadLetterDrops::too_large();
     metrics::with_local_recorder(&recorder, || drops.record(&derived));
     let first = too_large_since(&snapshotter);
 

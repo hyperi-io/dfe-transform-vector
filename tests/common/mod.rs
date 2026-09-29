@@ -653,6 +653,30 @@ pub async fn reqwest_lite(url: &str) -> (u16, String) {
     (status_code, body)
 }
 
+/// Stand in for Vector's `prometheus_exporter`: answer each connection with the
+/// exposition `body` builds from how many connections came before it.
+pub async fn serve_expositions(
+    body: impl Fn(u64) -> String + Send + Sync + 'static,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = tokio::spawn(async move {
+        let mut served = 0u64;
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let body = body(served);
+            served += 1;
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
+            let response = format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}");
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    (addr, handle)
+}
+
 /// Get a free port by binding to :0, extracting the address, then dropping.
 pub async fn free_port() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -93,7 +93,7 @@ properties:
       topic: ''
       key_field: ''
       encoding: json
-      compression: none
+      compression: zstd
       sasl:
         enabled: false
         mechanism: scram_sha_512
@@ -437,9 +437,9 @@ $defs:
         type: string
         default: json
       compression:
-        description: 'Compression: none, gzip, lz4, snappy, zstd.'
+        description: 'Compression: none, gzip, lz4, snappy, zstd. Default: zstd.'
         type: string
-        default: none
+        default: zstd
       sasl:
         description: SASL authentication.
         $ref: '#/$defs/SaslConfig'
@@ -709,8 +709,9 @@ $defs:
         default: 4
       sink_stall_secs:
         description: |-
-          Seconds the sink may hold records without delivering or dropping any
-          before `/readyz` reports not ready. 0 never does. Default: 60.
+          Seconds the sink may hold records, or have the broker refuse them,
+          without delivering any before `/readyz` reports not ready. 0 never does.
+          Default: 60.
         type: integer
         format: uint64
         minimum: 0

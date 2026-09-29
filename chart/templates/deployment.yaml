@@ -101,8 +101,10 @@ spec:
             failureThreshold: 30
             periodSeconds: 5
           volumeMounts:
+            # The file alone: a directory mount hides the image's transforms/, which config.transforms.dir names.
             - name: config
-              mountPath: /etc/dfe-transform-vector
+              mountPath: /etc/dfe-transform-vector/config.yaml
+              subPath: config.yaml
               readOnly: true
             # Kafka credentials as files. config.{source,sink}.sasl.secret_dir
             # names this path, and Vector's directory secret backend reads the

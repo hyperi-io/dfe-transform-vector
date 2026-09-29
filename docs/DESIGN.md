@@ -457,10 +457,11 @@ Config change detected (file watcher or SIGHUP)
   ├─ Transform file change (safe)
   │   ├─ Re-read transform YAMLs
   │   ├─ Re-run DAG wiring + validation
-  │   ├─ Run `vector validate` on new config
+  │   ├─ Check every enrichment table file can be read, then `vector validate`
   │   ├─ If valid: write new config dir → SIGHUP to Vector child
-  │   ├─ If invalid: log error, increment metric, keep old config
-  │   └─ Emit config_reloads_total{result=success|failure}
+  │   ├─ Read vector_reloaded_total / component_errors_total{error_code} for the outcome
+  │   ├─ If invalid or refused: log error, increment metric, put back the running config dir
+  │   └─ Emit config_reloads_total{result=success|error|unconfirmed}
   │
   └─ Any other config change (unsafe — requires pod restart)
       ├─ Log warning: "config change requires pod restart"
@@ -666,8 +667,8 @@ tracking is a container image pipeline concern.
 | **Vector hang** | Health poll timeout (Vector API unresponsive) | After N consecutive failures (configurable, default 5): SIGTERM → wait → SIGKILL → restart |
 | **OOM** | Child killed by cgroup (exit 137) | Restart. Metric emitted. Scaling pressure increases. Triggers KEDA scale-up. |
 | **Kafka unreachable** | Vector consumer lag stops advancing | Scaling pressure stays low (no lag movement). Vector's own retry handles reconnection. |
-| **Config reload: new config invalid** | `vector validate` on new config | Keep old config running. Log error. Emit `config_reloads_total{result="failure"}`. |
-| **Config reload: Vector rejects SIGHUP** | Vector logs error, keeps old config | Wrapper detects via health + metrics. Falls back to full restart with new config. |
+| **Config reload: new config invalid** | Enrichment table files readable, then `vector validate` on new config | Keep old config running, and put its config dir back. Log error. Emit `config_reloads_total{result="error"}`. |
+| **Config reload: Vector rejects SIGHUP** | Vector keeps old config and counts `component_errors_total{error_code="reload"}` | Wrapper reads the counter, emits `config_reloads_total{result="error"}` and puts back the config dir Vector runs. |
 | **Version mismatch** | Startup version check | `strict` mode: refuse to start. `warn` mode: log + metric. |
 | **Disk buffer corruption** | Vector exits on startup | Wrapper restarts Vector. If persistent, Vector's WAL recovery handles it. |
 

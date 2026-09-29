@@ -14,8 +14,14 @@
 //!
 //! Uses polling instead of inotify because S3-backed mounts (s3fs, goofys,
 //! Mountpoint for S3) do not generate filesystem notification events.
+//!
+//! Vector refuses a reload it cannot apply and carries on with the config it
+//! was running, so the SIGHUP succeeding says nothing about the outcome. The
+//! outcome is read from Vector's own reload counters, and a refused reload
+//! puts the assembled directory back to what Vector is running.
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -29,7 +35,15 @@ use tracing::{debug, error, info, warn};
 use super::assembler;
 use super::loader::Config;
 use super::validate::vector_validate;
+use crate::metrics::scrape::{ReloadCounts, fetch_exposition};
 use crate::vector::lifecycle::{Lifecycle, State};
+
+/// How long Vector has to report a reload: it rebuilds and health-checks every
+/// changed component before counting it.
+const RELOAD_CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How often Vector's exporter is read while a reload is pending.
+const RELOAD_CONFIRM_POLL: Duration = Duration::from_secs(1);
 
 /// Result of classifying what changed between two configs.
 #[derive(Debug, PartialEq)]
@@ -149,6 +163,139 @@ fn end_reload(lifecycle: &Lifecycle, owns_reloading: bool) {
     }
 }
 
+/// How Vector answered a reload it was signalled for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VectorReload {
+    /// Vector counted the reload as applied.
+    Applied,
+    /// Vector did not apply it and kept its running config, for these reasons.
+    Refused(Vec<String>),
+    /// Vector reported neither before the deadline, for this reason.
+    Unconfirmed(String),
+}
+
+/// Read Vector's reload counters from its exporter at `address`.
+///
+/// # Errors
+///
+/// The exporter could not be read, or its exposition does not parse.
+pub async fn read_reload_counts(address: &str) -> Result<ReloadCounts, String> {
+    let body = fetch_exposition(address).await?;
+    ReloadCounts::parse(&body)
+        .ok_or_else(|| format!("{address} returned an exposition that does not parse"))
+}
+
+/// Wait for Vector to report the reload it was signalled for, reading its
+/// exporter every `poll` until `timeout`.
+///
+/// `before` is the reading taken before the signal. A refusal counted in the
+/// same reading as an applied reload wins: putting back the running config is
+/// the side of the tie that cannot leave the directory ahead of Vector.
+pub async fn await_vector_reload(
+    address: &str,
+    before: &ReloadCounts,
+    timeout: Duration,
+    poll: Duration,
+) -> VectorReload {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let unread = match read_reload_counts(address).await {
+            Ok(now) => {
+                let refused = now.refused_since(before);
+                if !refused.is_empty() {
+                    return VectorReload::Refused(refused);
+                }
+                if now.applied > before.applied {
+                    return VectorReload::Applied;
+                }
+                None
+            }
+            Err(e) => Some(e),
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return VectorReload::Unconfirmed(unread.unwrap_or_else(|| {
+                format!("Vector counted no reload applied or refused within {timeout:?}")
+            }));
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+/// The assembled config directory as Vector last loaded it, file by file.
+///
+/// Re-assembling the previous config cannot put it back: that reads the
+/// transform files as they are now, which is the change being undone.
+#[derive(Debug)]
+struct Assembled {
+    /// Relative path, contents (`None` for a directory) and mode, parents first.
+    entries: Vec<(PathBuf, Option<Vec<u8>>, u32)>,
+}
+
+impl Assembled {
+    /// Read every file and directory under `dir`.
+    fn capture(dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut entries = Vec::new();
+        let mut pending = vec![PathBuf::new()];
+        while let Some(rel) = pending.pop() {
+            for entry in std::fs::read_dir(dir.join(&rel))? {
+                let entry = entry?;
+                let path = rel.join(entry.file_name());
+                let meta = entry.metadata()?;
+                let mode = meta.permissions().mode();
+                if meta.is_dir() {
+                    entries.push((path.clone(), None, mode));
+                    pending.push(path);
+                } else {
+                    entries.push((path, Some(std::fs::read(entry.path())?), mode));
+                }
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    /// Replace `dir` with the captured files, modes included -- the credentials
+    /// under `.secrets` are owner-only.
+    fn restore(&self, dir: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)?;
+        }
+        std::fs::create_dir_all(dir)?;
+        for (rel, contents, mode) in &self.entries {
+            let path = dir.join(rel);
+            match contents {
+                None => std::fs::DirBuilder::new().mode(*mode).create(&path)?,
+                Some(bytes) => std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(*mode)
+                    .open(&path)?
+                    .write_all(bytes)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Put the config directory back to what Vector is running: the capture when
+/// there is one, else `config` assembled afresh.
+fn restore_running(running: Option<&Assembled>, config: &Config, config_dir: &Path) {
+    let restored = match running {
+        Some(assembled) => assembled.restore(config_dir).map_err(crate::Error::from),
+        None => assembler::assemble(config, config_dir).map(|_| ()),
+    };
+    if let Err(e) = restored {
+        error!(
+            error = %e,
+            dir = %config_dir.display(),
+            "could not put back the config directory Vector is running"
+        );
+    }
+}
+
 /// Run the config reload loop.
 ///
 /// Polls for file changes at the configured interval and listens for
@@ -156,8 +303,12 @@ fn end_reload(lifecycle: &Lifecycle, owns_reloading: bool) {
 ///
 /// 1. Re-load config (if big-dial config changed)
 /// 2. Classify the change (safe vs unsafe)
-/// 3. If safe: re-assemble, re-validate, write config dir, SIGHUP Vector
+/// 3. If safe: re-assemble, re-validate, write config dir, SIGHUP Vector, and
+///    read Vector's reload counters for whether it applied the change
 /// 4. If unsafe: log warning (full restart requires pod recreation)
+///
+/// A reload that fails validation, or that Vector refuses, puts the config
+/// directory back to what Vector is running.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_reload_loop(
     config: Config,
@@ -172,6 +323,7 @@ pub async fn run_reload_loop(
     let poll_interval = Duration::from_secs(config.reload.poll_interval_secs);
     let mut current_config = config;
     let mut snapshot = FileSnapshot::capture(&current_config);
+    let mut running = Assembled::capture(&config_dir).ok();
 
     info!(
         poll_interval_secs = current_config.reload.poll_interval_secs,
@@ -219,13 +371,9 @@ pub async fn run_reload_loop(
             continue;
         }
 
-        // Classify the change
-        let change = classify_change(&current_config, &new_config);
-        match change {
-            ChangeKind::None => {
-                debug!("config reload triggered but no effective changes detected");
-                continue;
-            }
+        // Transform files are read at assembly, not held in `Config`, so an
+        // unchanged config still re-assembles: the file edit is the change.
+        match classify_change(&current_config, &new_config) {
             ChangeKind::Unsafe => {
                 warn!(
                     "non-transform config changed — requires pod restart. \
@@ -234,8 +382,11 @@ pub async fn run_reload_loop(
                 metrics.record_config_reload("rejected");
                 continue;
             }
-            ChangeKind::TransformsOnly => {
-                info!("transform-only change detected, proceeding with hot-reload");
+            change @ (ChangeKind::None | ChangeKind::TransformsOnly) => {
+                info!(
+                    ?change,
+                    "transform change detected, proceeding with hot-reload"
+                );
             }
         }
 
@@ -249,6 +400,7 @@ pub async fn run_reload_loop(
         if let Err(e) = assembler::assemble(&new_config, &config_dir) {
             error!(error = %e, "failed to re-assemble config during reload");
             metrics.record_config_reload("error");
+            restore_running(running.as_ref(), &current_config, &config_dir);
             end_reload(&lifecycle, owns_reloading);
             continue;
         }
@@ -258,8 +410,7 @@ pub async fn run_reload_loop(
             error!(error = %e, "vector validate failed during reload");
             metrics.record_config_reload("error");
             metrics.record_config_validation_error();
-            // Re-assemble with old config to restore
-            let _ = assembler::assemble(&current_config, &config_dir);
+            restore_running(running.as_ref(), &current_config, &config_dir);
             end_reload(&lifecycle, owns_reloading);
             continue;
         }
@@ -270,35 +421,69 @@ pub async fn run_reload_loop(
             .unwrap_or_else(|p| p.into_inner())
             .as_ref()
             .copied();
-        match pid {
-            Some(pid) => {
-                if let Err(e) = send_sighup(pid) {
-                    error!(error = %e, "failed to send SIGHUP to Vector");
-                    metrics.record_config_reload("error");
-                    end_reload(&lifecycle, owns_reloading);
-                    continue;
-                }
+        let Some(pid) = pid else {
+            warn!("Vector process not running, skipping SIGHUP");
+            metrics.record_config_reload("error");
+            end_reload(&lifecycle, owns_reloading);
+            continue;
+        };
+        let exporter = &current_config.metrics.vector_metrics_address;
+        let before = read_reload_counts(exporter).await;
+        if let Err(e) = send_sighup(pid) {
+            error!(error = %e, "failed to send SIGHUP to Vector");
+            metrics.record_config_reload("error");
+            end_reload(&lifecycle, owns_reloading);
+            continue;
+        }
+        let outcome = match before {
+            Ok(before) => {
+                await_vector_reload(
+                    exporter,
+                    &before,
+                    RELOAD_CONFIRM_TIMEOUT,
+                    RELOAD_CONFIRM_POLL,
+                )
+                .await
             }
-            None => {
-                warn!("Vector process not running, skipping SIGHUP");
+            Err(e) => VectorReload::Unconfirmed(format!("no reading before the SIGHUP: {e}")),
+        };
+
+        match outcome {
+            VectorReload::Applied => {
+                info!("config hot-reload completed successfully");
+                metrics.record_config_reload("success");
+                security::config_changed(
+                    "config_reload",
+                    "system",
+                    "transform config reloaded via SIGHUP",
+                );
+            }
+            VectorReload::Refused(reasons) => {
+                error!(
+                    ?reasons,
+                    "Vector refused the reload and kept the config it was running; \
+                     putting that config back"
+                );
                 metrics.record_config_reload("error");
+                restore_running(running.as_ref(), &current_config, &config_dir);
                 end_reload(&lifecycle, owns_reloading);
                 continue;
             }
+            VectorReload::Unconfirmed(reason) => {
+                warn!(
+                    %reason,
+                    "Vector did not report the reload; whether it runs the new \
+                     transforms is unknown"
+                );
+                metrics.record_config_reload("unconfirmed");
+            }
         }
 
-        // Update state
+        // Vector runs the new config, or may: the directory now holds it.
         current_config = new_config;
         snapshot = FileSnapshot::capture(&current_config);
+        running = Assembled::capture(&config_dir).ok();
         end_reload(&lifecycle, owns_reloading);
-
-        info!("config hot-reload completed successfully");
-        metrics.record_config_reload("success");
-        security::config_changed(
-            "config_reload",
-            "system",
-            "transform config reloaded via SIGHUP",
-        );
     }
 }
 
@@ -437,5 +622,147 @@ mod tests {
         let s2 = FileSnapshot::capture(&config);
 
         assert!(s1.has_changed(&s2));
+    }
+
+    /// Serve `bodies` in turn as Vector's exporter, one per connection, the
+    /// last repeated once they run out.
+    async fn exporter(bodies: Vec<String>) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let handle = tokio::spawn(async move {
+            let mut served = 0;
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let body = &bodies[served.min(bodies.len() - 1)];
+                served += 1;
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req).await;
+                let response = format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}");
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (addr, handle)
+    }
+
+    const NOT_RELOADED: &str = "# TYPE vector_started_total counter\nvector_started_total 1\n";
+
+    const APPLIED: &str = "# TYPE vector_reloaded_total counter\nvector_reloaded_total 1\n";
+
+    const REFUSED: &str = "# TYPE vector_component_errors_total counter\n\
+        vector_component_errors_total{error_code=\"reload\",error_type=\"configuration_failed\",\
+        reason=\"topology_build_failed\",stage=\"processing\"} 1\n";
+
+    const FAST: Duration = Duration::from_millis(10);
+
+    #[tokio::test]
+    async fn an_applied_reload_is_reported_applied() {
+        let (addr, server) = exporter(vec![NOT_RELOADED.into(), APPLIED.into()]).await;
+        let before = read_reload_counts(&addr).await.unwrap();
+        let outcome = await_vector_reload(&addr, &before, Duration::from_secs(5), FAST).await;
+        server.abort();
+        assert_eq!(outcome, VectorReload::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_refused_reload_is_reported_with_vectors_reason() {
+        let (addr, server) = exporter(vec![
+            NOT_RELOADED.into(),
+            NOT_RELOADED.into(),
+            REFUSED.into(),
+        ])
+        .await;
+        let before = read_reload_counts(&addr).await.unwrap();
+        let outcome = await_vector_reload(&addr, &before, Duration::from_secs(5), FAST).await;
+        server.abort();
+        assert_eq!(
+            outcome,
+            VectorReload::Refused(vec!["reload/topology_build_failed".into()])
+        );
+    }
+
+    /// Both in one reading: putting the running config back is the side that
+    /// cannot leave the directory ahead of Vector.
+    #[tokio::test]
+    async fn a_refusal_counted_beside_an_applied_reload_wins() {
+        let (addr, server) =
+            exporter(vec![NOT_RELOADED.into(), format!("{APPLIED}{REFUSED}")]).await;
+        let before = read_reload_counts(&addr).await.unwrap();
+        let outcome = await_vector_reload(&addr, &before, Duration::from_secs(5), FAST).await;
+        server.abort();
+        assert!(matches!(outcome, VectorReload::Refused(_)), "{outcome:?}");
+    }
+
+    #[tokio::test]
+    async fn a_vector_that_reports_nothing_leaves_the_reload_unconfirmed() {
+        let (addr, server) = exporter(vec![NOT_RELOADED.into()]).await;
+        let before = read_reload_counts(&addr).await.unwrap();
+        let outcome = await_vector_reload(&addr, &before, Duration::from_millis(100), FAST).await;
+        server.abort();
+        assert!(
+            matches!(&outcome, VectorReload::Unconfirmed(why) if why.contains("no reload")),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exporter_that_cannot_be_read_leaves_the_reload_unconfirmed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        let outcome = await_vector_reload(
+            &dead,
+            &ReloadCounts::default(),
+            Duration::from_millis(100),
+            FAST,
+        )
+        .await;
+        assert!(
+            matches!(&outcome, VectorReload::Unconfirmed(why) if why.contains(&dead)),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_captured_directory_is_put_back_byte_for_byte_with_its_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("config");
+        let secrets = root.join(".secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(root.join("50_000_parse.yaml"), "transforms: {}\n").unwrap();
+        std::fs::write(secrets.join("sink_sasl_password"), "p").unwrap();
+        std::fs::set_permissions(
+            secrets.join("sink_sasl_password"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let captured = Assembled::capture(&root).unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("50_000_edited.yaml"), "transforms: {x: 1}\n").unwrap();
+
+        captured.restore(&root).unwrap();
+
+        assert!(
+            !root.join("50_000_edited.yaml").exists(),
+            "the edit survived"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("50_000_parse.yaml")).unwrap(),
+            "transforms: {}\n"
+        );
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&secrets), 0o700);
+        assert_eq!(mode(&secrets.join("sink_sasl_password")), 0o600);
+        assert_eq!(
+            std::fs::read_to_string(secrets.join("sink_sasl_password")).unwrap(),
+            "p"
+        );
     }
 }

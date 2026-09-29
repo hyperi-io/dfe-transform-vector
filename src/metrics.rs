@@ -336,11 +336,33 @@ mod tests {
             "records_error_total",
             "uptime_seconds",
             "pipeline_ready",
+            super::DEAD_LETTERS_DROPPED,
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "{expected} is missing from the catalogue: {names:?}"
             );
         }
+    }
+
+    /// Size-cap and broker refusals are counted in this series by `reason`, so
+    /// the catalogue has to carry the label an alert selects on.
+    #[test]
+    fn the_dead_letter_drop_counter_is_catalogued_with_its_reason_label() {
+        let manager = MetricsManager::with_config(MetricsConfig::offline(""));
+        let _metrics = WrapperMetrics::register(&manager, "test-commit");
+
+        let descriptor = manager
+            .registry()
+            .manifest()
+            .metrics
+            .into_iter()
+            .find(|d| d.name == super::DEAD_LETTERS_DROPPED)
+            .expect("the dead-letter drop counter is catalogued");
+        assert!(
+            descriptor.labels.iter().any(|l| l == "reason"),
+            "no reason label: {:?}",
+            descriptor.labels
+        );
     }
 }
