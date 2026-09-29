@@ -1,0 +1,17 @@
+# Per-target CPU optimisations.
+#
+# x86_64 takes AVX2, BMI1/2 and FMA (Haswell and later), which is the floor the
+# rest of the DFE Rust fleet already ships. aarch64 stays on the generic model,
+# where NEON is baseline.
+#
+# These belong under [target.<triple>], never [build]. The ARC native runner
+# sets CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS, which counts as a target
+# entry, and cargo reads build.rustflags only when no target entry exists -- so
+# flags placed under [build] would be dropped in CI without a word.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+rustflags = ["-C", "target-cpu=generic"]

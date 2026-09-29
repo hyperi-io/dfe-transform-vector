@@ -24,7 +24,10 @@ target/
 *.profdata
 coverage-html/
 coverage.lcov
-.cargo/
+# Glob the CONTENTS, not the directory: git cannot re-include a file whose
+# parent directory is excluded, so `.cargo/` would make the negation inert.
+.cargo/*
+!.cargo/config.toml
 
 # Local working files (not committed)
 docs/superpowers/
