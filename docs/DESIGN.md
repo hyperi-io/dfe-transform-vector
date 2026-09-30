@@ -10,7 +10,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 
 ## 2. Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │  dfe-engine (Python)                                             │
 │                                                                  │
@@ -205,7 +205,7 @@ has a single answer to "are you ready". dfe-transform-vector is no exception.
 
 ### 4.2 Liveness vs Readiness
 
-```
+```text
 /livez  → always 200 if the Rust process is running (fast, no deps)
 /readyz → 200 only when the lifecycle is Running or Reloading, which means:
                  1. Config loaded, assembled and `vector validate`-clean
@@ -241,7 +241,7 @@ recovery, readiness returns 503 until Vector restarts successfully.
 
 **Wrapper metrics** (emitted by the Rust binary):
 
-```
+```text
 # DFE platform standard
 dfe_pipeline_ready 1                          # 1=ready, 0=not ready
 
