@@ -1139,6 +1139,270 @@ fn config_reloading_state_keeps_readiness() {
     assert!(lc.state().is_alive(), "Reloading state must be alive");
 }
 
+// =========================================================================
+// Kafka security floor
+// =========================================================================
+
+/// The variables `scalo::env::is_production` reads, highest priority first.
+const APP_ENV_VARS: [&str; 3] = ["APP_ENV", "ENVIRONMENT", "ENV"];
+
+/// Run `f` with `APP_ENV` set to `app_env`, or with none of the three
+/// environment-name variables set.
+fn with_app_env<T>(app_env: Option<&str>, f: impl FnOnce() -> T) -> T {
+    // The environment is per-process, so this must exclude every concurrent
+    // reader for the whole set -> run -> remove sequence.
+    let _exclusive = env_write_guard();
+
+    // SAFETY: nextest gives this test its own process, and `_exclusive` holds
+    // off every guarded reader and writer of the environment besides.
+    unsafe {
+        for var in APP_ENV_VARS {
+            std::env::remove_var(var);
+        }
+        if let Some(value) = app_env {
+            std::env::set_var("APP_ENV", value);
+        }
+    }
+    let result = f();
+    unsafe { std::env::remove_var("APP_ENV") };
+    result
+}
+
+/// Validate `config` under `app_env`, as [`with_app_env`] sets it.
+fn validate_with_app_env(
+    config: &Config,
+    app_env: Option<&str>,
+) -> dfe_transform_vector::Result<()> {
+    with_app_env(app_env, || config.validate())
+}
+
+/// The SASL and TLS settings of one Kafka side of `config`.
+fn side_security<'a>(
+    config: &'a mut Config,
+    side: &str,
+) -> (&'a mut SaslConfig, &'a mut TlsConfig) {
+    match side {
+        "source" => (&mut config.source.sasl, &mut config.source.tls),
+        _ => (&mut config.sink.sasl, &mut config.sink.tls),
+    }
+}
+
+/// Assert `result` is the floor refusing `side`, carrying scalo's `reason`.
+fn assert_floor_refused(result: dfe_transform_vector::Result<()>, side: &str, reason: &str) {
+    let message = result
+        .expect_err(&format!("{side}: the security floor must refuse this"))
+        .to_string();
+    assert!(
+        message.contains(&format!("{side} Kafka client refused")) && message.contains(reason),
+        "{side}: expected a floor refusal naming '{reason}', got: {message}"
+    );
+}
+
+/// PLAIN sends the password itself, so without TLS it crosses the network in
+/// the clear -- in development as much as in production.
+#[test]
+fn sasl_plain_without_tls_is_refused_in_every_environment() {
+    for side in ["source", "sink"] {
+        let mut config = full_config(None);
+        let (sasl, tls) = side_security(&mut config, side);
+        sasl.mechanism = "plain".into();
+        tls.enabled = false;
+
+        for app_env in [None, Some("development"), Some("production")] {
+            assert_floor_refused(validate_with_app_env(&config, app_env), side, "PLAIN");
+        }
+
+        // The same credentials over TLS are what PLAIN is for.
+        side_security(&mut config, side).1.enabled = true;
+        for app_env in [None, Some("production")] {
+            validate_with_app_env(&config, app_env)
+                .unwrap_or_else(|e| panic!("{side}: PLAIN over SASL_SSL must pass: {e}"));
+        }
+    }
+}
+
+#[test]
+fn tls_skip_verify_is_refused_only_in_production() {
+    for side in ["source", "sink"] {
+        let mut config = full_config(None);
+        side_security(&mut config, side).1.skip_verify = true;
+
+        validate_with_app_env(&config, None)
+            .unwrap_or_else(|e| panic!("{side}: skip_verify outside production must pass: {e}"));
+        assert_floor_refused(
+            validate_with_app_env(&config, Some("production")),
+            side,
+            "ssl_skip_verify",
+        );
+    }
+}
+
+/// SCRAM without TLS runs SASL_PLAINTEXT. With neither on, the generator
+/// writes no protocol and librdkafka runs PLAINTEXT.
+#[test]
+fn a_transport_without_tls_is_refused_in_production() {
+    for (protocol, sasl_on) in [("SASL_PLAINTEXT", true), ("PLAINTEXT", false)] {
+        for side in ["source", "sink"] {
+            let mut config = full_config(None);
+            let (sasl, tls) = side_security(&mut config, side);
+            tls.enabled = false;
+            if !sasl_on {
+                *sasl = SaslConfig::default();
+            }
+
+            validate_with_app_env(&config, None)
+                .unwrap_or_else(|e| panic!("{side}: {protocol} outside production must pass: {e}"));
+            assert_floor_refused(
+                validate_with_app_env(&config, Some("production")),
+                side,
+                &format!("'{protocol}'"),
+            );
+        }
+    }
+
+    validate_with_app_env(&full_config(None), Some("production"))
+        .expect("SASL_SSL on both sides must pass in production");
+}
+
+/// A side on the direct transport has no Kafka client, so there is nothing
+/// for the floor to judge.
+#[test]
+fn the_floor_skips_a_side_on_the_direct_transport() {
+    let mut config = full_config(None);
+    config.sink.transport = Transport::Direct;
+    config.sink.tls.enabled = false;
+
+    validate_with_app_env(&config, Some("production"))
+        .expect("a direct sink carries no Kafka client for the floor to refuse");
+}
+
+/// A raw `librdkafka_options` entry that weakens the transport.
+///
+/// Over a big dial the derived-key check refuses it outright. With the big
+/// dials off, the floor judges the typed protocol, PLAINTEXT, which production
+/// refuses whatever the raw map says -- scalo 2.13 judges typed fields only.
+#[test]
+fn a_raw_librdkafka_security_override_that_weakens_the_transport_is_refused() {
+    let mut config = full_config(None);
+    config
+        .sink
+        .librdkafka_options
+        .insert("security.protocol".into(), "SASL_PLAINTEXT".into());
+    let message = validate_with_app_env(&config, None)
+        .expect_err("a raw protocol under sink.tls must be refused")
+        .to_string();
+    assert!(
+        message.contains("sink.librdkafka_options sets 'security.protocol'"),
+        "{message}"
+    );
+
+    let mut config = full_config(None);
+    config.sink.sasl = SaslConfig::default();
+    config.sink.tls = TlsConfig::default();
+    config.sink.librdkafka_options.extend([
+        (
+            "security.protocol".to_string(),
+            "SASL_PLAINTEXT".to_string(),
+        ),
+        ("sasl.mechanism".to_string(), "PLAIN".to_string()),
+    ]);
+    // The raw map's own refusal, in any environment, arrives with the scalo bump.
+    assert_floor_refused(
+        validate_with_app_env(&config, Some("production")),
+        "sink",
+        "PLAINTEXT",
+    );
+}
+
+/// The file a user-declared Kafka component is written into.
+const USER_KAFKA_FILE: &str = "10_user_kafka.yaml";
+
+/// Assemble a config whose one transform file declares a Kafka source or sink
+/// with `security` as its SASL and TLS blocks, under `app_env`.
+fn assemble_user_kafka(
+    section: &str,
+    security: &str,
+    app_env: Option<&str>,
+) -> dfe_transform_vector::Result<std::path::PathBuf> {
+    let component = match section {
+        "sources" => "  side_feed:\n    type: kafka\n    group_id: side\n    topics: [side_land]\n",
+        _ => {
+            "  side_feed:\n    type: kafka\n    inputs: [dfe_source]\n    topic: side_copy\n    \
+              encoding:\n      codec: json\n"
+        }
+    };
+    let yaml = format!(
+        "transforms:\n  passthrough:\n    type: remap\n    inputs: [dfe_source]\n    source: \".\"\n\
+         {section}:\n{component}    bootstrap_servers: kafka-1:9093\n{security}"
+    );
+
+    let transforms_dir = TempDir::new().unwrap();
+    fs::write(transforms_dir.path().join(USER_KAFKA_FILE), yaml).unwrap();
+    let output = TempDir::new().unwrap();
+    let config = full_config(Some(transforms_dir.path().to_string_lossy().into_owned()));
+
+    with_app_env(app_env, || assembler::assemble(&config, output.path()))
+}
+
+/// Assert `result` is the floor refusing the user's `side_feed` component.
+fn assert_user_kafka_refused(
+    result: dfe_transform_vector::Result<std::path::PathBuf>,
+    kind: &str,
+    reason: &str,
+) {
+    let message = result
+        .expect_err(&format!("the user's Kafka {kind} must be refused"))
+        .to_string();
+    assert!(
+        message.contains(USER_KAFKA_FILE)
+            && message.contains(&format!("Kafka {kind} 'side_feed' refused"))
+            && message.contains(reason),
+        "expected the floor to name {USER_KAFKA_FILE} and side_feed for '{reason}', got: {message}"
+    );
+}
+
+/// A Kafka source or sink a transform file declares runs on Vector's own
+/// client, exactly like the generated ones, so PLAIN without TLS is refused
+/// there too.
+#[test]
+fn a_user_kafka_component_with_plain_over_plaintext_is_refused_in_every_environment() {
+    let plain = "    sasl:\n      enabled: true\n      mechanism: PLAIN\n";
+    for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
+        for app_env in [None, Some("development"), Some("production")] {
+            assert_user_kafka_refused(assemble_user_kafka(section, plain, app_env), kind, "PLAIN");
+        }
+    }
+}
+
+#[test]
+fn a_user_kafka_component_that_skips_certificate_checks_is_refused_in_production() {
+    let unverified = "    sasl:\n      enabled: true\n      mechanism: SCRAM-SHA-512\n    \
+                      tls:\n      enabled: true\n      verify_certificate: false\n";
+    for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
+        assemble_user_kafka(section, unverified, None).unwrap_or_else(|e| {
+            panic!("{kind}: verify_certificate off outside production must pass: {e}")
+        });
+        assert_user_kafka_refused(
+            assemble_user_kafka(section, unverified, Some("production")),
+            kind,
+            "ssl_skip_verify",
+        );
+    }
+}
+
+#[test]
+fn a_safe_user_kafka_component_passes() {
+    let safe = "    sasl:\n      enabled: true\n      mechanism: SCRAM-SHA-512\n    \
+                tls:\n      enabled: true\n";
+    for section in ["sources", "sinks"] {
+        for app_env in [None, Some("production")] {
+            assemble_user_kafka(section, safe, app_env).unwrap_or_else(|e| {
+                panic!("{section}: SCRAM over TLS must pass under {app_env:?}: {e}")
+            });
+        }
+    }
+}
+
 #[test]
 fn config_shutting_down_is_not_ready() {
     use dfe_transform_vector::vector::Lifecycle;

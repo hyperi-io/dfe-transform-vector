@@ -58,6 +58,10 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # carries the idle gate a transform with no source topics reports through.
 # `worker-batch` carries the `BatchEngine` pipeline the bridge runs each leg on,
 # which holds a push until its records are delivered.
+#
+# `transport-kafka` carries `KafkaConfig`, the security floor `Config::validate`
+# holds the generated Kafka source and sink to. Only its config is used: the
+# image ships no librdkafka, so nothing here may build an rdkafka client.
 scalo = { version = ">=2.13.0, <3", features = [
     "cli-service",
     "config-reload",
@@ -71,6 +75,7 @@ scalo = { version = ">=2.13.0, <3", features = [
     "service-metrics",
     "transport-grpc",
     "transport-grpc-vector-compat",
+    "transport-kafka",
     "version-check",
     "worker-batch",
 ] }
