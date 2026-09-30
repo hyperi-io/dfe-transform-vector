@@ -20,7 +20,7 @@ use tracing::debug;
 
 use scalo::cli::CommonArgs;
 use scalo::kafka_config::{KafkaSource, ServiceRole};
-use scalo::transport::AcknowledgementsConfig;
+use scalo::transport::{AcknowledgementsConfig, KafkaConfig};
 
 use crate::Result;
 
@@ -999,6 +999,17 @@ impl Config {
             &self.source.librdkafka_options,
             &super::generate::derived_source_options(&self.source),
         )?;
+        if !direct_in {
+            Self::validate_kafka_floor(
+                "source",
+                &super::generate::kafka_client_config(
+                    &self.source.brokers,
+                    &self.source.sasl,
+                    &self.source.tls,
+                    &self.source.librdkafka_options,
+                ),
+            )?;
+        }
 
         // Vector stores an offset only once the sink has acknowledged the
         // event, which is what makes the commit timer safe to run. Hand that
@@ -1073,6 +1084,17 @@ impl Config {
             &self.sink.librdkafka_options,
             &super::generate::derived_sink_options(&self.sink),
         )?;
+        if !direct_out {
+            Self::validate_kafka_floor(
+                "sink",
+                &super::generate::kafka_client_config(
+                    &self.sink.brokers,
+                    &self.sink.sasl,
+                    &self.sink.tls,
+                    &self.sink.librdkafka_options,
+                ),
+            )?;
+        }
 
         // Sink encoding
         let valid_encodings = ["json", "raw_bytes"];
@@ -1190,6 +1212,20 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    /// Hold one generated Kafka client to scalo's Kafka security floor.
+    ///
+    /// The floor has rules for every environment and stricter ones for
+    /// production, which `scalo::env::is_production` reads from `APP_ENV`,
+    /// `ENVIRONMENT` or `ENV`.
+    fn validate_kafka_floor(side: &str, client: &KafkaConfig) -> Result<()> {
+        client.validate(scalo::env::is_production()).map_err(|e| {
+            crate::Error::Validation(format!(
+                "{side} Kafka client refused ({side}.sasl and {side}.tls set its \
+                 security_protocol and sasl_mechanism): {e}"
+            ))
+        })
     }
 
     /// Does this configuration give the transform work?
