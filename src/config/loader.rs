@@ -1220,7 +1220,7 @@ impl Config {
     /// production, which `scalo::env::is_production` reads from `APP_ENV`,
     /// `ENVIRONMENT` or `ENV`.
     fn validate_kafka_floor(side: &str, client: &KafkaConfig) -> Result<()> {
-        client.validate(scalo::env::is_production()).map_err(|e| {
+        super::generate::kafka_floor(client).map_err(|e| {
             crate::Error::Validation(format!(
                 "{side} Kafka client refused ({side}.sasl and {side}.tls set its \
                  security_protocol and sasl_mechanism): {e}"

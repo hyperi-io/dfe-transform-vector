@@ -42,6 +42,12 @@ pub const SINK_LABEL: &str = "dfe_sink";
 /// the Kafka sink.
 pub const SIZE_CAP_LABEL: &str = "dfe_size_cap";
 
+/// Vector's `type` for a Kafka source or sink.
+pub const KAFKA_COMPONENT_TYPE: &str = "kafka";
+
+/// librdkafka's broker hostname check, off when set to `none`.
+const HOSTNAME_VERIFICATION_KEY: &str = "ssl.endpoint.identification.algorithm";
+
 /// librdkafka's own `message.max.bytes` default, the ceiling when the sink's
 /// `librdkafka_options` sets none.
 const LIBRDKAFKA_MESSAGE_MAX_BYTES: u64 = 1_000_000;
@@ -130,7 +136,7 @@ fn enabled_block(on: bool) -> Value {
 
 fn kafka_source_component(source: &SourceConfig) -> serde_yaml_ng::Mapping {
     let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val("kafka"));
+    component.insert(val("type"), val(KAFKA_COMPONENT_TYPE));
     component.insert(val("bootstrap_servers"), val(&source.brokers.join(",")));
     component.insert(
         val("topics"),
@@ -304,7 +310,7 @@ fn kafka_sink_component(
     acknowledged: bool,
 ) -> serde_yaml_ng::Mapping {
     let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val("kafka"));
+    component.insert(val("type"), val(KAFKA_COMPONENT_TYPE));
     component.insert(val("inputs"), input_list(inputs));
     component.insert(val("bootstrap_servers"), val(&sink.brokers.join(",")));
     component.insert(val("topic"), val(&sink.topic));
@@ -601,6 +607,81 @@ pub fn kafka_client_config(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         ..Default::default()
+    }
+}
+
+/// The scalo Kafka client config equivalent to a Kafka source or sink written
+/// in Vector's own shape, as a user transform file may declare one.
+///
+/// Reads the fields the generator writes for its own Kafka components:
+/// `bootstrap_servers`, `sasl.enabled`, `sasl.mechanism`, `tls.enabled`,
+/// `tls.verify_certificate`, `tls.verify_hostname` and `librdkafka_options`.
+/// An absent flag reads as off, as Vector reads it.
+#[must_use]
+pub fn vector_kafka_client_config(component: &Value) -> scalo::transport::KafkaConfig {
+    let sasl_block = component.get("sasl");
+    let tls_block = component.get("tls");
+    let flag =
+        |block: Option<&Value>, key: &str| block.and_then(|b| b.get(key)).and_then(Value::as_bool);
+
+    let brokers: Vec<String> = component
+        .get("bootstrap_servers")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(String::from)
+        .collect();
+    let sasl = SaslConfig {
+        enabled: flag(sasl_block, "enabled").unwrap_or(false),
+        mechanism: sasl_block
+            .and_then(|s| s.get("mechanism"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        ..SaslConfig::default()
+    };
+    let tls = TlsConfig {
+        enabled: flag(tls_block, "enabled").unwrap_or(false),
+        skip_verify: flag(tls_block, "verify_certificate") == Some(false),
+        ..TlsConfig::default()
+    };
+    let options: BTreeMap<String, String> = component
+        .get("librdkafka_options")
+        .and_then(Value::as_mapping)
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.as_str()?.to_string(), scalar_text(v)?)))
+        .collect();
+
+    let mut client = kafka_client_config(&brokers, &sasl, &tls, &options);
+    // scalo judges hostname verification from the raw map alone.
+    if flag(tls_block, "verify_hostname") == Some(false) {
+        client
+            .librdkafka_overrides
+            .insert(HOSTNAME_VERIFICATION_KEY.to_string(), "none".to_string());
+    }
+    client
+}
+
+/// Judge one Kafka client against scalo's Kafka security floor, with
+/// production read by `scalo::env::is_production`.
+///
+/// # Errors
+///
+/// scalo's reason, when the floor refuses the client.
+pub fn kafka_floor(client: &scalo::transport::KafkaConfig) -> Result<(), String> {
+    client.validate(scalo::env::is_production())
+}
+
+/// A YAML scalar as the text librdkafka reads, or `None` for anything else.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -1383,6 +1464,114 @@ mod tests {
                 Some(value),
                 "{key} did not reach librdkafka_overrides"
             );
+        }
+    }
+
+    /// Every security field of a Kafka component in Vector's shape reaches the
+    /// floor client, including the hostname check scalo reads from raw maps.
+    #[test]
+    fn a_vector_kafka_component_maps_onto_the_floor_client() {
+        let component: Value = serde_yaml_ng::from_str(
+            r#"
+type: kafka
+bootstrap_servers: "kafka-1:9093, kafka-2:9093"
+sasl:
+  enabled: true
+  mechanism: PLAIN
+tls:
+  enabled: true
+  verify_certificate: false
+  verify_hostname: false
+librdkafka_options:
+  fetch.max.bytes: "52428800"
+  socket.keepalive.enable: true
+  queue.buffering.max.ms: 5
+"#,
+        )
+        .unwrap();
+
+        let client = vector_kafka_client_config(&component);
+
+        assert_eq!(client.brokers, vec!["kafka-1:9093", "kafka-2:9093"]);
+        assert_eq!(client.security_protocol, "SASL_SSL");
+        assert_eq!(client.sasl_mechanism.as_deref(), Some("PLAIN"));
+        assert!(client.ssl_skip_verify);
+        for (key, value) in [
+            ("fetch.max.bytes", "52428800"),
+            ("socket.keepalive.enable", "true"),
+            ("queue.buffering.max.ms", "5"),
+            (HOSTNAME_VERIFICATION_KEY, "none"),
+        ] {
+            assert_eq!(
+                client.librdkafka_overrides.get(key).map(String::as_str),
+                Some(value),
+                "{key}"
+            );
+        }
+    }
+
+    /// A component with no security blocks is what librdkafka runs by default.
+    #[test]
+    fn a_bare_vector_kafka_component_is_plaintext() {
+        let component: Value =
+            serde_yaml_ng::from_str("type: kafka\nbootstrap_servers: kafka:9092\n").unwrap();
+
+        let client = vector_kafka_client_config(&component);
+
+        assert_eq!(client.security_protocol, "PLAINTEXT");
+        assert_eq!(client.sasl_mechanism, None);
+        assert!(!client.ssl_skip_verify);
+        assert!(client.librdkafka_overrides.is_empty());
+    }
+
+    /// Reading back what the generator writes gives the client it was built
+    /// from, so the reverse mapping reads the generator's own field names.
+    #[test]
+    fn a_generated_kafka_sink_reads_back_as_the_client_it_came_from() {
+        for (sasl_on, tls_on, skip_verify) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, true),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            let sink = SinkConfig {
+                brokers: vec!["kafka-1:9093".into(), "kafka-2:9093".into()],
+                sasl: SaslConfig {
+                    enabled: sasl_on,
+                    mechanism: "scram_sha_256".into(),
+                    username: "user".into(),
+                    ..SaslConfig::default()
+                },
+                tls: TlsConfig {
+                    enabled: tls_on,
+                    skip_verify,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+            let component = yaml
+                .get("sinks")
+                .and_then(|s| s.get(SINK_LABEL))
+                .expect("the generated kafka sink");
+
+            let read_back = vector_kafka_client_config(component);
+            let built = kafka_client_config(
+                &sink.brokers,
+                &sink.sasl,
+                &sink.tls,
+                &sink.librdkafka_options,
+            );
+            let case = format!("sasl={sasl_on} tls={tls_on} skip_verify={skip_verify}");
+
+            assert_eq!(read_back.brokers, built.brokers, "{case}");
+            assert_eq!(
+                read_back.security_protocol, built.security_protocol,
+                "{case}"
+            );
+            assert_eq!(read_back.sasl_mechanism, built.sasl_mechanism, "{case}");
+            assert_eq!(read_back.ssl_skip_verify, built.ssl_skip_verify, "{case}");
         }
     }
 }

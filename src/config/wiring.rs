@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 use serde_yaml_ng::Value;
 use tracing::debug;
 
-use super::generate::{SINK_LABEL, SOURCE_LABEL};
+use super::generate::{
+    KAFKA_COMPONENT_TYPE, SINK_LABEL, SOURCE_LABEL, kafka_floor, vector_kafka_client_config,
+};
 use super::transforms::LoadedTransform;
 use crate::Result;
 
@@ -76,6 +78,33 @@ pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Componen
     }
 
     Ok(components)
+}
+
+/// Hold every Kafka source and sink a transform file declares to scalo's Kafka
+/// security floor, as the generated `dfe_source` and `dfe_sink` are held.
+///
+/// Vector runs them on its own librdkafka client, so nothing else checks them.
+pub fn validate_kafka_components(transforms: &[LoadedTransform]) -> Result<()> {
+    for lt in transforms {
+        for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
+            let Some(Value::Mapping(entries)) = lt.yaml.get(section) else {
+                continue;
+            };
+            for (label, component) in entries {
+                if component.get("type").and_then(Value::as_str) != Some(KAFKA_COMPONENT_TYPE) {
+                    continue;
+                }
+                kafka_floor(&vector_kafka_client_config(component)).map_err(|e| {
+                    crate::Error::Validation(format!(
+                        "transform file {}: Kafka {kind} '{}' refused: {e}",
+                        lt.path.display(),
+                        label.as_str().unwrap_or_default()
+                    ))
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Auto-wire the DAG: ensure first transforms get `dfe_source` as input,
@@ -326,6 +355,38 @@ transforms:
         assert_eq!(components[0].inputs, vec!["dfe_source"]);
         assert_eq!(components[1].label, "enrich");
         assert_eq!(components[1].inputs, vec!["parse"]);
+    }
+
+    /// PLAIN without TLS is refused in every environment, so these need no
+    /// control over `APP_ENV`.
+    const PLAIN_OVER_PLAINTEXT: &str = "sasl:\n      enabled: true\n      mechanism: PLAIN\n";
+
+    #[test]
+    fn a_kafka_component_a_file_declares_meets_the_floor() {
+        for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
+            let lt = make_transform(&format!(
+                "{section}:\n  side_feed:\n    type: kafka\n    \
+                 bootstrap_servers: kafka:9092\n    {PLAIN_OVER_PLAINTEXT}"
+            ));
+            let message = validate_kafka_components(&[lt]).unwrap_err().to_string();
+            assert!(
+                message.contains("transform file test.yaml")
+                    && message.contains(&format!("Kafka {kind} 'side_feed' refused"))
+                    && message.contains("PLAIN"),
+                "{message}"
+            );
+        }
+    }
+
+    /// The floor is for Kafka clients only. A `sasl` block on anything else is
+    /// that component's own business.
+    #[test]
+    fn a_component_of_another_type_is_not_a_kafka_client() {
+        let lt = make_transform(&format!(
+            "sinks:\n  debug:\n    type: console\n    \
+             inputs: [dfe_source]\n    {PLAIN_OVER_PLAINTEXT}"
+        ));
+        validate_kafka_components(&[lt]).unwrap();
     }
 
     #[test]

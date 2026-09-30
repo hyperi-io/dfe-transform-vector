@@ -32,7 +32,9 @@ use super::generate::{
 use super::loader::Config;
 use super::secrets;
 use super::transforms::{LoadedTransform, load_transforms};
-use super::wiring::{WiringResult, auto_wire, extract_components, validate_dag};
+use super::wiring::{
+    WiringResult, auto_wire, extract_components, validate_dag, validate_kafka_components,
+};
 use crate::Result;
 
 /// Default output directory for assembled Vector config.
@@ -74,6 +76,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     // Validate the DAG
     validate_dag(&wiring)?;
     debug!("DAG validation passed");
+    validate_kafka_components(&transforms)?;
 
     // Write transform files to subdirectory (with auto-wired inputs injected)
     write_transforms(output_dir, &transforms, &wiring)?;
