@@ -37,21 +37,29 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create
 # binary shipped.
 #
 # This fragment is spliced into the generated Dockerfile by
-# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.58.0.
+# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.58.0,
+# a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09 and 06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5.
 # It lives in its own file rather than inside a Rust string so that hadolint
 # and shellcheck can actually read it -- shell embedded in `format!` is
 # validated by nothing until the image build runs in CI.
 ARG VECTOR_VERSION=0.58.0
+# Pinned from Vector's own published SHA256SUMS for this version, cross-checked
+# against the GitHub release asset of the same name -- not fetched at build
+# time, which would only prove the download matches itself.
+ARG VECTOR_SHA256_AMD64=a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+ARG VECTOR_SHA256_ARM64=06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5
 ARG TARGETARCH
+# hadolint ignore=DL4006
 RUN set -eu \
     && case "${TARGETARCH:-amd64}" in \
-        amd64) ARCH=x86_64 ;; \
-        arm64) ARCH=aarch64 ;; \
+        amd64) ARCH=x86_64; VECTOR_SHA256="${VECTOR_SHA256_AMD64}" ;; \
+        arm64) ARCH=aarch64; VECTOR_SHA256="${VECTOR_SHA256_ARM64}" ;; \
         *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && VDIR="/tmp/vector-${ARCH}-unknown-linux-gnu" \
     && curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
         -o /tmp/vector.tar.gz \
+    && echo "${VECTOR_SHA256}  /tmp/vector.tar.gz" | sha256sum -c - \
     && tar xz -C /tmp -f /tmp/vector.tar.gz \
     && mv "${VDIR}/bin/vector" /usr/local/bin/vector \
     && chmod +x /usr/local/bin/vector \

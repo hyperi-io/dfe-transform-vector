@@ -220,6 +220,18 @@ pub const KAFKA_SECRET_DIR: &str = "/var/run/secrets/dfe-kafka";
 // renovate: datasource=github-releases depName=vectordotdev/vector
 pub const VECTOR_VERSION: &str = "0.58.0";
 
+/// SHA256 of `vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz`, read from
+/// Vector's published `vector-0.58.0-SHA256SUMS` and cross-checked against
+/// the identically-named asset on the GitHub release -- the two agree, so the
+/// digest does not rest on a single host.
+const VECTOR_SHA256_AMD64: &str =
+    "a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09";
+
+/// SHA256 of `vector-0.58.0-aarch64-unknown-linux-gnu.tar.gz`, sourced and
+/// cross-checked the same way as [`VECTOR_SHA256_AMD64`].
+const VECTOR_SHA256_ARM64: &str =
+    "06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5";
+
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///
 /// A real Dockerfile so hadolint and shellcheck can lint it; see
@@ -228,6 +240,12 @@ const VECTOR_LAYER_TEMPLATE: &str = include_str!("vector-layer.dockerfile");
 
 /// Substituted with [`VECTOR_VERSION`] in [`VECTOR_LAYER_TEMPLATE`].
 const VERSION_PLACEHOLDER: &str = "@VECTOR_VERSION@";
+
+/// Substituted with [`VECTOR_SHA256_AMD64`] in [`VECTOR_LAYER_TEMPLATE`].
+const SHA256_AMD64_PLACEHOLDER: &str = "@VECTOR_SHA256_AMD64@";
+
+/// Substituted with [`VECTOR_SHA256_ARM64`] in [`VECTOR_LAYER_TEMPLATE`].
+const SHA256_ARM64_PLACEHOLDER: &str = "@VECTOR_SHA256_ARM64@";
 
 /// Generate the Dockerfile from the contract.
 ///
@@ -254,11 +272,16 @@ pub fn emit_dockerfile() -> String {
     //
     // include_str! means it is still compile-time -- no runtime IO, no build
     // script, and the file ships inside the published crate.
-    let vector_layer = VECTOR_LAYER_TEMPLATE.replace(VERSION_PLACEHOLDER, VECTOR_VERSION);
+    let vector_layer = VECTOR_LAYER_TEMPLATE
+        .replace(VERSION_PLACEHOLDER, VECTOR_VERSION)
+        .replace(SHA256_AMD64_PLACEHOLDER, VECTOR_SHA256_AMD64)
+        .replace(SHA256_ARM64_PLACEHOLDER, VECTOR_SHA256_ARM64);
 
     debug_assert!(
-        !vector_layer.contains(VERSION_PLACEHOLDER),
-        "unsubstituted {VERSION_PLACEHOLDER} left in the Vector layer"
+        !vector_layer.contains(VERSION_PLACEHOLDER)
+            && !vector_layer.contains(SHA256_AMD64_PLACEHOLDER)
+            && !vector_layer.contains(SHA256_ARM64_PLACEHOLDER),
+        "unsubstituted placeholder left in the Vector layer"
     );
 
     // Vector install + data dirs go BEFORE the `USER` directive so root can
