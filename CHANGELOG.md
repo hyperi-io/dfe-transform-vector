@@ -3,6 +3,20 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.45](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.44...v1.0.45) (2026-10-06)
+
+### Bug Fixes
+
+* drop a private secret path and doc link ([#95](https://github.com/hyperi-io/dfe-transform-vector/issues/95)) ([b6191fd](https://github.com/hyperi-io/dfe-transform-vector/commit/b6191fd71dd67964feacbc1cca0c792fdfabde2c))
+* drop the one-deployment manifests from the repo ([#102](https://github.com/hyperi-io/dfe-transform-vector/issues/102)) ([1dd7d6b](https://github.com/hyperi-io/dfe-transform-vector/commit/1dd7d6b63b7b30a243fba4e85e061fd6dac31944))
+* hold generated Kafka clients to scalo's floor ([#103](https://github.com/hyperi-io/dfe-transform-vector/issues/103)) ([49d10c2](https://github.com/hyperi-io/dfe-transform-vector/commit/49d10c2dfbe84173536824247feb171c544d2406))
+* honour the version-check opt-out ([#99](https://github.com/hyperi-io/dfe-transform-vector/issues/99)) ([0b8db69](https://github.com/hyperi-io/dfe-transform-vector/commit/0b8db6966017fda334a86cec49795e70816a6103)), closes [#98](https://github.com/hyperi-io/dfe-transform-vector/issues/98)
+* move to scalo 2.14.1 and turn PGO and BOLT on for GA ([#106](https://github.com/hyperi-io/dfe-transform-vector/issues/106)) ([72f5b95](https://github.com/hyperi-io/dfe-transform-vector/commit/72f5b95b4ae0491241c73a66cea18d2948f6a9a6))
+* ship the cargo config CI never had, and stop building BOLT we discard ([#82](https://github.com/hyperi-io/dfe-transform-vector/issues/82)) ([2242d0d](https://github.com/hyperi-io/dfe-transform-vector/commit/2242d0d50a48c6012b53bf8ecb98738b905d0f39)), closes [hyperi-ci#136](https://github.com/hyperi-io/hyperi-ci/issues/136) [dfe-engine#510](https://github.com/hyperi-io/dfe-engine/issues/510)
+* stop treating refused work as success ([#101](https://github.com/hyperi-io/dfe-transform-vector/issues/101)) ([7ea8624](https://github.com/hyperi-io/dfe-transform-vector/commit/7ea86245e3b200b03ca09f9d08206f71b82c2588)), closes [#97](https://github.com/hyperi-io/dfe-transform-vector/issues/97) [#24](https://github.com/hyperi-io/dfe-transform-vector/issues/24)
+* **test:** run the Kafka test brokers on the JVM image ([#100](https://github.com/hyperi-io/dfe-transform-vector/issues/100)) ([8a156ce](https://github.com/hyperi-io/dfe-transform-vector/commit/8a156ce2703bfde50a0b9ba39aa852bd241a83ae))
+* verify the Vector tarball checksum before installing it ([#105](https://github.com/hyperi-io/dfe-transform-vector/issues/105)) ([0e1f1c6](https://github.com/hyperi-io/dfe-transform-vector/commit/0e1f1c627b5f116f05be3431481b356551330491))
+
 ## [1.0.44](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.43...v1.0.44) (2026-09-27)
 
 ### Bug Fixes
