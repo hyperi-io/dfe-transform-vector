@@ -63,7 +63,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  Volumes:                                                        │
 │  • /etc/dfe-transform-vector/config.yaml (ConfigMap, big dials)  │
 │  • /etc/dfe-transform-vector/transforms/ (empty dir from image)  │
-│  • /var/run/vector/config/  (emptyDir — assembled Vector config) │
+│  • /var/run/vector/config/ (image dir — assembled Vector config) │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -310,7 +310,7 @@ The Rust binary loads its own config via the standard scalo 7-layer cascade:
 ```
 
 ```yaml
-# /etc/dfe/config.yaml — the big dials
+# /etc/dfe-transform-vector/config.yaml — the big dials
 pipeline:
   name: syslog-enrichment
 
@@ -335,7 +335,7 @@ sink:
   compression: zstd
 
 transforms:
-  dir: /etc/dfe/transforms/
+  dir: /etc/dfe-transform-vector/transforms
 
 vector:
   binary: /usr/local/bin/vector
@@ -767,68 +767,88 @@ No dependency on the official Vector Helm chart. This is a purpose-built chart f
 
 ### 9.2 Values Shape
 
-Matches what dfe-engine's HelmValuesCompiler generates:
+`chart/values.yaml`, abridged to the keys an operator normally sets:
 
 ```yaml
-image: ghcr.io/hyperi-io/dfe-transform-vector
-imageTag: "1.0.0"
-replicas: 2
+replicaCount: 1                  # ignored while KEDA or the HPA fallback owns the count
 
-config:
+image:
+  repository: ghcr.io/hyperi-io/dfe-transform-vector
+  tag: ""                        # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+config:                          # mounted as /etc/dfe-transform-vector/config.yaml
   pipeline:
-    name: syslog-enrichment
+    name: default
   source:
-    brokers: ["kafka-bootstrap.kafka.svc.cluster.local:9092"]
-    topics: ["raw_syslog_land"]
-    group_id: dfe-transform-vector-syslog-enrichment
+    transport: bus               # bus consumes topics, direct accepts pushes on listen
+    brokers: ["kafka:9092"]
+    topics: ["raw_events"]
+    group_id: dfe-transform-vector-default
+    sasl:
+      enabled: true
+      mechanism: scram_sha_512
+      secret_dir: /var/run/secrets/dfe-kafka
+    tls:
+      enabled: false
   sink:
-    brokers: ["kafka-bootstrap.kafka.svc.cluster.local:9092"]
-    topic: enriched_syslog_land
-    key_field: ".org_id"
+    transport: bus               # bus produces to topic, direct pushes to endpoint
+    brokers: ["kafka:9092"]
+    topic: enriched_events
+    key_field: .org_id
     encoding: json
+    compression: zstd
+    sasl:
+      enabled: true
+      mechanism: scram_sha_512
+      secret_dir: /var/run/secrets/dfe-kafka
+    tls:
+      enabled: false
   transforms:
-    dir: /etc/dfe/transforms/
+    dir: /etc/dfe-transform-vector/transforms
   vector:
-    version: "0.48.0"
-    version_check: strict
-  scaling:
-    pressure_threshold: 0.8
+    version: 0.58.0
+    version_check: warn
+  metrics:
+    address: 0.0.0.0:9090
 
-transforms: {}
-  # parse.yaml: |
-  #   transforms:
-  #     parse:
-  #       type: remap
-  #       inputs: ["dfe_source"]
-  #       source: |
-  #         . = parse_json!(.message)
+kafka:                           # credentials, mounted as files at sasl.secret_dir
+  existingSecret: ""
+  secretKeys:
+    username: kafka-username
+    password: kafka-password
 
 resources:
   requests:
-    cpu: "500m"
-    memory: "1Gi"
+    cpu: 250m
+    memory: 256Mi
   limits:
-    cpu: "2000m"
-    memory: "2Gi"
+    cpu: "2"
+    memory: 1Gi
 
 keda:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 8
-  kafkaLagThreshold: 1000
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  kafka:
+    lagThreshold: "1000"
+  cpu:
+    enabled: true
+    threshold: "80"
+
+autoscaling:                     # HPA fallback, exclusive with keda.enabled
+  enabled: false
 
 serviceAccount:
   create: true
   annotations: {}
 
-podMonitor:
-  enabled: true
-
-topologySpreadConstraints: []
 nodeSelector: {}
 tolerations: []
 affinity: {}
 ```
+
+The chart has no `transforms` value. Transform YAML comes from the image, at `config.transforms.dir`, or from the paths in `config.transforms.files`.
 
 ### 9.3 Parity With dfe-loader/dfe-receiver Charts
 
