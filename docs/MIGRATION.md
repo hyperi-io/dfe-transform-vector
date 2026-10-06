@@ -89,6 +89,7 @@ keda:
 ```
 
 Key differences:
+
 - **No inline VRL** — transforms are fetched by the init container from Artifactory
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
 - **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
@@ -146,6 +147,7 @@ independently without affecting the existing pipeline.
 ### Step 4: Switch Traffic
 
 Once validated:
+
 1. Scale down old pipeline replicas to 0
 2. Update downstream consumers to read from new output topic (if topic name changed)
 3. Monitor for 24-48 hours
@@ -154,6 +156,7 @@ Once validated:
 ### Step 5: Cleanup
 
 After all pipelines migrated:
+
 1. Remove old `vector.yaml` ApplicationSet from dfe-core
 2. Remove old `gitOps/addons/helm/vector/` directory
 3. Remove `vector_project.yaml` ArgoCD project (or update to cover new apps)

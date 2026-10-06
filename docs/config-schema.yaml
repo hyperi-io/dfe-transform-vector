@@ -335,6 +335,7 @@ $defs:
           Taken literally: Vector does not expand `${VAR}` placeholders, so a
           value holding one is refused.
         type: string
+        x-scalo-secret: true
         x-dfe-secret: true
         writeOnly: true
         default: ''

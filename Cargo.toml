@@ -62,7 +62,10 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # `transport-kafka` carries `KafkaConfig`, the security floor `Config::validate`
 # holds the generated Kafka source and sink to. Only its config is used: the
 # image ships no librdkafka, so nothing here may build an rdkafka client.
-scalo = { version = ">=2.13.0, <3", features = [
+#
+# The floor is the first release whose contract carries no vendor defaults, so
+# the app names its own.
+scalo = { version = "2.14.0", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -139,7 +142,7 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.13.0, <3", features = [
+scalo = { version = "2.14.0", features = [
     "transport-kafka",
 ] }
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.

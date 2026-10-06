@@ -126,10 +126,12 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 ### Hot-reload
 
 **Hot-reloaded (takes effect via SIGHUP to Vector):**
+
 - Transform YAML file contents (modified/added/removed in watched directory)
 - `transforms.dir` / `transforms.files` path changes
 
 **Requires pod restart:**
+
 - `source.*` -- the consumer or the Push listener is established at startup
 - `sink.*` -- the producer or the Push client is established at startup
 - `bridge.*` -- the two supervisor-to-Vector legs bind at startup
@@ -235,7 +237,6 @@ points at it.
 - [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/DESIGN.md) -- Full architecture and design
 - [docs/MIGRATION.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/MIGRATION.md) -- Migration from official Vector chart
 - [docs/LIBRDKAFKA.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/LIBRDKAFKA.md) -- Kafka tuning reference
-- [RESEARCH.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/RESEARCH.md) -- Research findings and option analysis
 
 ## License
 
@@ -320,7 +321,7 @@ What green does NOT mean:
 | Set `enable.auto.commit: false` here, as the shared DFE consumer baseline does | Leave auto-commit on | Vector's kafka source only stores offsets and leaves librdkafka's commit timer to flush them, and that timer is armed only when auto-commit is on. Consumer lag sat at 72 across a quiet 90-second window while the app's own metrics said it had processed those same 72 events |
 | Read `/readyz` as "carrying traffic" | Read it as "the child was alive 500ms after spawn" | It once answered an unconditional 200 because nothing published a readiness signal, so Vector could crash and restart hundreds of times with the pod still Ready and zero restarts |
 | Swap the reload poller for inotify | Keep polling | S3-backed mounts -- s3fs, goofys, Mountpoint for S3 -- generate no filesystem notification events, so inotify works on every laptop and silently stops reloading in production |
-| Rename a credential field, or add one whose leaf name is not `password`, `secret`, `token`, `api_key`, `private_key` or `passphrase` | Add the `x-dfe-secret` marker to the schema first | This repo ships no `x-dfe-secret` marker anywhere. The only thing redacting the SASL password over dfe-engine's API is its leaf-name fallback in `appmgmt/contract.py`, so a rename outside that set returns an operator's Kafka password in the clear. The sibling dfe-transform-vrl marked its Kafka passwords already |
+| Add or rename a credential field without a schema marker | Schema it as `scalo::SensitiveString` with `#[schemars(with = ...)]`, as `SaslConfig::password` is | That puts `x-scalo-secret` and `writeOnly` on the field in the emitted config-schema, which is what tells a console to mask it. Without it, only dfe-engine's leaf-name fallback (`password`, `secret`, `token`, `api_key`, `private_key`, `passphrase`) redacts it, so a name outside that set returns an operator's Kafka password in the clear |
 
 ### Where this sits
 

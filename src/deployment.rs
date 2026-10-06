@@ -166,8 +166,13 @@ pub fn contract() -> DeploymentContract {
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
         schema_version: 3,
+        // scalo writes no vendor, licence or copyright of its own, so the labels
+        // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
+            vendor: "HYPERI PTY LIMITED".into(),
+            label_namespace: "io.hyperi".into(),
             licenses: "BUSL-1.1".into(),
+            copyright: "(c) 2026 HYPERI PTY LIMITED".into(),
             ..Default::default()
         },
         // Reflectable config (scalo-rs#6): derived JSON Schema of the wrapper
