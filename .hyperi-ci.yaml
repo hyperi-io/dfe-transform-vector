@@ -15,12 +15,14 @@ quality:
   ignore:
     # GHSA-w9wp-h8wv-79jx / CVE-2026-48504: opentelemetry_sdk 0.31.0 reaches the
     # lock only through scalo. The flaw is in BaggagePropagator's header parsing,
-    # and neither this repo nor scalo installs a text map propagator, so it is
-    # never called. scalo holds 0.31 until metrics-exporter-opentelemetry
-    # supports 0.32 (dfe-infra docs/THREAT-MODEL.md).
+    # and neither this repo nor scalo registers a Baggage or other text map
+    # propagator, so it is never called. Recorded as not reachable in the DFE
+    # threat model (dfe-infra docs/THREAT-MODEL.md, accepted risks). scalo holds
+    # 0.31 because metrics-exporter-opentelemetry 0.2.1 requires opentelemetry
+    # ^0.31; tracked in hyperi-io/scalo-rs#281.
     - tool: osv-scanner
       id: GHSA-w9wp-h8wv-79jx
-      reason: "CVE-2026-48504, opentelemetry_sdk 0.31.0 via scalo: BaggagePropagator::extract_with_context is unreachable (no text map propagator, no baggage in dfe-transform-vector or scalo). Drop when scalo allows opentelemetry_sdk >= 0.32.1."
+      reason: "CVE-2026-48504, opentelemetry_sdk 0.31.0 via scalo: unreachable, no Baggage propagator registered in dfe-transform-vector or scalo. Not reachable per dfe-infra docs/THREAT-MODEL.md accepted risks. Blocked on metrics-exporter-opentelemetry 0.2.1 requiring opentelemetry ^0.31; tracked in hyperi-io/scalo-rs#281."
 
 # Testing
 test:
@@ -35,12 +37,6 @@ test:
 # Building
 build:
   enabled: true
-  # PGO and BOLT are off for the rc.14 workstream: each adds 30-60 min per arch
-  # and the workstream needs fast turnaround on everything else first. Tier 1
-  # (allocator + LTO) still applies. Turning this back off is the LAST rc.14
-  # task. A STABLE release meanwhile needs `release-unoptimized: true` at
-  # dispatch; a prerelease (rc) is never refused.
-  skip_optimize: true
   type: app
   strategies:
     - native

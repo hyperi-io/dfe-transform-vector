@@ -49,7 +49,7 @@ pub struct SaslConfig {
     /// Taken literally: Vector does not expand `${VAR}` placeholders, so a
     /// value holding one is refused.
     // Typed `String` for the round-trip above, but schema'd as scalo's
-    // `SensitiveString` so the emitted config-schema carries `x-dfe-secret` and
+    // `SensitiveString` so the emitted config-schema carries `x-scalo-secret` and
     // `writeOnly`, which is what tells the console to mask the field.
     #[schemars(with = "scalo::SensitiveString")]
     pub password: String,
@@ -906,7 +906,9 @@ impl Config {
             return Ok(());
         };
 
-        let dfe = KafkaSource::new(source_name);
+        // Every derived group leads with `dfe-`: a changed group strands its
+        // committed offsets and falls outside the broker's prefix grant.
+        let dfe = KafkaSource::new(source_name).with_group_prefix("dfe-");
         let defaults = SourceConfig::default();
         let sink_defaults = SinkConfig::default();
 

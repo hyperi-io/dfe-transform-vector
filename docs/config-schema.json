@@ -348,6 +348,7 @@
         "password": {
           "description": "SASL password. Leave empty when `secret_dir` supplies it.\n\nTaken literally: Vector does not expand `${VAR}` placeholders, so a\nvalue holding one is refused.",
           "type": "string",
+          "x-scalo-secret": true,
           "x-dfe-secret": true,
           "writeOnly": true,
           "default": ""

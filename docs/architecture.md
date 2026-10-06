@@ -28,10 +28,9 @@ side this app is indistinguishable from dfe-loader or dfe-receiver.
 
 Vector is not designed as a library and has no stable public API for embedding,
 so the image downloads the upstream release binary at a pinned version and the
-supervisor spawns it with `--config-dir`. The subprocess-versus-compiled-crate
-comparison that settled this is in [../RESEARCH.md](../RESEARCH.md), and the
-deciding factor was upgrades: a subprocess swaps the binary, a crate rebuilds
-against every new Vector version.
+supervisor spawns it with `--config-dir`. Against compiling Vector in as a
+crate, the deciding factor was upgrades: a subprocess swaps the binary, a crate
+rebuilds against every new Vector version.
 
 That choice has one visible consequence. This is the only DFE Rust app whose
 runtime image carries two binaries -- its own, which scalo's deployment contract
