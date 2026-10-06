@@ -62,7 +62,7 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # `transport-kafka` carries `KafkaConfig`, the security floor `Config::validate`
 # holds the generated Kafka source and sink to. Only its config is used: the
 # image ships no librdkafka, so nothing here may build an rdkafka client.
-scalo = { version = ">=2.13.0, <3", features = [
+scalo = { version = ">=2.14.0, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -82,7 +82,7 @@ scalo = { version = ">=2.13.0, <3", features = [
 
 # Configuration
 figment = { version = ">=0.10.19, <0.11", features = ["env"] }
-clap = { version = ">=4.6.6, <5", features = ["derive", "env"] }
+clap = { version = ">=4.6.7, <5", features = ["derive", "env"] }
 dotenvy = ">=0.15.7, <0.16"
 
 # Record payloads across the direct-transport bridge, which moves bytes rather
@@ -99,7 +99,7 @@ serde_yaml_ng = ">=0.10, <0.11"
 schemars = { version = ">=1.2.2, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # Error handling
-thiserror = ">=2.0.20, <3"
+thiserror = ">=2.0.21, <3"
 anyhow = ">=1.0.104, <2"
 
 # Logging and tracing
@@ -130,7 +130,7 @@ pgo-driver = []
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
-tokio-test = ">=0.4.5, <0.5"
+tokio-test = ">=0.4.6, <0.5"
 # The WS21 filebeat corpus (tests/common/filebeat.rs) is read in memory from
 # dfe-transform-vrl's committed tar.gz; chrono compares transformed timestamps
 # against the elastic golden outputs.
@@ -139,7 +139,7 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = ">=2.13.0, <3", features = [
+scalo = { version = ">=2.14.0, <3", features = [
     "transport-kafka",
 ] }
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.
