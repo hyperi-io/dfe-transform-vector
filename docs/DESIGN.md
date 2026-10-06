@@ -61,8 +61,8 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  Volumes:                                                        │
-│  • /etc/dfe/config.yaml     (ConfigMap — big-dial config)        │
-│  • /etc/dfe/transforms/     (init container — from Artifactory)  │
+│  • /etc/dfe-transform-vector/config.yaml (ConfigMap, big dials)  │
+│  • /etc/dfe-transform-vector/transforms/ (empty dir from image)  │
 │  • /var/run/vector/config/  (emptyDir — assembled Vector config) │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -837,7 +837,7 @@ affinity: {}
 | Workload type | StatefulSet | StatefulSet | Deployment |
 | Health probes | /livez, /readyz | /livez, /readyz | /livez, /readyz |
 | Metrics port | 9090 | 9090 | 9090 |
-| ConfigMap | config.yaml | config.yaml | config.yaml + transforms/ |
+| ConfigMap | config.yaml | config.yaml | config.yaml |
 | PVC | data dir | data dir | None (Deployment) |
 | KEDA ScaledObject | Kafka lag | Kafka lag | Kafka lag |
 | PodMonitor | Yes | Yes | Yes |
