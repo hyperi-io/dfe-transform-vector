@@ -561,8 +561,8 @@ The wrapper's config declares a **pinned Vector version**:
 
 ```yaml
 vector:
-  version: "0.48.0"              # Expected version
-  version_check: strict          # strict | warn | disabled
+  version: "0.58.0"              # Expected version
+  version_check: warn            # strict | warn | disabled
   binary: /usr/local/bin/vector
 ```
 
@@ -612,7 +612,7 @@ COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
 # LICENSE / NOTICE / licenses tree copied from the same release archive
 RUN curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/..."
 
-RUN mkdir -p /var/lib/vector /var/run/vector/config
+RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms
 USER appuser
 ENTRYPOINT ["dfe-transform-vector"]
 ```
