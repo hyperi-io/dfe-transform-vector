@@ -90,7 +90,7 @@ keda:
 
 Key differences:
 
-- **No inline VRL** — transforms are fetched by the init container from Artifactory
+- **No inline VRL** — transforms are separate YAML files the wrapper loads from `config.transforms.dir` (the image's `/etc/dfe-transform-vector/transforms`) or lists in `config.transforms.files`
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
 - **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
 - **KEDA** configured declaratively, inherits defaults from common.yaml
@@ -102,10 +102,9 @@ Key differences:
 
 ### What Stays the Same
 
-- **Secrets**: the chart creates none. The Kafka SASL secret and any artefact-store credential come from wherever your deployment already supplies them
+- **Secrets**: the chart creates none. The Kafka SASL secret comes from wherever your deployment already supplies it
 - **KEDA TriggerAuthentication**: keeps pointing at the same Kafka credential secret
 - **Node placement**: set the chart's `nodeSelector` and `tolerations` to match your existing pool
-- **Transform YAML delivery**: Same Artifactory ZIP download pattern via init container
 
 ### What Changes
 
@@ -117,6 +116,7 @@ Key differences:
 | Health endpoint | `/health` on :8686 | `/livez`, `/readyz` on :9090, beside `/metrics` |
 | Metrics | Vector native on :9090 | Wrapper + merged Vector on :9090 |
 | Config format | Full Vector YAML (customConfig) | Big-dial config (source/sink/transforms) |
+| Transform delivery | Inline VRL in `customConfig` | YAML files in `transforms.dir` or listed in `transforms.files`. The chart has no init container or download step: bake the files into your image or mount them at that path |
 | DAG wiring | Manual (inline in values) | Auto-wired by wrapper |
 | Hot-reload | Not supported | Poll-based file watcher + SIGHUP |
 | Crash recovery | K8s pod restart only | Wrapper restarts Vector with backoff |
