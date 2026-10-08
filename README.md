@@ -298,8 +298,6 @@ cargo nextest run --test e2e                 # needs Docker or a live broker
 cargo nextest run --run-ignored all          # everything, opt-in cases included
 ```
 
-`cargo nextest run --lib` was run against this branch: 112 passed, 1 skipped.
-
 What green does NOT mean:
 
 - **The default run skips the Vector validator.** Seven `#[ignore]` cases need a
