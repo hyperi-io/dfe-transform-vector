@@ -286,10 +286,11 @@ and 9598 stays a loopback debug surface with no reader outside the pod.
 
 ### 4.4 Scaling
 
-KEDA scales based on Kafka consumer lag (ScaledObject targets the consumer group
-directly). The wrapper exposes `dfe_pipeline_ready` as a basic readiness signal.
-Composite scaling pressure (weighted Kafka lag + memory + error rate) is planned
-for a future release via the scalo `scaling` feature.
+The ScaledObject scales on CPU alone. `contract()` sets `KafkaLagTrigger::disabled()`,
+because consumer-group lag rises when a downstream stage breaks and more replicas
+cannot fix that. A deployment adds a trigger with the library chart's
+`keda.extraTriggers` value. `spawn_circuit_gate_task` pins scalo's scaling
+pressure to 0 while the Vector subprocess is down.
 
 ---
 
@@ -744,111 +745,20 @@ DFE remediation guide.
 
 ## 9. Helm Chart
 
-### 9.1 Chart Structure
+### 9.1 How the Chart Is Built
 
-```text
-chart/
-  Chart.yaml
-  values.yaml
-  templates/
-    _helpers.tpl
-    deployment.yaml
-    service.yaml
-    configmap.yaml               # Big-dial config
-    secret.yaml                  # Kafka credentials (when existingSecret empty)
-    serviceaccount.yaml
-    hpa.yaml                     # HPA fallback (when KEDA not available)
-    keda-scaledobject.yaml       # KEDA ScaledObject (Kafka lag + CPU)
-    keda-triggerauth.yaml        # KEDA TriggerAuthentication
-    NOTES.txt
-```
+No chart is committed. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. The library renders the Deployment, Service, ConfigMap, ServiceAccount and KEDA ScaledObject, and its README documents the values. `emit-chart <dir>` still writes scalo's full chart for local use.
 
-No dependency on the official Vector Helm chart. This is a purpose-built chart for dfe-transform-vector that follows the same patterns as dfe-loader and dfe-receiver charts.
+### 9.2 What the Contract Fixes
 
-### 9.2 Values Shape
+- Probes on 9090 (`/livez`, `/readyz`) with a 120 s startup budget.
+- The Push port 6000, `appProtocol: kubernetes.io/h2c`, only while `config.source.transport` is `direct`.
+- The Kafka Secret's `username` and `password` in `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}`. The assembler writes them to owner-only files under `vector.config_dir`, which Vector reads through its `directory` secret backend.
+- Writable paths `data` at `/var/lib/vector` and `run` at `/var/run/vector`, beside the library's `/tmp`, under a read-only root filesystem.
+- Requests 100m/128Mi, limits 500m/512Mi, a 90 s grace period, uid and gid 1000.
+- KEDA on CPU at 80 %, 1 to 10 replicas, no Kafka lag trigger.
 
-`chart/values.yaml`, abridged to the keys an operator normally sets:
-
-```yaml
-replicaCount: 1                  # ignored while KEDA or the HPA fallback owns the count
-
-image:
-  repository: ghcr.io/hyperi-io/dfe-transform-vector
-  tag: ""                        # defaults to the chart appVersion
-  pullPolicy: IfNotPresent
-
-config:                          # mounted as /etc/dfe-transform-vector/config.yaml
-  pipeline:
-    name: default
-  source:
-    transport: bus               # bus consumes topics, direct accepts pushes on listen
-    brokers: ["kafka:9092"]
-    topics: ["raw_events"]
-    group_id: dfe-transform-vector-default
-    sasl:
-      enabled: true
-      mechanism: scram_sha_512
-      secret_dir: /var/run/secrets/dfe-kafka
-    tls:
-      enabled: false
-  sink:
-    transport: bus               # bus produces to topic, direct pushes to endpoint
-    brokers: ["kafka:9092"]
-    topic: enriched_events
-    key_field: .org_id
-    encoding: json
-    compression: zstd
-    sasl:
-      enabled: true
-      mechanism: scram_sha_512
-      secret_dir: /var/run/secrets/dfe-kafka
-    tls:
-      enabled: false
-  transforms:
-    dir: /etc/dfe-transform-vector/transforms
-  vector:
-    version: 0.58.0
-    version_check: warn
-  metrics:
-    address: 0.0.0.0:9090
-
-kafka:                           # credentials, mounted as files at sasl.secret_dir
-  existingSecret: ""
-  secretKeys:
-    username: kafka-username
-    password: kafka-password
-
-resources:
-  requests:
-    cpu: 250m
-    memory: 256Mi
-  limits:
-    cpu: "2"
-    memory: 1Gi
-
-keda:
-  enabled: true
-  minReplicaCount: 1
-  maxReplicaCount: 10
-  kafka:
-    lagThreshold: "1000"
-  cpu:
-    enabled: true
-    threshold: "80"
-
-autoscaling:                     # HPA fallback, exclusive with keda.enabled
-  enabled: false
-
-serviceAccount:
-  create: true
-  annotations: {}
-
-nodeSelector: {}
-tolerations: []
-affinity: {}
-```
-
-The chart has no `transforms` value. Transform YAML comes from the image, at `config.transforms.dir`, or from the paths in `config.transforms.files`.
+The mounted config is the chart's `config` with `configOverrides` merged over it. The contract's `default_config` is not merged in, so the app's own defaults apply to anything a deployment leaves unset. The library mounts the ConfigMap over the config file's whole directory unless `configMount.subPath` is set, and that hides the image's `/etc/dfe-transform-vector/transforms`.
 
 ### 9.3 Parity With dfe-loader/dfe-receiver Charts
 
@@ -858,8 +768,8 @@ The chart has no `transforms` value. Transform YAML comes from the image, at `co
 | Health probes | /livez, /readyz | /livez, /readyz | /livez, /readyz |
 | Metrics port | 9090 | 9090 | 9090 |
 | ConfigMap | config.yaml | config.yaml | config.yaml |
-| PVC | data dir | data dir | None (Deployment) |
-| KEDA ScaledObject | Kafka lag | Kafka lag | Kafka lag |
+| PVC | data dir | data dir | None -- `emptyDir` writable paths |
+| KEDA ScaledObject | Kafka lag | Kafka lag | CPU |
 | PodMonitor | Yes | Yes | Yes |
 | ServiceAccount + IRSA | Yes | Yes | Yes |
 | Reloader annotation | Yes | Yes | Yes |

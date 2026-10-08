@@ -44,3 +44,25 @@ pub fn load_config(path: Option<&str>) -> Result<Config> {
 pub fn env_write_guard() -> RwLockWriteGuard<'static, ()> {
     CONFIG_ENV.write().unwrap_or_else(|e| e.into_inner())
 }
+
+/// Run `f` with each name set to its value, or unset for `None`, then remove
+/// every one of them.
+pub fn with_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+    let _exclusive = env_write_guard();
+    // SAFETY: `_exclusive` excludes every guarded reader and writer of the
+    // environment until the names are removed again.
+    unsafe {
+        for (name, value) in vars {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+    let result = f();
+    for (name, _) in vars {
+        // SAFETY: as above.
+        unsafe { std::env::remove_var(name) };
+    }
+    result
+}

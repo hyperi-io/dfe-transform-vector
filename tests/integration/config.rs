@@ -17,7 +17,7 @@ use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::*;
 use tempfile::TempDir;
 
-use crate::integration::config_env::{env_write_guard, load_config};
+use crate::integration::config_env::{env_write_guard, load_config, with_vars};
 
 /// Build a complete test config with realistic values.
 fn full_config(transforms_dir: Option<String>) -> Config {
@@ -481,6 +481,119 @@ fn config_env_override_flat() {
     unsafe { std::env::remove_var("DFE_TRANSFORM_PIPELINE_NAME") };
 
     assert_eq!(config.pipeline.name, "env-override-test");
+}
+
+/// `config` with `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
+/// or unset for `None`, through the flat env layer.
+fn with_security_protocol(config: Config, protocol: Option<&str>) -> Config {
+    use scalo::config::flat_env::ApplyFlatEnv;
+
+    with_vars(
+        &[("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", protocol)],
+        || {
+            let mut config = config;
+            config.apply_flat_env("DFE_TRANSFORM");
+            config
+        },
+    )
+}
+
+/// The chart stamps the broker's protocol, and a TLS listener needs TLS on
+/// both endpoints whatever case the protocol is spelled in.
+#[test]
+fn an_ssl_security_protocol_turns_tls_on_for_both_endpoints() {
+    for protocol in ["SASL_SSL", "SSL", "sasl_ssl"] {
+        let config = with_security_protocol(Config::default(), Some(protocol));
+        assert!(
+            config.source.tls.enabled,
+            "{protocol}: source TLS stayed off"
+        );
+        assert!(config.sink.tls.enabled, "{protocol}: sink TLS stayed off");
+    }
+}
+
+#[test]
+fn a_plaintext_or_unset_security_protocol_leaves_tls_off() {
+    for protocol in [Some("SASL_PLAINTEXT"), Some("PLAINTEXT"), None] {
+        let config = with_security_protocol(Config::default(), protocol);
+        assert!(
+            !config.source.tls.enabled,
+            "{protocol:?}: source TLS came on"
+        );
+        assert!(!config.sink.tls.enabled, "{protocol:?}: sink TLS came on");
+    }
+}
+
+/// The env only ever turns TLS on, so a plaintext protocol cannot switch off
+/// the TLS a config file asked for.
+#[test]
+fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
+    let file: Config = serde_yaml_ng::from_str(
+        "source:\n  tls:\n    enabled: true\nsink:\n  tls:\n    enabled: true\n",
+    )
+    .unwrap();
+
+    let config = with_security_protocol(file, Some("SASL_PLAINTEXT"));
+
+    assert!(config.source.tls.enabled, "source TLS was switched off");
+    assert!(config.sink.tls.enabled, "sink TLS was switched off");
+}
+
+/// `config-check` run by the binary from `dir`, returning what it printed.
+fn config_check_in(dir: &std::path::Path) -> String {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
+        .arg("config-check")
+        .current_dir(dir)
+        .env_remove("DFE_TRANSFORM_PIPELINE_NAME")
+        .env_remove("DFE_TRANSFORM_SINK_TOPIC")
+        .output()
+        .expect("the binary runs");
+    let printed = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "config-check failed:\n{printed}");
+    printed
+}
+
+/// The binary reads the `.env` in its working directory and no other.
+///
+/// A `.env` in a parent directory belongs to whatever project sits above, so a
+/// search up the tree loads another project's settings and credentials.
+#[test]
+fn a_dotenv_in_a_parent_directory_is_not_loaded() {
+    let root = TempDir::new().expect("tempdir");
+    let project = root.path().join("project");
+    fs::create_dir(&project).expect("project dir");
+    fs::write(
+        project.join("config.yaml"),
+        "sink:\n  topic: from_the_file\n",
+    )
+    .expect("project config");
+    fs::write(
+        root.path().join(".env"),
+        "DFE_TRANSFORM_PIPELINE_NAME=from_parent_dotenv\n",
+    )
+    .expect("parent .env");
+
+    let printed = config_check_in(&project);
+    assert!(
+        !printed.contains("from_parent_dotenv"),
+        "a .env in the parent directory reached the config"
+    );
+
+    // The project's own .env still loads.
+    fs::write(
+        project.join(".env"),
+        "DFE_TRANSFORM_SINK_TOPIC=from_project_dotenv\n",
+    )
+    .expect("project .env");
+    let printed = config_check_in(&project);
+    assert!(
+        printed.contains("from_project_dotenv"),
+        "the project's own .env did not reach the config"
+    );
+    assert!(
+        !printed.contains("from_parent_dotenv"),
+        "a .env in the parent directory reached the config"
+    );
 }
 
 // =========================================================================

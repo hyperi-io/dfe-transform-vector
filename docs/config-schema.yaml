@@ -23,8 +23,8 @@ description: |-
 
   **Read by nothing in this process:**
   - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
-    chart's KEDA triggers (consumer-group lag and CPU), gated by the
-    subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
+    chart's KEDA ScaledObject (CPU, plus any trigger a deployment adds),
+    gated by the subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
     scalo's runtime reads its own `scaling.enabled` and
     `scaling.memory_gate_threshold` from the cascade, not this key.
 type: object
@@ -336,7 +336,6 @@ $defs:
           value holding one is refused.
         type: string
         x-scalo-secret: true
-        x-dfe-secret: true
         writeOnly: true
         default: ''
       secret_dir:

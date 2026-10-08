@@ -37,7 +37,6 @@ test:
 # Building
 build:
   enabled: true
-  type: app
   strategies:
     - native
   rust:
@@ -63,9 +62,15 @@ build:
       bolt:
         enabled: true  # Linux only; skipped on non-Linux targets
 
-# Release (where the artefacts go)
+# Release (where the artefacts go). The thin chart is assembled from the
+# emitted contract and ships beside the image.
 release:
   enabled: true
+  # Keep `library` at the scalo version in Cargo.toml: the library renders only the contract version its scalo release writes.
+  helm:
+    enabled: true
+    contract: emit
+    library: "2.14.3"
   container:
     enabled: true
     dockerfile: Dockerfile
@@ -76,5 +81,3 @@ release:
     # by `src/deployment.rs::emit_dockerfile()` (consumer-side post-process
     # over scalo's base output). When hyperi-ci's overlay framework
     # lands, this moves to `release.container.overlays:` here.
-  helm:
-    enabled: true

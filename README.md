@@ -78,7 +78,8 @@ ceiling, or one Vector refused for good because a sink it feeds rejected it
 - **Production Kafka tuning**: librdkafka defaults baked in with 4-layer cascade
 - **Metrics**: Vector's own `vector_*` merged into the wrapper's registry, so one
   endpoint and one OTLP push carry both
-- **Helm chart**: Generated Deployment-based chart with KEDA, HPA, ConfigMap
+- **Helm chart**: A thin chart assembled at release from the deployment contract
+  on the scalo-service library chart
 
 ## Quick Start
 
@@ -93,11 +94,17 @@ cargo build --release
 ./target/release/dfe-transform-vector emit-dockerfile
 ./target/release/dfe-transform-vector emit-compose
 
-# emit-chart overwrites whatever directory you point it at. The committed
-# chart/ carries KEDA hand-edits the generator does not produce, so render
-# somewhere scratch and diff rather than regenerating over it.
-./target/release/dfe-transform-vector emit-chart /tmp/dfe-transform-vector-chart
+# scalo's full chart, for local use. emit-chart overwrites the directory it is given.
+./target/release/dfe-transform-vector emit-chart chart
 ```
+
+### Helm chart
+
+No chart is committed here. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. Keep that version at the scalo version in `Cargo.toml`: a library renders only the contract version its scalo release writes.
+
+To see the chart a release would ship, build the binary and run `hyperi-ci chart assemble --binary target/debug/dfe-transform-vector --image ghcr.io/hyperi-io/dfe-transform-vector:<tag>@sha256:<digest> --version <version>`. It prints the chart directory it wrote.
+
+The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
 ## Configuration
 
@@ -113,6 +120,8 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 | `DFE_TRANSFORM_SOURCE__BROKERS` | Kafka source broker addresses |
 | `DFE_TRANSFORM_SOURCE__TOPICS` | Source topic list |
 | `DFE_TRANSFORM_SOURCE__GROUP_ID` | Consumer group ID |
+| `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}` | Kafka SASL credentials per endpoint; the chart mounts the Kafka Secret's `username` and `password` into all four |
+| `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` | Sets `source.tls.enabled` and `sink.tls.enabled` true when the value contains `SSL`; never sets them false |
 | `DFE_TRANSFORM_SINK_TRANSPORT` | `bus` or `direct` |
 | `DFE_TRANSFORM_SINK_ENDPOINT` | Next stage's Push listener (direct) |
 | `DFE_TRANSFORM_SINK__BROKERS` | Kafka sink broker addresses |
@@ -253,7 +262,7 @@ For commercial licensing options, see [COMMERCIAL.md](https://github.com/hyperi-
 
 A Rust supervisor that runs Vector.dev as a child process so a Vector pipeline
 behaves like every other DFE app -- one big-dial config, one ops port, an OTLP
-push, a consumer-lag scaling signal and a chart dfe-engine compiles. It is NOT
+push, and a chart assembled from its deployment contract. It is NOT
 the transform engine and it does not build Vector: the image downloads the
 upstream release binary at the version pinned by `VECTOR_VERSION` in
 `src/deployment.rs`, and cargo compiles only the supervisor. It is also not a
@@ -271,10 +280,9 @@ deployment asks for it.
 | `src/vector/` | `process` spawn and backoff, `lifecycle` states, and `binary` -- version selection kept pure and NOT on the run path, which its own header explains |
 | `src/bridge.rs` | The direct-transport translation between scalo `Transport/Push` and Vector `PushEvents`. Does nothing on `bus` |
 | `src/health.rs`, `src/metrics.rs`, `src/metrics/scrape.rs` | Readiness publishing, and the scrape that merges `vector_*` into scalo's registry |
-| `src/deployment.rs`, `src/vector-layer.dockerfile` | The two-binary image override spliced onto scalo's generated Dockerfile |
+| `src/deployment.rs`, `src/vector-layer.dockerfile` | `contract()`, the source the Dockerfile and the released chart are generated from, and the two-binary image override spliced onto scalo's generated Dockerfile |
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
 | `pipelines/filebeat/` | The shipped filebeat pipeline |
-| `chart/` | The committed Helm chart. Carries KEDA hand-edits, so NOT pure generator output |
 | `docs/` | `architecture.md` for the shape and the invariants, `DESIGN.md` for field-by-field depth, `MIGRATION.md`, `LIBRDKAFKA.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
@@ -312,8 +320,10 @@ What green does NOT mean:
 
 | Don't | Do | Why |
 |---|---|---|
-| Point `emit-chart` at `chart/` | Render to a scratch directory and diff | `chart/` carries KEDA hand-edits the generator does not produce, including a ScaledObject addressed at `config.source.*` where the generator emits `config.kafka.*`. A test asserts the committed chart matches the generator except for four exempted files |
-| Bump the Vector version in one place | Change `VECTOR_VERSION` in `src/deployment.rs` and carry it to `chart/values.yaml` | The chart once said 0.48.0 while the image baked 0.57.0, nine minor versions apart, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
+| Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships |
+| Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
+| Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The library's trigger also reads `config.kafka.*`, which this app does not have, and refuses to render |
+| Set `vector.version` in a deployment's config and forget it | Leave it unset, so the default reads `VECTOR_VERSION` | A committed chart once said 0.48.0 while the image baked 0.57.0, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
 | Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials, so Vector would run two sources and two sinks |
 | Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs and `Debug`, and Vector reads the credential from files through its `directory` secret backend, so it never lands in the Vector config |
 | Put a `${VAR}` placeholder in a credential or a transform | Mount the secret and set `sasl.secret_dir`, or give the credential through `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`; read the environment in VRL with `get_env_var` | Vector 0.57+ expands no `${VAR}` without `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, so the placeholder reaches the broker as the password |
@@ -338,7 +348,9 @@ Inbound -- what this repo depends on:
   by `scalo::deployment::generate_dockerfile()` -- its own header names the
   generator and the schema version -- and this repo splices the Vector layer onto
   it. When the generator or its schema moves, regenerate with
-  `dfe-transform-vector emit-dockerfile > Dockerfile` and commit the diff.
+  `dfe-transform-vector emit-dockerfile > Dockerfile` and commit the diff. The
+  released chart is assembled on the scalo-service library chart at
+  `release.helm.library`, which moves with the scalo version in `Cargo.toml`.
 
 Outbound -- what depends on this repo:
 

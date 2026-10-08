@@ -7,7 +7,7 @@
 # Configuration cascade (highest to lowest priority):
 #   1. CLI args (--config, --log-level, etc.)
 #   2. Environment variables (DFE_TRANSFORM_*)
-#   3. .env file
+#   3. .env file in the working directory (never a parent's)
 #   4. Config file (this file)
 #   5. Hard-coded defaults
 
@@ -65,6 +65,8 @@ dfe_source: "my_source"
 #     secret_dir: "/var/run/secrets/dfe-kafka"
 #   tls:
 #     enabled: true
+#     # DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
+#     # turns this on for source and sink. No value turns it off.
 #   # librdkafka overrides — production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
@@ -182,8 +184,9 @@ logging:
 # runtime reads its own `enabled` and `memory_gate_threshold` keys from this
 # block for the pressure gauge the subprocess circuit gates.
 #
-# What actually scales this app is the chart's KEDA triggers -- consumer-group
-# lag and CPU -- gated by the Vector subprocess circuit, which pins pressure to
-# 0 while the subprocess is down (more pods cannot help a dead subprocess).
+# What actually scales this app is the chart's KEDA ScaledObject -- CPU, plus
+# any trigger a deployment adds -- gated by the Vector subprocess circuit, which
+# pins pressure to 0 while the subprocess is down (more pods cannot help a dead
+# subprocess).
 # scaling:
 #   pressure_threshold: 0.8

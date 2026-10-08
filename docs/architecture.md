@@ -143,14 +143,7 @@ API, which the supervisor does not do.
 
 ## Build, chart and licence invariants
 
-**The Vector version lives in three places and they must agree.** The constant
-`VECTOR_VERSION` in `src/deployment.rs` is the source of truth. It is substituted
-into the Dockerfile's `ARG VECTOR_VERSION`, and `chart/values.yaml` carries
-`config.vector.version` separately. `version_check: strict` refuses to start a
-pod when the config's version and the binary's disagree, so a drifted pair is an
-outage rather than a warning. A test in `tests/integration/deployment.rs`
-compares the committed chart value against the constant, because that pairing
-once sat nine minor versions apart and only `version_check: warn` kept pods up.
+**The Vector version has one source.** The constant `VECTOR_VERSION` in `src/deployment.rs` is substituted into the Dockerfile's `ARG VECTOR_VERSION`, and both `VectorConfig::default()` and the contract's `default_config` read it for `vector.version`. `version_check: strict` refuses to start a pod when the config's version and the binary's disagree, so a deployment that sets `vector.version` itself has to move it with the image.
 
 **`password` is a `String` on purpose, not a `SensitiveString`.** The config
 goes through a figment serialize-merge-deserialize round trip in
@@ -158,10 +151,12 @@ goes through a figment serialize-merge-deserialize round trip in
 which destroys the value in transit. The protection is elsewhere: the env var is
 masked in logs, `Debug` redacts the field, and no credential is written into the
 Vector config. The generated components name it `SECRET[<backend>.<key>]` and
-Vector's `directory` secret backend reads it from files: the mounted secret at
+Vector's `directory` secret backend reads it from files: a mounted secret at
 `sasl.secret_dir`, or owner-only files the assembler writes under
-`<config_dir>/.secrets` from a credential given as text. Changing the type to
-look safer breaks authentication.
+`<config_dir>/.secrets` from a credential given as text. The released chart
+takes the second path: its Kafka Secret arrives in `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`,
+and `<config_dir>` sits on the `run` writable path. Changing the type to look
+safer breaks authentication.
 
 **Vector expands no `${VAR}`, and `vector validate` resolves no `SECRET[...]`.** Since 0.57 interpolation needs `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, and `validate()` refuses a `${...}` in a SASL credential. Validate would hand the broker the literal `SECRET[...]` reference, so the supervisor runs it with `--no-environment`, and a missing secret file fails only when Vector starts -- which is why the assembler checks `secret_dir` itself.
 
@@ -171,13 +166,9 @@ Both are discharged inside the image from the release archive's own `LICENSE`,
 `NOTICE` and `licenses` tree, so the attribution always matches the exact binary
 shipped. Do not replace that with a separate download.
 
-**The committed chart is not pure generator output.** `chart/` carries KEDA
-hand-edits the generator does not produce, notably a ScaledObject addressed at
-`config.source.*` where the generator emits `config.kafka.*`. A test asserts the
-committed chart matches the generator except for four files that are exempted
-and asserted to keep diverging, so the exemption cannot go stale unnoticed. A
-correction landing in scalo's generator does not reach the ScaledObject by
-itself and is carried across by hand.
+**No chart is committed.** At release, hyperi-ci emits the contract with `generate-artefacts` and assembles a thin chart from it on the scalo-service library chart at `release.helm.library`. The contract is schema version 4: a 120 s startup budget, `kubernetes.io/h2c` on the Push port, the Kafka Secret mounted into the per-endpoint SASL names, the writable paths `data` at `/var/lib/vector` and `run` at `/var/run/vector` under a read-only root, requests 100m/128Mi, limits 500m/512Mi and a 90 s grace period.
+
+**The ScaledObject scales on CPU alone.** `contract()` sets `KafkaLagTrigger::disabled()`: consumer-group lag rises when a downstream stage breaks, and the library's lag trigger reads `config.kafka.*`, a block this app does not have, so the library refused to render it. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
 ## Where the transports differ
 

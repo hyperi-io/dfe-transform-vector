@@ -11,7 +11,7 @@
 //! Configuration cascade (highest to lowest priority):
 //!   1. CLI args (--config, --log-level, etc.)
 //!   2. Environment variables (`DFE_TRANSFORM_*`)
-//!   3. `.env` file (via dotenvy)
+//!   3. `./.env` in the working directory, never a parent's
 //!   4. Config file specified by `--config`
 //!   5. Hard-coded defaults
 
