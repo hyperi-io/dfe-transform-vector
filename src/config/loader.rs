@@ -142,8 +142,8 @@ impl Default for DecodingConfig {
 ///
 /// **Read by nothing in this process:**
 /// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
-///   chart's KEDA triggers (consumer-group lag and CPU), gated by the
-///   subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
+///   chart's KEDA ScaledObject (CPU, plus any trigger a deployment adds),
+///   gated by the subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].
 ///   scalo's runtime reads its own `scaling.enabled` and
 ///   `scaling.memory_gate_threshold` from the cascade, not this key.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -663,12 +663,14 @@ use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
 /// scalo's runtime owns (`version_check`, `metrics` and the rest) resolve from
 /// the cascade alone. A reload re-enters here, and the cascade is set once per
 /// process.
+///
+/// It also reads `./.env` into the process environment before the env layers
+/// in [`Config::load`] run, and no parent directory's `.env`.
 fn init_cascade(path: Option<&str>) -> Result<()> {
     let opts = scalo::config::ConfigOptions {
         env_prefix: ENV_PREFIX.to_string(),
         config_paths: path.map(std::path::PathBuf::from).into_iter().collect(),
-        // `Config::load` has already read `.env` into the process environment.
-        load_dotenv: false,
+        load_dotenv: true,
         ..Default::default()
     };
     match scalo::config::setup(opts) {
@@ -705,6 +707,16 @@ impl ApplyFlatEnv for Config {
         // Pipeline
         if let Some(v) = flat_env::flat_env_string(prefix, "PIPELINE_NAME") {
             self.pipeline.name = v;
+        }
+
+        // A TLS listener turns TLS on for both endpoints. Any other protocol
+        // leaves the setting alone: writing false would switch off TLS the
+        // config file turned on.
+        if flat_env::flat_env_string(prefix, "KAFKA_SECURITY_PROTOCOL")
+            .is_some_and(|protocol| protocol.to_ascii_uppercase().contains("SSL"))
+        {
+            self.source.tls.enabled = true;
+            self.sink.tls.enabled = true;
         }
 
         // Source
@@ -836,13 +848,10 @@ impl Config {
     ///   1. CLI args (handled by caller)
     ///   2. Flat env overrides (`DFE_TRANSFORM_SOURCE_BROKERS`, etc.)
     ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_SOURCE__BROKERS`)
-    ///   4. `.env` file (via dotenvy)
+    ///   4. `.env` in the working directory, read by scalo's cascade, never a parent's
     ///   5. Config YAML file
     ///   6. Hard-coded defaults
     pub fn load(config_path: Option<&str>) -> Result<Self> {
-        // Load .env file if present (before any env var reading)
-        let _ = dotenvy::dotenv();
-
         // Start with defaults
         let mut config = Config::default();
         let mut loaded_from = None;

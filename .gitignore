@@ -29,6 +29,9 @@ coverage.lcov
 .cargo/*
 !.cargo/config.toml
 
+# written by `dfe-transform-vector emit-chart chart`; the release assembles the chart from the contract
+/chart/
+
 # Local working files (not committed)
 docs/superpowers/
 .claude/

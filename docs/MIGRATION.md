@@ -83,8 +83,6 @@ config:
     compression: zstd
 
 keda:
-  kafka:
-    lagThreshold: "500"
   maxReplicaCount: 20
 ```
 
@@ -93,24 +91,25 @@ Key differences:
 - **No inline VRL** — transforms are separate YAML files the wrapper loads from `config.transforms.dir` (the image's `/etc/dfe-transform-vector/transforms`) or lists in `config.transforms.files`
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
 - **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
-- **KEDA** configured declaratively, inherits defaults from common.yaml
 - **Kafka brokers** come from `DFE_TRANSFORM_SOURCE_BROKERS` and
   `DFE_TRANSFORM_SINK_BROKERS`. A `${VAR}` in the config is not expanded:
   neither the wrapper nor Vector 0.57+ interpolates environment variables
-- **SASL credentials** are files in the mounted secret at `sasl.secret_dir`,
-  read by Vector's directory secret backend
+- **SASL credentials** come from the Kafka Secret through
+  `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}`, and the wrapper hands
+  them to Vector's directory secret backend as owner-only files
+- **KEDA** scales on CPU, with no Kafka lag trigger and no
+  TriggerAuthentication
 
 ### What Stays the Same
 
 - **Secrets**: the chart creates none. The Kafka SASL secret comes from wherever your deployment already supplies it
-- **KEDA TriggerAuthentication**: keeps pointing at the same Kafka credential secret
 - **Node placement**: set the chart's `nodeSelector` and `tolerations` to match your existing pool
 
 ### What Changes
 
 | Element | Before | After |
 |---------|--------|-------|
-| Chart source | `helm.vector.dev` v0.42.1 | `dfe-transform-vector.git` `/chart` |
+| Chart source | `helm.vector.dev` v0.42.1 | The thin chart each `dfe-transform-vector` release publishes, on scalo-service |
 | Image | `timberio/vector:0.48.0-debian` | `ghcr.io/hyperi-io/dfe-transform-vector` |
 | Workload type | StatefulSet | Deployment |
 | Health endpoint | `/health` on :8686 | `/livez`, `/readyz` on :9090, beside `/metrics` |

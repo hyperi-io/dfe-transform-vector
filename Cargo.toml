@@ -64,7 +64,7 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # image ships no librdkafka, so nothing here may build an rdkafka client.
 #
 # The floor's contract carries no vendor defaults, so the app names its own.
-scalo = { version = "2.14.1", features = [
+scalo = { version = "2.14.3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -85,7 +85,6 @@ scalo = { version = "2.14.1", features = [
 # Configuration
 figment = { version = ">=0.10.19, <0.11", features = ["env"] }
 clap = { version = ">=4.6.7, <5", features = ["derive", "env"] }
-dotenvy = ">=0.15.7, <0.16"
 
 # Record payloads across the direct-transport bridge, which moves bytes rather
 # than copying them between the two gRPC legs.
@@ -141,9 +140,11 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = "2.14.1", features = [
+scalo = { version = "2.14.3", features = [
     "transport-kafka",
 ] }
+# The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
+dotenvy = ">=0.15.7, <0.16"
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.
 tonic = { version = ">=0.14.6, <0.15", features = ["gzip"] }
 # Reads back what the app counted; the Prometheus exporter already builds it.

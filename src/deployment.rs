@@ -13,8 +13,10 @@
 //! health paths, ports, secrets, KEDA scaling, and default config.
 
 use scalo::deployment::{
-    DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
-    PortContract, SecretEnvContract, SecretGroupContract, base_image_from_cascade,
+    CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
+    KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
+    SecretEnvContract, SecretGroupContract, SecurityContract, WritablePath,
+    base_image_from_cascade,
 };
 
 /// Build the deployment contract for dfe-transform-vector.
@@ -28,12 +30,11 @@ pub fn contract() -> DeploymentContract {
     DeploymentContract {
         app_name: "dfe-transform-vector".into(),
         binary_name: "dfe-transform-vector".into(),
-        description: "Vector.dev subprocess wrapper for Kafka-to-Kafka transform pipelines".into(),
+        description: "Vector subprocess wrapper for Kafka-to-Kafka transform pipelines".into(),
         metrics_port: 9090,
         health: HealthContract {
-            liveness_path: "/livez".into(),
-            readiness_path: "/readyz".into(),
-            metrics_path: "/metrics".into(),
+            startup_budget_seconds: 120,
+            ..HealthContract::default()
         },
         env_prefix: "DFE_TRANSFORM".into(),
         metric_prefix: "transform_vector".into(),
@@ -47,31 +48,15 @@ pub fn contract() -> DeploymentContract {
         extra_ports: vec![
             PortContract::tcp("push", 6000)
                 .when_equals("config.source.transport", "direct")
-                .bound_from("source.listen"),
+                .bound_from("source.listen")
+                .app_protocol("kubernetes.io/h2c"),
         ],
         unbound_listen_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vector/config.yaml".into(),
         ],
-        // Drives the chart's kafka Secret and its `kafka.*` values. The committed
-        // Deployment mounts that Secret at KAFKA_SECRET_DIR rather than
-        // exporting these env vars, which nothing reads.
-        secrets: vec![SecretGroupContract {
-            group_name: "kafka".into(),
-            env_vars: vec![
-                SecretEnvContract {
-                    env_var: "KAFKA_SASL_USERNAME".into(),
-                    key_name: "username".into(),
-                    secret_key: "kafka-username".into(),
-                },
-                SecretEnvContract {
-                    env_var: "KAFKA_SASL_PASSWORD".into(),
-                    key_name: "password".into(),
-                    secret_key: "kafka-password".into(),
-                },
-            ],
-        }],
+        secrets: secrets(),
         default_config: Some(serde_json::json!({
             "pipeline": {
                 "name": "default"
@@ -83,14 +68,8 @@ pub fn contract() -> DeploymentContract {
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vector-default",
                 "decoding": { "codec": "json" },
-                // The chart mounts the kafka secret here, and Vector reads the
-                // username and password files itself, so no credential sits in
-                // the ConfigMap or in the assembled Vector config.
-                "sasl": {
-                    "enabled": true,
-                    "mechanism": "scram_sha_512",
-                    "secret_dir": KAFKA_SECRET_DIR
-                },
+                // The username and password arrive through the env vars `secrets()` declares, never the ConfigMap.
+                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false },
                 "acknowledgements": { "enabled": true }
             },
@@ -102,11 +81,7 @@ pub fn contract() -> DeploymentContract {
                 "key_field": ".org_id",
                 "encoding": "json",
                 "compression": "zstd",
-                "sasl": {
-                    "enabled": true,
-                    "mechanism": "scram_sha_512",
-                    "secret_dir": KAFKA_SECRET_DIR
-                },
+                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false }
             },
             // The two loopback legs between the supervisor and Vector, used on
@@ -148,24 +123,28 @@ pub fn contract() -> DeploymentContract {
         // values into a `KedaConfig` and convert; the new `scaling_pressure_*`
         // trigger fields stay at their defaults (OFF -- the Prometheus
         // serverAddress is cluster-specific and must be set before enabling).
-        keda: Some(KedaContract::from_config(&KedaConfig {
-            min_replicas: 1,
-            max_replicas: 10,
-            polling_interval: 15,
-            cooldown_period: 300,
-            kafka_lag_threshold: 1000,
-            activation_lag_threshold: 0,
-            cpu_enabled: true,
-            cpu_threshold: 80,
-            ..Default::default()
-        })),
+        keda: Some(
+            KedaContract::from_config(&KedaConfig {
+                min_replicas: 1,
+                max_replicas: 10,
+                polling_interval: 15,
+                cooldown_period: 300,
+                kafka_lag_threshold: 1000,
+                activation_lag_threshold: 0,
+                cpu_enabled: true,
+                cpu_threshold: 80,
+                ..Default::default()
+            })
+            // Raw consumer-group lag rises when a downstream stage breaks, so it never scales this app.
+            .with_kafka_trigger(KafkaLagTrigger::disabled()),
+        ),
         // Org-wide base image via the scalo cascade (deployment.base_image),
         // defaulting to debian:trixie-slim. NOT pinned per-app -- the ubuntu
         // pin was a stale pre-trixie-cutover leftover.
         base_image: base_image_from_cascade(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
-        schema_version: 3,
+        schema_version: CONTRACT_SCHEMA_VERSION,
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
@@ -182,7 +161,62 @@ pub fn contract() -> DeploymentContract {
         // managed Vector transform), not per-transform knobs.
         config_schema: Some(scalo::deployment::config_schema_json::<crate::config::Config>()),
         capabilities: capabilities(),
+        // Vector's data directory, and the assembled config with its credential files, under a read-only root.
+        writable_paths: vec![
+            WritablePath::new("data", "/var/lib/vector"),
+            WritablePath::new("run", "/var/run/vector"),
+        ],
+        termination_grace_seconds: 90,
+        resources: ResourcesContract {
+            requests: ResourceList {
+                cpu: "100m".into(),
+                memory: "128Mi".into(),
+            },
+            limits: ResourceList {
+                cpu: "500m".into(),
+                memory: "512Mi".into(),
+            },
+        },
+        security: SecurityContract::default(),
+        singleton: false,
     }
+}
+
+/// The Kafka Secret the chart mounts into each endpoint's SASL env vars.
+///
+/// `Config::apply_flat_env` reads these per-endpoint names. Each `key_name` is
+/// distinct because the chart renders it as a values key.
+fn secrets() -> Vec<SecretGroupContract> {
+    let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
+        env_var: env_var.into(),
+        key_name: key_name.into(),
+        secret_key: secret_key.into(),
+    };
+    vec![SecretGroupContract::new(
+        "kafka",
+        vec![
+            env(
+                "DFE_TRANSFORM_SOURCE_SASL_USERNAME",
+                "source-username",
+                "username",
+            ),
+            env(
+                "DFE_TRANSFORM_SOURCE_SASL_PASSWORD",
+                "source-password",
+                "password",
+            ),
+            env(
+                "DFE_TRANSFORM_SINK_SASL_USERNAME",
+                "sink-username",
+                "username",
+            ),
+            env(
+                "DFE_TRANSFORM_SINK_SASL_PASSWORD",
+                "sink-password",
+                "password",
+            ),
+        ],
+    )]
 }
 
 /// Capability catalog for dfe-transform-vector: the Vector-subprocess wrapper.
@@ -211,9 +245,6 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
             ),
     ]
 }
-
-/// Where the chart mounts the kafka secret, one file per credential.
-pub const KAFKA_SECRET_DIR: &str = "/var/run/secrets/dfe-kafka";
 
 /// Vector.dev version bundled into the published image.
 ///
@@ -326,7 +357,7 @@ mod tests {
     #[test]
     fn test_contract_carries_reflectable_config() {
         let c = contract();
-        assert_eq!(c.schema_version, 3);
+        assert_eq!(c.schema_version, CONTRACT_SCHEMA_VERSION);
         assert!(c.config_schema.is_some());
         assert!(c.capabilities.iter().any(|cap| cap.name == "vector"));
     }
@@ -363,6 +394,57 @@ mod tests {
             .find(|p| p.name == "push")
             .expect("the direct transport's Push listener must be a declared port");
         assert_eq!(push.port, 6000);
+        // The Push listener is cleartext gRPC, so a proxy in front of it must speak h2c.
+        assert_eq!(push.app_protocol, "kubernetes.io/h2c");
+    }
+
+    /// KEDA stays on and scales on CPU alone.
+    #[test]
+    fn test_keda_scales_on_cpu_without_a_lag_trigger() {
+        let c = contract();
+        let keda = c.keda.as_ref().expect("keda present");
+        assert!(keda.enabled);
+        assert!(keda.cpu_enabled);
+        assert!(
+            !keda.kafka_trigger.enabled,
+            "raw consumer-group lag scales out when a downstream stage is broken"
+        );
+    }
+
+    /// `generate-artefacts` and the generators write nothing for a contract
+    /// that fails these checks, and the library refuses to render a values
+    /// path the contract leaves unset -- as it did the lag trigger's
+    /// `config.kafka.*`, which this app has no block for.
+    #[test]
+    fn test_contract_passes_the_generator_checks() {
+        let c = contract();
+        c.validate()
+            .expect("every generator must accept the contract");
+        scalo::deployment::assert_listeners_declared(&c);
+        let unresolved = c.unresolved_values_paths();
+        assert!(
+            unresolved.is_empty(),
+            "the chart reads values default_config never sets: {unresolved:?}"
+        );
+    }
+
+    /// The root filesystem is read-only, so every directory the app writes by
+    /// default sits under an ungated writable path or the pod cannot start.
+    #[test]
+    fn test_every_default_write_directory_is_a_writable_path() {
+        let c = contract();
+        assert!(c.security.read_only_root_filesystem);
+        let vector = crate::config::Config::default().vector;
+        for dir in [&vector.data_dir, &vector.config_dir] {
+            assert!(
+                c.writable_paths
+                    .iter()
+                    .any(|writable| writable.when.is_none()
+                        && std::path::Path::new(dir).starts_with(&writable.path)),
+                "no writable path covers {dir}: {:?}",
+                c.writable_paths
+            );
+        }
     }
 
     /// The committed reflectable artefacts under docs/ must not drift from a

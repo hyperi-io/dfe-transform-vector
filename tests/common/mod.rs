@@ -21,8 +21,8 @@
 //!
 //! The fixture owns the container (if any) and shuts it down on drop.
 //!
-//! Credentials come from the project `.env` (never hard-coded). `.env` is
-//! loaded via `dotenvy` at the first call.
+//! Credentials come from the project `.env` (never hard-coded), loaded from
+//! the repo root at the first call.
 
 use std::env;
 use std::net::ToSocketAddrs;
@@ -150,8 +150,9 @@ impl KafkaFixture {
     }
 }
 
+/// Load this repo's own `.env`: `dotenvy::dotenv()` would load the first `.env` in any parent.
 pub fn load_dotenv() {
-    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env"));
 }
 
 /// Build a `KafkaConfig` from environment variables (live-cluster mode).
