@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.46](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.45...v1.0.46) (2026-10-09)
+
+### Bug Fixes
+
+* emit deployment contract v4 ([#110](https://github.com/hyperi-io/dfe-transform-vector/issues/110)) ([a29e6ef](https://github.com/hyperi-io/dfe-transform-vector/commit/a29e6ef473dacba1114e09b028e4b2bfb073500b))
+
 ## [1.0.45](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.44...v1.0.45) (2026-10-06)
 
 ### Bug Fixes
