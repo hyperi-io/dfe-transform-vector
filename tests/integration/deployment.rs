@@ -243,38 +243,12 @@ fn contract_uses_standard_mount_path() {
     );
 }
 
-#[test]
-fn emit_chart_generates_without_panic() {
-    let contract = deployment::contract();
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let dir_path = dir.path().to_str().unwrap();
-
-    let result = scalo::deployment::generate_chart(&contract, dir_path, None);
-    assert!(
-        result.is_ok(),
-        "chart generation failed: {:?}",
-        result.err()
-    );
-
-    // Chart.yaml must exist
-    let chart_yaml = dir.path().join("Chart.yaml");
-    assert!(chart_yaml.exists(), "Chart.yaml not generated");
-
-    // values.yaml must exist
-    let values_yaml = dir.path().join("values.yaml");
-    assert!(values_yaml.exists(), "values.yaml not generated");
-
-    // templates/ directory must exist
-    let templates = dir.path().join("templates");
-    assert!(templates.is_dir(), "templates/ not generated");
-}
-
 /// The contract's default config, with the Kafka Secret mounted into the env
 /// vars the contract declares, must be a config the app accepts.
 ///
-/// `emit-chart` writes `default_config` into its values, so a chart generated
-/// from the contract is only as good as this, and anything `validate()` rejects
-/// is a crash-loop before Vector starts.
+/// The released chart renders `default_config` as its config, so it is only as
+/// good as this, and anything `validate()` rejects is a crash-loop before
+/// Vector starts.
 #[test]
 fn the_contract_default_config_is_one_the_app_accepts() {
     use dfe_transform_vector::config::loader::Config;

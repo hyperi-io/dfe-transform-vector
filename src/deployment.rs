@@ -15,7 +15,7 @@
 use scalo::deployment::{
     CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
     KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
-    SecretEnvContract, SecretGroupContract, SecurityContract, WritablePath,
+    SecretEnvContract, SecretGroupContract, SecurityContract, ServiceAccount, WritablePath,
     base_image_from_cascade,
 };
 
@@ -184,6 +184,7 @@ pub fn contract() -> DeploymentContract {
         },
         security: SecurityContract::default(),
         singleton: false,
+        service_account: ServiceAccount::Own,
     }
 }
 
