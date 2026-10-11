@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.47](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.46...v1.0.47) (2026-10-11)
+
+### Bug Fixes
+
+* move to scalo 2.14.6, drop emit-chart ([1e1c5e5](https://github.com/hyperi-io/dfe-transform-vector/commit/1e1c5e5724478aaf9e45fe8d4815dfd801b02cbf))
+* set the OCI title and description on the transform-vector deployment contract ([#111](https://github.com/hyperi-io/dfe-transform-vector/issues/111)) ([7f85bb2](https://github.com/hyperi-io/dfe-transform-vector/commit/7f85bb22a11837777228bc36ac59197b3b320f59))
+
 ## [1.0.46](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.45...v1.0.46) (2026-10-09)
 
 ### Bug Fixes
