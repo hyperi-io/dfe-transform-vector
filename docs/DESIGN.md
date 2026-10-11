@@ -747,7 +747,7 @@ DFE remediation guide.
 
 ### 9.1 How the Chart Is Built
 
-No chart is committed. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. The library renders the Deployment, Service, ConfigMap, ServiceAccount and KEDA ScaledObject, and its README documents the values. `emit-chart <dir>` still writes scalo's full chart for local use.
+No chart is committed. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. The library renders the Deployment, Service, ConfigMap, ServiceAccount and KEDA ScaledObject, and its README documents the values.
 
 ### 9.2 What the Contract Fixes
 

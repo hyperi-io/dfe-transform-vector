@@ -375,25 +375,3 @@ fn cli_emit_compose_produces_output() {
         "emit-compose should produce compose fragment"
     );
 }
-
-#[test]
-fn cli_emit_chart_produces_chart_dir() {
-    let dir = tempfile::tempdir().unwrap();
-    let chart_dir = dir.path().join("chart");
-
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
-        .args(["emit-chart", chart_dir.to_str().unwrap()])
-        .output()
-        .expect("failed to run binary");
-
-    assert!(
-        output.status.success(),
-        "emit-chart failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(chart_dir.join("Chart.yaml").exists(), "Chart.yaml missing");
-    assert!(
-        chart_dir.join("values.yaml").exists(),
-        "values.yaml missing"
-    );
-}

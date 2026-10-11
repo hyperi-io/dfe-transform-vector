@@ -93,9 +93,6 @@ cargo build --release
 # Generate deployment artefacts
 ./target/release/dfe-transform-vector emit-dockerfile
 ./target/release/dfe-transform-vector emit-compose
-
-# scalo's full chart, for local use. emit-chart overwrites the directory it is given.
-./target/release/dfe-transform-vector emit-chart chart
 ```
 
 ### Helm chart
@@ -352,10 +349,10 @@ Inbound -- what this repo depends on:
 
 Outbound -- what depends on this repo:
 
-- **dfe-infra**, `image-pin`, lockstep. `dfe-infra/helm/charts/dfe-transform-vector/Chart.yaml`
-  pins this repo's container image as a tag plus the digest that makes the tag
-  immutable. Bump the tag, re-resolve the digest, and `check_versions_drift.py`
-  confirms the chart's `appVersion` and the digest mirror agree with the pin.
+- **dfe-infra**, `image-pin`, lockstep. `dfe-infra/versions.yaml` pins this
+  repo's container image as a tag plus the digest that makes the tag
+  immutable, and the thin chart released here, which Argo deploys. Bump the
+  tag and re-resolve the digest.
 
 Two more relationships that are real but are NOT declared edges in the suite
 graph, so no gate enforces them:
