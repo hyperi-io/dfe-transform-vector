@@ -11,7 +11,7 @@
 # Source contract: dfe-transform-vector::deployment::contract()
 # Regenerate by calling scalo::deployment::generate_dockerfile() on that contract.
 
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 LABEL io.hyperi.profile="production"
 
@@ -37,17 +37,17 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create
 # binary shipped.
 #
 # This fragment is spliced into the generated Dockerfile by
-# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.58.0,
-# a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09 and 06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5.
+# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.59.0,
+# fb15878d1cd68445e0658792a8fa7ccf02ae8a353c6cc5d6fe867b171993e19f and 644f4db7d158b8ceaed05427599d0706ca59428b263fed985232d379ff89ca46.
 # It lives in its own file rather than inside a Rust string so that hadolint
 # and shellcheck can actually read it -- shell embedded in `format!` is
 # validated by nothing until the image build runs in CI.
-ARG VECTOR_VERSION=0.58.0
+ARG VECTOR_VERSION=0.59.0
 # Pinned from Vector's own published SHA256SUMS for this version, cross-checked
 # against the GitHub release asset of the same name -- not fetched at build
 # time, which would only prove the download matches itself.
-ARG VECTOR_SHA256_AMD64=a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
-ARG VECTOR_SHA256_ARM64=06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5
+ARG VECTOR_SHA256_AMD64=fb15878d1cd68445e0658792a8fa7ccf02ae8a353c6cc5d6fe867b171993e19f
+ARG VECTOR_SHA256_ARM64=644f4db7d158b8ceaed05427599d0706ca59428b263fed985232d379ff89ca46
 ARG TARGETARCH
 # hadolint ignore=DL4006
 RUN set -eu \
@@ -68,10 +68,10 @@ RUN set -eu \
         "${VDIR}/licenses" /usr/share/doc/vector/ \
     && printf '%s\n' \
         'Vector is redistributed here unmodified, under the Mozilla Public' \
-        'License 2.0. Version: 0.58.0' \
+        'License 2.0. Version: 0.59.0' \
         '' \
         'Source code for this version (MPL-2.0 section 3.2(a)):' \
-        '  https://github.com/vectordotdev/vector/releases/tag/v0.58.0' \
+        '  https://github.com/vectordotdev/vector/releases/tag/v0.59.0' \
         '' \
         'Upstream LICENSE, NOTICE and third-party attributions are in this' \
         'directory, taken from the release archive itself.' \
@@ -83,7 +83,7 @@ RUN set -eu \
 RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \
     && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector
 
-LABEL io.hyperi.vector.version="0.58.0"
+LABEL io.hyperi.vector.version="0.59.0"
 
 # Numeric, so Kubernetes runAsNonRoot can verify it without reading /etc/passwd.
 USER 1000
