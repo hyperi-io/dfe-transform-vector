@@ -260,19 +260,18 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// `default_config` both read this constant, so a deployment's expected
 /// version cannot drift from the shipped binary.
 // renovate: datasource=github-releases depName=vectordotdev/vector
-pub const VECTOR_VERSION: &str = "0.58.0";
+pub const VECTOR_VERSION: &str = "0.59.0";
 
-/// SHA256 of `vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz`, read from
-/// Vector's published `vector-0.58.0-SHA256SUMS` and cross-checked against
-/// the identically-named asset on the GitHub release -- the two agree, so the
-/// digest does not rest on a single host.
+/// SHA256 of `vector-0.59.0-x86_64-unknown-linux-gnu.tar.gz`, read from
+/// Vector's published `vector-0.59.0-SHA256SUMS` and cross-checked against
+/// the digest GitHub records for the identically-named release asset.
 const VECTOR_SHA256_AMD64: &str =
-    "a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09";
+    "fb15878d1cd68445e0658792a8fa7ccf02ae8a353c6cc5d6fe867b171993e19f";
 
-/// SHA256 of `vector-0.58.0-aarch64-unknown-linux-gnu.tar.gz`, sourced and
+/// SHA256 of `vector-0.59.0-aarch64-unknown-linux-gnu.tar.gz`, sourced and
 /// cross-checked the same way as [`VECTOR_SHA256_AMD64`].
 const VECTOR_SHA256_ARM64: &str =
-    "06d9f9768feb0cb5c7cdfc12e0b737b22f1220967f5455f391a395361b5799e5";
+    "644f4db7d158b8ceaed05427599d0706ca59428b263fed985232d379ff89ca46";
 
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///
