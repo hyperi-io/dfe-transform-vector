@@ -30,59 +30,35 @@ coverage.lcov
 !.cargo/config.toml
 
 # Local working files (not committed)
-docs/superpowers/
-.claude/
-hyperi-ai/
-.mcp.json
-CLAUDE.md
-STATE.md
-TODO.md
-.ai-version
-
-# OS junk (never useful in repo)
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-
-# Editor / IDE local state
-.idea/
-.vscode/
-
-# Local environment files (never commit -- contain secrets)
-.env
-.env.*
-!.env.example
-!.env.example.*
-
-# them alone if already present.
-docs/superpowers/
-.mcp.json
-.ai-version
-
-# committed -- mirrored in .git/info/exclude.
-CLAUDE.md
-TODO.md
-AGENTS.md
-GEMINI.md
 .claude/
 .codex/
 .cursor/
 .gemini/
+.superpowers/
+.playwright-mcp/
+.mcp.json
+.hyperi-ai
+.kube/
+.secrets/
+docs/superpowers/
+hyperi-ai/
+CLAUDE.md
+STATE.md
+TODO.md
+AGENTS.md
+GEMINI.md
 .cursorrules
+.ai-version
+
+# Local environment files (never commit -- contain secrets)
+.env.*
+!.env*.example
+!.env.example.*
 
 # Git worktrees (local dev convenience)
 .worktrees/
 
 # Rust build artefacts
-target/
-**/*.rs.bk
-*.pdb
-*.profraw
-*.profdata
-coverage-html/
-coverage.lcov
 tarpaulin-report.json
 cobertura.xml
 
