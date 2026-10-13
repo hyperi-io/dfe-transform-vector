@@ -292,6 +292,10 @@ cannot fix that. A deployment adds a trigger with the library chart's
 `keda.extraTriggers` value. `spawn_circuit_gate_task` pins scalo's scaling
 pressure to 0 while the Vector subprocess is down.
 
+scalo's runtime serves the pressure at `/scaling/pressure` and writes it into the
+`scaling_pressure` gauge. With no pressure components and no memory reading fed
+to it, the value is 0 while Vector runs too.
+
 ---
 
 ## 5. Config Engine
@@ -396,7 +400,7 @@ transforms:
   dfe_size_cap:                         # drops a record over message.max.bytes
     type: filter
     inputs: ["<last_transform_label>"]  # Auto-wired
-    condition: length(encode_json(.)) <= 999872
+    condition: length(encode_json(.)) <= 16777088
 sinks:
   dfe_sink:
     type: kafka
@@ -417,7 +421,10 @@ sinks:
       enabled: true
     librdkafka_options:
       enable.idempotence: "true"
+      message.max.bytes: "16777216"     # scalo's record ceiling unless a layer sets one
 ```
+
+The size cap and `message.max.bytes` read one value: scalo's pipeline-wide record ceiling of 16 MiB, the one every other stage's producer and every topic scalo creates carry, unless the central profile or `sink.librdkafka_options` sets `message.max.bytes`. The cap keeps 128 bytes under it for the key, headers and framing. librdkafka's own default of 1,000,000 bytes would refuse a record the rest of the chain carries.
 
 **Generated observability (`99_observability.yaml`):**
 

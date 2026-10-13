@@ -65,7 +65,8 @@ A transform-vector pod producing to Kafka, with no central config file:
 
 Result: `linger.ms=20`, `compression.type=lz4`,
 `queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
-`statistics.interval.ms=1000`
+`statistics.interval.ms=1000`, and `message.max.bytes=16777216` because no layer
+set it
 
 Add a central `producer.production` naming only `linger.ms=50` and the result
 becomes `linger.ms=50`, `compression.type=lz4`,
@@ -150,7 +151,7 @@ High-throughput producer. Default for all DFE services writing to Kafka.
 | `batch.size` | `1000000` (1 MiB) | Adequate for most workloads |
 | `batch.num.messages` | `10000` | Default is reasonable |
 | `queue.buffering.max.kbytes` | `1048576` (1 GiB) | Default is fine for most services. transform-vector overrides to 256 MiB due to lower pod memory. |
-| `message.max.bytes` | `1000000` (1 MiB) | DFE messages are typically <100 KB. Services needing larger messages override individually. |
+| `message.max.bytes` | `1000000` | Left out of the profile. dfe-transform-vector writes scalo's 16 MiB pipeline ceiling where no layer sets it -- see Service-Specific Overrides. |
 | `retries` | `2147483647` (max) | Default retry-forever with idempotence is correct. |
 | `delivery.timeout.ms` | `300000` (5 min) | Generous timeout for transient broker issues |
 
@@ -202,6 +203,7 @@ baseline).
 |---------|------|-------|--------|
 | `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
 | `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline stalled reported lag between those points rather than losing offsets. Lag is what KEDA scales on here. |
+| `message.max.bytes` | producer | `16777216` (16 MiB), scalo's `MESSAGE_MAX_BYTES` | The record ceiling every other stage's producer and every topic scalo creates carry; librdkafka's own `1000000` refuses a larger record. Written only where neither layer 1 nor `sink.librdkafka_options` sets the key, so either of those still decides it. The size cap in front of the sink reads the same value. |
 
 ### dfe-loader
 

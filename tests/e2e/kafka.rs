@@ -362,6 +362,247 @@ async fn e2e_a_scram_broker_passes_startup_validation_and_delivers() {
     }
 }
 
+/// The record a default sink must carry: twice librdkafka's own
+/// `message.max.bytes` default of 1,000,000 bytes.
+const TWO_MIB: usize = 2 * 1024 * 1024;
+
+/// The record the transform triples past the pipeline's 16 MiB ceiling. Under
+/// that ceiling itself, so the topic and the test producer both take it.
+const SIX_MIB: usize = 6 * 1024 * 1024;
+
+/// Write a remap transform that triples a record marked `grow`, the way an
+/// enrichment pass that copies a large field grows it.
+fn write_growth_transform(dir: &std::path::Path) {
+    fs::create_dir_all(dir).expect("create transforms dir");
+    fs::write(
+        dir.join("01_grow.yaml"),
+        r#"transforms:
+  grow:
+    type: remap
+    inputs:
+      - dfe_source
+    source: |
+      .enriched = true
+      if .grow == true {
+        .copy_a = .blob
+        .copy_b = .blob
+      }
+"#,
+    )
+    .expect("write growth transform");
+}
+
+/// A sink no deployment has tuned carries a 2 MiB record to the next topic,
+/// and a record the transform grows past the pipeline's ceiling is held back
+/// and counted once as too large.
+///
+/// Owns its broker, so it runs by default rather than opt-in.
+#[tokio::test]
+async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_ceiling() {
+    let Some(vector_bin) = vector_binary_path() else {
+        crate::common::require_service_in_ci(
+            "Vector binary",
+            "scripts/fetch-vector.sh found nothing",
+        );
+        eprintln!("Skipping: Vector binary not available (run scripts/fetch-vector.sh)");
+        return;
+    };
+    let Some(fixture) = KafkaFixture::hermetic("kafka-record-ceiling").await else {
+        crate::common::require_service_in_ci("Docker", "the Kafka container did not start");
+        eprintln!("Skipping: no Kafka container (Docker unavailable)");
+        return;
+    };
+    let kf_base = fixture.config.clone();
+
+    let suffix = unique_suffix();
+    let source_topic = format!("dfe_e2e_ceiling_src_{suffix}");
+    let sink_topic = format!("dfe_e2e_ceiling_sink_{suffix}");
+    let group_id = format!("dfe-e2e-ceiling-{suffix}");
+
+    // scalo creates each topic with the pipeline's record ceiling, as a DFE
+    // deployment's topics carry it.
+    let mut admin_cfg = kf_base.clone();
+    admin_cfg.group = group_id.clone();
+    let admin = KafkaAdmin::new(&admin_cfg).expect("admin");
+    admin
+        .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+        .await
+        .expect("create topics");
+
+    let work = TempDir::new().expect("work dir");
+    let data_dir = work.path().join("data");
+    fs::create_dir_all(&data_dir).expect("data dir");
+    let transforms_dir = work.path().join("transforms");
+    write_growth_transform(&transforms_dir);
+    let config_dir = work.path().join("cfg");
+    let exporter_addr = free_loopback_addr();
+    let mut dfe_config = config_from_kafka_test_config(
+        &kf_base,
+        &source_topic,
+        &sink_topic,
+        &group_id,
+        &transforms_dir.to_string_lossy(),
+        &data_dir.to_string_lossy(),
+        &exporter_addr,
+    );
+    dfe_config.vector.binary = vector_bin.to_string_lossy().into_owned();
+    assert!(
+        dfe_config.sink.librdkafka_options.is_empty(),
+        "the case is a sink no deployment has tuned"
+    );
+    dfe_config.validate().expect("config validates");
+    assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
+
+    let mut vector_child = Command::new(vector_bin)
+        .arg("--config-dir")
+        .arg(&config_dir)
+        .env("VECTOR_LOG", "warn")
+        .env("VECTOR_DATA_DIR", &data_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn vector");
+
+    let outcome = run_ceiling_assertions(
+        &kf_base,
+        &source_topic,
+        &sink_topic,
+        &group_id,
+        &suffix,
+        &exporter_addr,
+    )
+    .await;
+
+    let _ = vector_child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(3), vector_child.wait()).await;
+    let _ = admin
+        .delete_topics(&[source_topic.as_str(), sink_topic.as_str()])
+        .await;
+
+    if let Err(msg) = outcome {
+        panic!("record ceiling test failed: {msg}");
+    }
+}
+
+/// Send a record the transform grows past the ceiling, then a 2 MiB one; wait
+/// for the 2 MiB record downstream, then check the grown one was held back and
+/// reached scalo's too-large count exactly once.
+async fn run_ceiling_assertions(
+    kf_base: &KafkaConfig,
+    source_topic: &str,
+    sink_topic: &str,
+    group_id: &str,
+    suffix: &str,
+    exporter_addr: &str,
+) -> Result<(), String> {
+    sleep(Duration::from_secs(3)).await;
+
+    let mut producer_cfg = kf_base.clone();
+    producer_cfg.group = format!("{group_id}-producer");
+    producer_cfg.topics = vec![source_topic.to_string()];
+    let producer = KafkaTransport::new(&producer_cfg)
+        .await
+        .map_err(|e| format!("producer transport: {e}"))?;
+    let grown = format!(
+        r#"{{"id":"{suffix}-grow","grow":true,"blob":"{}"}}"#,
+        "g".repeat(SIX_MIB)
+    );
+    let two_mib = format!(
+        r#"{{"id":"{suffix}-2mib","blob":"{}"}}"#,
+        "y".repeat(TWO_MIB)
+    );
+    for payload in [grown, two_mib] {
+        let sent = producer
+            .send(source_topic, bytes::Bytes::from(payload.into_bytes()))
+            .await;
+        if !matches!(sent, scalo::transport::SendResult::Ok) {
+            let _ = producer.close().await;
+            return Err(format!("producer send failed: {sent:?}"));
+        }
+    }
+    let _ = producer.close().await;
+
+    let mut consumer_cfg = kf_base.clone();
+    consumer_cfg.group = format!("{group_id}-consumer");
+    consumer_cfg.topics = vec![sink_topic.to_string()];
+    consumer_cfg.auto_offset_reset = "earliest".into();
+    let consumer = KafkaTransport::new(&consumer_cfg)
+        .await
+        .map_err(|e| format!("consumer transport: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut delivered_len, mut grown_seen) = (None, false);
+    while delivered_len.is_none() && Instant::now() < deadline {
+        match consumer.recv(10).await {
+            Ok(batch) => {
+                for record in &batch.records {
+                    let body = String::from_utf8_lossy(&record.payload);
+                    if body.contains(&format!("{suffix}-2mib")) {
+                        delivered_len = Some(record.payload.len());
+                    }
+                    grown_seen |= body.contains(&format!("{suffix}-grow"));
+                }
+            }
+            Err(_) => sleep(Duration::from_millis(500)).await,
+        }
+    }
+    let _ = consumer.close().await;
+    let Some(delivered_len) = delivered_len else {
+        let totals =
+            match dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await {
+                Ok(body) => format!(
+                    "{:?}",
+                    dfe_transform_vector::metrics::scrape::ExpositionMerger::default().merge(&body)
+                ),
+                Err(e) => e,
+            };
+        return Err(format!(
+            "the 2 MiB record did not reach the sink topic within 60s; Vector's totals: {totals}"
+        ));
+    };
+    if delivered_len <= TWO_MIB {
+        return Err(format!(
+            "the 2 MiB record arrived cut down to {delivered_len} bytes"
+        ));
+    }
+    if grown_seen {
+        return Err("the record grown past the ceiling reached the sink topic".into());
+    }
+
+    // Vector publishes internal metrics on its own flush interval.
+    let mut merger = dfe_transform_vector::metrics::scrape::ExpositionMerger::default();
+    let mut derived = dfe_transform_vector::metrics::scrape::Derived::default();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while derived.oversize < 1.0 && Instant::now() < deadline {
+        if let Ok(body) =
+            dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await
+        {
+            derived = merger.merge(&body);
+        }
+        if derived.oversize < 1.0 {
+            sleep(Duration::from_millis(500)).await;
+        }
+    }
+    if derived.oversize != 1.0 || derived.sink_discarded != 0.0 {
+        return Err(format!(
+            "the size cap should hold back exactly the grown record and the sink \
+             refuse nothing: {derived:?}"
+        ));
+    }
+
+    let recorder = metrics_util::debugging::DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let mut drops = DeadLetterDrops::too_large();
+    metrics::with_local_recorder(&recorder, || drops.record(&derived));
+    let counted = too_large_since(&snapshotter);
+    if counted != 1 {
+        return Err(format!(
+            "the grown record must count once as too large, counted {counted}"
+        ));
+    }
+    Ok(())
+}
+
 /// The sink's `message.max.bytes` in the size-cap test: small enough that an
 /// oversize record is far under the broker's and the test producer's limits.
 const SMALL_MESSAGE_MAX_BYTES: &str = "200000";

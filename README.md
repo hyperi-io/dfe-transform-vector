@@ -103,6 +103,8 @@ To see the chart a release would ship, build the binary and run `hyperi-ci chart
 
 The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
+scalo's runtime serves the scaling pressure at `/scaling/pressure` and writes it into the `scaling_pressure` gauge. The supervisor feeds it no components and no memory reading, so it reads 0.
+
 ## Configuration
 
 See [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vector/blob/main/config.example.yaml)

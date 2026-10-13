@@ -20,4 +20,5 @@ mod lifecycle;
 mod metrics;
 mod pgo_workload;
 mod reload;
+mod scaling;
 mod vector_validate;
