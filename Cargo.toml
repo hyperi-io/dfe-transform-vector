@@ -57,8 +57,14 @@ tokio-util = { version = ">=0.7.19, <0.8", features = ["rt"] }
 # which holds a push until its records are delivered.
 #
 # `transport-kafka` carries `KafkaConfig`, the security floor `Config::validate`
-# holds the generated Kafka source and sink to. Only its config is used: the
-# image ships no librdkafka, so nothing here may build an rdkafka client.
+# holds the generated Kafka source and sink to, and `MESSAGE_MAX_BYTES`, the
+# record ceiling the generated sink takes. Only its config is used: the image
+# ships no librdkafka, so nothing here may build an rdkafka client.
+#
+# `scaling` carries the `ScalingPressure` the runtime serves at
+# `/scaling/pressure` and writes into the `scaling_pressure` gauge; the
+# supervisor drives its circuit gate directly, so it is named here as well as
+# arriving through `cli-service`.
 #
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
@@ -72,6 +78,7 @@ scalo = { version = "2.14.9", features = [
     "lifecycle",
     "logger",
     "metrics",
+    "scaling",
     "service-metrics",
     "transport-grpc",
     "transport-grpc-vector-compat",

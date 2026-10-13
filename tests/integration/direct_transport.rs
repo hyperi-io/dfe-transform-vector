@@ -1062,6 +1062,20 @@ fn the_templates_name_the_components_the_generator_emits() {
         "bus template lost the output topic"
     );
     assert!(
+        bus.contains(&format!(
+            "condition: length(encode_json(.)) <= {}",
+            dfe_transform_vector::config::generate::max_record_bytes(&SinkConfig::default())
+        )),
+        "bus template's size cap differs from the one a default sink is generated with"
+    );
+    assert!(
+        bus.contains(&format!(
+            "message.max.bytes: \"{}\"",
+            scalo::transport::kafka::MESSAGE_MAX_BYTES
+        )),
+        "bus template's record ceiling differs from scalo's"
+    );
+    assert!(
         direct.contains(&BridgeConfig::default().to_vector),
         "direct template must use the default bridge.to_vector address"
     );

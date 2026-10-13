@@ -20,10 +20,13 @@
 //!
 //! Production librdkafka defaults come from `scalo::kafka_config`
 //! (shared DFE baseline). Service-specific overrides and user-supplied
-//! `librdkafka_options` from config YAML are merged on top.
+//! `librdkafka_options` from config YAML are merged on top. The sink's
+//! `message.max.bytes`, where no layer sets it, is scalo's pipeline-wide record
+//! ceiling.
 
 use std::collections::{BTreeMap, HashMap};
 
+use scalo::transport::kafka::MESSAGE_MAX_BYTES;
 use serde_yaml_ng::Value;
 
 use super::kafka_defaults;
@@ -48,9 +51,8 @@ pub const KAFKA_COMPONENT_TYPE: &str = "kafka";
 /// librdkafka's broker hostname check, off when set to `none`.
 const HOSTNAME_VERIFICATION_KEY: &str = "ssl.endpoint.identification.algorithm";
 
-/// librdkafka's own `message.max.bytes` default, the ceiling when the sink's
-/// `librdkafka_options` sets none.
-const LIBRDKAFKA_MESSAGE_MAX_BYTES: u64 = 1_000_000;
+/// librdkafka's producer key for the largest record it puts on the wire.
+const MESSAGE_MAX_BYTES_KEY: &str = "message.max.bytes";
 
 /// Room left under `message.max.bytes` for the key, headers and record framing.
 const RECORD_FRAMING_BYTES: u64 = 128;
@@ -247,14 +249,21 @@ pub fn generate_sink_yaml(
 ///
 /// librdkafka refuses a record over `message.max.bytes`, and Vector drops a
 /// refused record. The key and headers count against the same limit, so a
-/// margin is kept below it.
+/// margin is kept below it. The ceiling is read from the options the sink is
+/// generated with, so the size cap and the producer cannot disagree.
 #[must_use]
 pub fn max_record_bytes(sink: &SinkConfig) -> u64 {
-    sink.librdkafka_options
-        .get("message.max.bytes")
+    sink_librdkafka_layers(sink)
+        .get(MESSAGE_MAX_BYTES_KEY)
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(LIBRDKAFKA_MESSAGE_MAX_BYTES)
+        .unwrap_or_else(pipeline_message_max_bytes)
         .saturating_sub(RECORD_FRAMING_BYTES)
+}
+
+/// scalo's pipeline-wide record ceiling, which every other stage's producer
+/// and every topic scalo creates carry.
+fn pipeline_message_max_bytes() -> u64 {
+    u64::from(MESSAGE_MAX_BYTES.unsigned_abs())
 }
 
 /// The filter in front of the Kafka sink that drops a record over
@@ -513,17 +522,30 @@ fn build_source_librdkafka(source: &SourceConfig) -> serde_yaml_ng::Mapping {
     m
 }
 
-fn build_sink_librdkafka(sink: &SinkConfig) -> serde_yaml_ng::Mapping {
+/// The Kafka sink's librdkafka options from every layer: the baseline profile,
+/// the service overrides, then the sink's `librdkafka_options`.
+///
+/// `message.max.bytes` takes scalo's pipeline-wide ceiling where no layer sets
+/// it: librdkafka's own default of 1,000,000 bytes refuses a record every other
+/// stage carries.
+fn sink_librdkafka_layers(sink: &SinkConfig) -> HashMap<String, String> {
     let base = kafka_defaults::producer_profile("production");
     let user_overrides: HashMap<String, String> = sink
         .librdkafka_options
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let merged = kafka_defaults::merge_layers(&base, SERVICE_PRODUCER_OVERRIDES, &user_overrides);
+    let mut merged =
+        kafka_defaults::merge_layers(&base, SERVICE_PRODUCER_OVERRIDES, &user_overrides);
+    merged
+        .entry(MESSAGE_MAX_BYTES_KEY.to_string())
+        .or_insert_with(|| pipeline_message_max_bytes().to_string());
+    merged
+}
 
+fn build_sink_librdkafka(sink: &SinkConfig) -> serde_yaml_ng::Mapping {
     let mut m = serde_yaml_ng::Mapping::new();
-    for (k, v) in &merged {
+    for (k, v) in &sink_librdkafka_layers(sink) {
         m.insert(val(k), val(v));
     }
 
@@ -991,8 +1013,31 @@ mod tests {
         assert!(text.contains("enable.idempotence: 'false'"));
     }
 
+    /// scalo's pipeline-wide record ceiling, which every other stage's producer
+    /// and every topic scalo creates already accept.
+    fn pipeline_ceiling() -> u64 {
+        u64::from(scalo::transport::kafka::MESSAGE_MAX_BYTES.unsigned_abs())
+    }
+
+    /// The `message.max.bytes` written into the generated Kafka sink.
+    fn written_message_max_bytes(yaml: &Value) -> Option<&str> {
+        yaml.get("sinks")
+            .and_then(|s| s.get(SINK_LABEL))
+            .and_then(|s| s.get("librdkafka_options"))
+            .and_then(|o| o.get("message.max.bytes"))
+            .and_then(Value::as_str)
+    }
+
+    /// The size cap's filter condition.
+    fn size_cap_condition(yaml: &Value) -> Option<&str> {
+        yaml.get("transforms")
+            .and_then(|t| t.get(SIZE_CAP_LABEL))
+            .and_then(|c| c.get("condition"))
+            .and_then(Value::as_str)
+    }
+
     /// The Kafka sink reads from the size cap, and the cap from the wired
-    /// inputs, with the ceiling taken from `message.max.bytes`.
+    /// inputs.
     #[test]
     fn the_kafka_sink_sits_behind_the_size_cap() {
         let yaml = generate_sink_yaml(
@@ -1018,29 +1063,57 @@ mod tests {
             cap.get("inputs").and_then(Value::as_sequence),
             Some(&vec![val("last")])
         );
+    }
+
+    /// A sink no deployment has tuned carries a 2 MiB record. librdkafka's own
+    /// `message.max.bytes` default is 1,000,000, so both the producer and the
+    /// size cap have to sit at the ceiling the rest of the chain uses.
+    #[test]
+    fn a_default_sink_carries_a_2_mib_record() {
+        const TWO_MIB: u64 = 2 * 1024 * 1024;
+        let sink = SinkConfig::default();
+        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+
         assert_eq!(
-            cap.get("condition").and_then(Value::as_str),
-            Some("length(encode_json(.)) <= 999872")
+            written_message_max_bytes(&yaml),
+            Some(pipeline_ceiling().to_string().as_str()),
+            "librdkafka refuses a record over its own 1,000,000-byte default"
+        );
+        let ceiling = pipeline_ceiling() - RECORD_FRAMING_BYTES;
+        assert_eq!(max_record_bytes(&sink), ceiling);
+        assert_eq!(
+            size_cap_condition(&yaml),
+            Some(format!("length(encode_json(.)) <= {ceiling}").as_str())
+        );
+        assert!(
+            max_record_bytes(&sink) > TWO_MIB,
+            "a 2 MiB record must pass the default size cap"
         );
     }
 
+    /// A deployment's `message.max.bytes` -- a managed broker's lower limit, or
+    /// a larger one -- is the ceiling for both librdkafka and the size cap.
     #[test]
     fn the_size_cap_follows_message_max_bytes() {
-        let mut sink = SinkConfig {
-            encoding: "raw_bytes".into(),
-            ..Default::default()
-        };
-        sink.librdkafka_options
-            .insert("message.max.bytes".into(), "2000000".into());
-        assert_eq!(max_record_bytes(&sink), 1_999_872);
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        assert_eq!(
-            yaml.get("transforms")
-                .and_then(|t| t.get(SIZE_CAP_LABEL))
-                .and_then(|c| c.get("condition"))
-                .and_then(Value::as_str),
-            Some(r#"length(string(.message) ?? "") <= 1999872"#)
-        );
+        for (configured, cap) in [("2000000", 1_999_872_u64), ("8388608", 8_388_480)] {
+            let mut sink = SinkConfig {
+                encoding: "raw_bytes".into(),
+                ..Default::default()
+            };
+            sink.librdkafka_options
+                .insert("message.max.bytes".into(), configured.into());
+            assert_eq!(max_record_bytes(&sink), cap, "{configured}");
+            let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+            assert_eq!(
+                written_message_max_bytes(&yaml),
+                Some(configured),
+                "the deployment's ceiling reaches librdkafka as set"
+            );
+            assert_eq!(
+                size_cap_condition(&yaml),
+                Some(format!(r#"length(string(.message) ?? "") <= {cap}"#).as_str())
+            );
+        }
     }
 
     #[test]
@@ -1230,7 +1303,8 @@ mod tests {
         // Removed settings — back to librdkafka defaults
         assert!(!text.contains("batch.size"));
         assert!(!text.contains("batch.num.messages"));
-        assert!(!text.contains("message.max.bytes"));
+        // The pipeline's record ceiling, not librdkafka's 1,000,000 default.
+        assert!(text.contains(&format!("message.max.bytes: '{}'", pipeline_ceiling())));
         // Acknowledgements on sink
         assert!(text.contains("acknowledgements:"));
         // Healthcheck
