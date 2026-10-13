@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.49](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.48...v1.0.49) (2026-10-13)
+
+### Bug Fixes
+
+* lift the Kafka sink record ceiling to 16 MiB ([#116](https://github.com/hyperi-io/dfe-transform-vector/issues/116)) ([2ddb624](https://github.com/hyperi-io/dfe-transform-vector/commit/2ddb6248915375c5cbdd6a0a8ef161f752df761a)), closes [#115](https://github.com/hyperi-io/dfe-transform-vector/issues/115)
+
 ## [1.0.48](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.47...v1.0.48) (2026-10-12)
 
 ### Bug Fixes
