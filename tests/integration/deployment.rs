@@ -319,7 +319,8 @@ fn shipped_configs() -> Vec<(String, dfe_transform_vector::config::loader::Confi
         let text = std::fs::read_to_string(&path).expect("read fixture");
         out.push((
             path.display().to_string(),
-            serde_yaml_ng::from_str::<Config>(&text).expect("fixture config"),
+            scalo::yaml::from_str::<Config>(&text, "config.yaml", scalo::yaml::Profile::Config)
+                .expect("fixture config"),
         ));
     }
     out
@@ -424,7 +425,7 @@ fn emit_compose_generates_without_panic() {
 #[test]
 fn contract_json_roundtrip() {
     let contract = deployment::contract();
-    let json = contract.to_json();
+    let json = contract.to_json().expect("contract serialises to JSON");
 
     // Must be valid JSON
     assert!(!json.is_empty(), "contract JSON is empty");

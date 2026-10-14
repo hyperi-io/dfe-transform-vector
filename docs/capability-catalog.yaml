@@ -1,6 +1,6 @@
 - kind: transform
   name: vector
-  description: 'Vector (vector.dev) subprocess wrapper: Kafka source -> user transform YAML -> Kafka sink. Vector''s own YAML config defines the transforms + routing; this wrapper manages the process lifecycle and Kafka wiring.'
+  description: "Vector (vector.dev) subprocess wrapper: Kafka source -> user transform YAML -> Kafka sink. Vector's own YAML config defines the transforms + routing; this wrapper manages the process lifecycle and Kafka wiring."
   maturity: stable
   fields:
   - name: dfe_source

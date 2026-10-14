@@ -353,7 +353,8 @@ fn a_running_vector_reads_the_credentials_the_assembler_hands_it() {
     )
     .expect("global");
     let source_yaml = fs::read_to_string(assembled.join("00_source.yaml")).unwrap();
-    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source_yaml).unwrap();
+    let parsed: serde_json::Value =
+        scalo::yaml::from_str(&source_yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
     let sasl = &parsed["sources"]["dfe_source"]["sasl"];
     let username_ref = sasl["username"].as_str().expect("username reference");
     let password_ref = sasl["password"].as_str().expect("password reference");
@@ -541,7 +542,7 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         "verify_hostname missing from source"
     );
     assert!(
-        source_yaml.contains("enable.ssl.certificate.verification: 'false'"),
+        source_yaml.contains("enable.ssl.certificate.verification: \"false\""),
         "librdkafka ssl cert verification not disabled in source"
     );
 
@@ -551,7 +552,7 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         "verify_certificate missing from sink"
     );
     assert!(
-        sink_yaml.contains("enable.ssl.certificate.verification: 'false'"),
+        sink_yaml.contains("enable.ssl.certificate.verification: \"false\""),
         "librdkafka ssl cert verification not disabled in sink"
     );
 

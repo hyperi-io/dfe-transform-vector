@@ -23,7 +23,7 @@ pub enum Error {
     Vector(String),
 
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml_ng::Error),
+    Yaml(#[from] scalo::yaml::YamlError),
 
     #[error("validation error: {0}")]
     Validation(String),

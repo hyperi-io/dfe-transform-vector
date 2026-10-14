@@ -873,7 +873,7 @@ impl Config {
             }
             let content = std::fs::read_to_string(path)
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-            config = serde_yaml_ng::from_str(&content)?;
+            config = scalo::yaml::from_str(&content, path, scalo::yaml::Profile::Config)?;
             debug!(path, "loaded configuration file");
             loaded_from = Some(path);
         } else {
@@ -881,7 +881,7 @@ impl Config {
                 if Path::new(path).exists() {
                     let content = std::fs::read_to_string(path)
                         .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-                    config = serde_yaml_ng::from_str(&content)?;
+                    config = scalo::yaml::from_str(&content, path, scalo::yaml::Profile::Config)?;
                     debug!(path, "loaded configuration file");
                     loaded_from = Some(*path);
                     break;

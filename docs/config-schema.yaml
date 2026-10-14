@@ -42,16 +42,16 @@ properties:
       See [`KafkaSource`] for the platform topic naming convention.
     type:
     - string
-    - 'null'
+    - "null"
     default: null
   pipeline:
     description: Pipeline identity. **Requires restart.**
-    $ref: '#/$defs/PipelineConfig'
+    $ref: "#/$defs/PipelineConfig"
     default:
       name: default
   source:
     description: Source (input), on either transport. **Requires restart.**
-    $ref: '#/$defs/SourceConfig'
+    $ref: "#/$defs/SourceConfig"
     default:
       transport: bus
       listen: 0.0.0.0:6000
@@ -65,8 +65,8 @@ properties:
       sasl:
         enabled: false
         mechanism: scram_sha_512
-        username: ''
-        password: ''
+        username: ""
+        password: ""
         secret_dir: null
       tls:
         enabled: false
@@ -84,21 +84,21 @@ properties:
         enabled: true
   sink:
     description: Sink (output), on either transport. **Requires restart.**
-    $ref: '#/$defs/SinkConfig'
+    $ref: "#/$defs/SinkConfig"
     default:
       transport: bus
       endpoint: http://dfe-loader:6000
       brokers:
       - localhost:9092
-      topic: ''
-      key_field: ''
+      topic: ""
+      key_field: ""
       encoding: json
       compression: zstd
       sasl:
         enabled: false
         mechanism: scram_sha_512
-        username: ''
-        password: ''
+        username: ""
+        password: ""
         secret_dir: null
       tls:
         enabled: false
@@ -120,20 +120,20 @@ properties:
       librdkafka_options: {}
   bridge:
     description: The supervisor-to-Vector legs, direct transport only. **Requires restart.**
-    $ref: '#/$defs/BridgeConfig'
+    $ref: "#/$defs/BridgeConfig"
     default:
       to_vector: 127.0.0.1:6100
       from_vector: 127.0.0.1:6101
       batch_size: 500
   transforms:
     description: User-supplied transform YAML files. **Hot-reloaded.**
-    $ref: '#/$defs/TransformConfig'
+    $ref: "#/$defs/TransformConfig"
     default:
       dir: null
       files: null
   vector:
     description: Vector subprocess settings. **Requires restart.**
-    $ref: '#/$defs/VectorConfig'
+    $ref: "#/$defs/VectorConfig"
     default:
       binary: /usr/local/bin/vector
       data_dir: /var/lib/vector
@@ -141,12 +141,12 @@ properties:
       api_enabled: false
       api_address: 127.0.0.1:8686
       log_level: info
-      version: 0.59.0
+      version: "0.59.0"
       version_check: strict
       version_source: preshipped
   metrics:
     description: Metrics endpoint. **Requires restart** (server binds at startup).
-    $ref: '#/$defs/MetricsConfig'
+    $ref: "#/$defs/MetricsConfig"
     default:
       address: 0.0.0.0:9090
       vector_metrics_address: 127.0.0.1:9598
@@ -154,18 +154,20 @@ properties:
       sink_stall_secs: 60
   logging:
     description: Logging. **Requires restart** (subscriber configured at startup).
-    $ref: '#/$defs/LoggingConfig'
+    $ref: "#/$defs/LoggingConfig"
     default:
       level: info
       format: auto
   scaling:
     description: KEDA scaling pressure. **Requires restart.**
-    $ref: '#/$defs/ScalingConfig'
+    $ref: "#/$defs/ScalingConfig"
     default:
       pressure_threshold: 0.8
   reload:
-    description: Hot-reload configuration. **Requires restart** (poll interval captured at start).
-    $ref: '#/$defs/ReloadConfig'
+    description: >-
+      Hot-reload configuration. **Requires restart** (poll interval captured at
+      start).
+    $ref: "#/$defs/ReloadConfig"
     default:
       enabled: true
       poll_interval_secs: 30
@@ -185,8 +187,8 @@ $defs:
     type: object
     properties:
       transport:
-        description: '`bus` consumes `topics`; `direct` accepts pushes on `listen`.'
-        $ref: '#/$defs/Transport'
+        description: "`bus` consumes `topics`; `direct` accepts pushes on `listen`."
+        $ref: "#/$defs/Transport"
         default: bus
       listen:
         description: Address the scalo Push listener binds on the direct transport.
@@ -212,21 +214,21 @@ $defs:
         default: dfe-transform-vector
       decoding:
         description: Message decoding.
-        $ref: '#/$defs/DecodingConfig'
+        $ref: "#/$defs/DecodingConfig"
         default:
           codec: json
       sasl:
         description: SASL authentication.
-        $ref: '#/$defs/SaslConfig'
+        $ref: "#/$defs/SaslConfig"
         default:
           enabled: false
           mechanism: scram_sha_512
-          username: ''
-          password: ''
+          username: ""
+          password: ""
           secret_dir: null
       tls:
         description: TLS configuration.
-        $ref: '#/$defs/TlsConfig'
+        $ref: "#/$defs/TlsConfig"
         default:
           enabled: false
           ca_cert_file: null
@@ -234,17 +236,17 @@ $defs:
           key_file: null
           skip_verify: false
       auto_offset_reset:
-        description: 'Auto offset reset: `largest` (default) or `smallest`.'
+        description: "Auto offset reset: `largest` (default) or `smallest`."
         type: string
         default: largest
       session_timeout_ms:
-        description: 'Session timeout (ms). Default: 30000.'
+        description: "Session timeout (ms). Default: 30000."
         type: integer
         format: uint32
         minimum: 0
         default: 30000
       commit_interval_ms:
-        description: 'Offset commit interval (ms). Default: 5000.'
+        description: "Offset commit interval (ms). Default: 5000."
         type: integer
         format: uint32
         minimum: 0
@@ -255,12 +257,12 @@ $defs:
           Must be less than session_timeout_ms. Default: half of session_timeout_ms.
         type:
         - integer
-        - 'null'
+        - "null"
         format: uint32
         minimum: 0
         default: null
       topic_lag_metric:
-        description: 'Expose per-topic consumer lag metric. Default: true.'
+        description: "Expose per-topic consumer lag metric. Default: true."
         type: boolean
         default: true
       librdkafka_options:
@@ -276,7 +278,7 @@ $defs:
           On (the default) a Kafka offset is committed, and a push is answered,
           only once the record is delivered, so a crash redelivers rather than
           loses it. Off, both happen at receipt.
-        $ref: '#/$defs/AcknowledgementsConfig'
+        $ref: "#/$defs/AcknowledgementsConfig"
         default:
           enabled: true
   Transport:
@@ -298,7 +300,7 @@ $defs:
     type: object
     properties:
       codec:
-        description: 'Codec: json, raw_bytes, protobuf.'
+        description: "Codec: json, raw_bytes, protobuf."
         type: string
         default: json
   SaslConfig:
@@ -321,13 +323,13 @@ $defs:
         type: boolean
         default: false
       mechanism:
-        description: 'SASL mechanism: plain, scram_sha_256, scram_sha_512.'
+        description: "SASL mechanism: plain, scram_sha_256, scram_sha_512."
         type: string
         default: scram_sha_512
       username:
         description: SASL username. Leave empty when `secret_dir` supplies it.
         type: string
-        default: ''
+        default: ""
       password:
         description: |-
           SASL password. Leave empty when `secret_dir` supplies it.
@@ -337,7 +339,7 @@ $defs:
         type: string
         x-scalo-secret: true
         writeOnly: true
-        default: ''
+        default: ""
       secret_dir:
         description: |-
           Directory holding the credentials as files named `username` and
@@ -345,7 +347,7 @@ $defs:
           itself; replaces `username` and `password`.
         type:
         - string
-        - 'null'
+        - "null"
         default: null
   TlsConfig:
     description: TLS configuration for Kafka.
@@ -359,19 +361,19 @@ $defs:
         description: Path to CA certificate PEM file.
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       cert_file:
         description: Path to client certificate PEM file (for mTLS).
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       key_file:
         description: Path to client key PEM file (for mTLS).
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       skip_verify:
         description: Skip hostname verification (dev/test only).
@@ -408,8 +410,8 @@ $defs:
     type: object
     properties:
       transport:
-        description: '`bus` produces to `topic`; `direct` pushes to `endpoint`.'
-        $ref: '#/$defs/Transport'
+        description: "`bus` produces to `topic`; `direct` pushes to `endpoint`."
+        $ref: "#/$defs/Transport"
         default: bus
       endpoint:
         description: Downstream Push listener on the direct transport, e.g. the loader.
@@ -427,31 +429,31 @@ $defs:
           Output topic name. On the direct transport it is still the routing key
           the downstream stage picks its table by, so a source keeps its name.
         type: string
-        default: ''
+        default: ""
       key_field:
         description: Event field path for Kafka partition key (e.g., ".org_id").
         type: string
-        default: ''
+        default: ""
       encoding:
-        description: 'Encoding codec: json, raw_bytes.'
+        description: "Encoding codec: json, raw_bytes."
         type: string
         default: json
       compression:
-        description: 'Compression: none, gzip, lz4, snappy, zstd. Default: zstd.'
+        description: "Compression: none, gzip, lz4, snappy, zstd. Default: zstd."
         type: string
         default: zstd
       sasl:
         description: SASL authentication.
-        $ref: '#/$defs/SaslConfig'
+        $ref: "#/$defs/SaslConfig"
         default:
           enabled: false
           mechanism: scram_sha_512
-          username: ''
-          password: ''
+          username: ""
+          password: ""
           secret_dir: null
       tls:
         description: TLS configuration.
-        $ref: '#/$defs/TlsConfig'
+        $ref: "#/$defs/TlsConfig"
         default:
           enabled: false
           ca_cert_file: null
@@ -460,7 +462,7 @@ $defs:
           skip_verify: false
       buffer:
         description: Sink buffer configuration.
-        $ref: '#/$defs/BufferConfig'
+        $ref: "#/$defs/BufferConfig"
         default:
           type: memory
           max_events: null
@@ -468,7 +470,7 @@ $defs:
           when_full: block
       batch:
         description: Sink batch configuration (Vector-level batching).
-        $ref: '#/$defs/BatchConfig'
+        $ref: "#/$defs/BatchConfig"
         default:
           max_events: 10000
           max_bytes: null
@@ -485,7 +487,7 @@ $defs:
         minimum: 0
         default: 0
       socket_timeout_ms:
-        description: 'Network request timeout (ms). Default: 60000 (60s).'
+        description: "Network request timeout (ms). Default: 60000 (60s)."
         type: integer
         format: uint32
         minimum: 0
@@ -506,14 +508,14 @@ $defs:
     type: object
     properties:
       type:
-        description: 'Buffer type: `memory` or `disk`.'
+        description: "Buffer type: `memory` or `disk`."
         type: string
         default: memory
       max_events:
-        description: 'Maximum events in memory buffer (only for type=memory). Default: 500.'
+        description: "Maximum events in memory buffer (only for type=memory). Default: 500."
         type:
         - integer
-        - 'null'
+        - "null"
         format: uint64
         minimum: 0
         default: null
@@ -521,12 +523,12 @@ $defs:
         description: Maximum buffer size in bytes (only for type=disk). Min ~256 MiB (268435488).
         type:
         - integer
-        - 'null'
+        - "null"
         format: uint64
         minimum: 0
         default: null
       when_full:
-        description: 'Behaviour when buffer is full: `block` (default) or `drop_newest`.'
+        description: "Behaviour when buffer is full: `block` (default) or `drop_newest`."
         type: string
         default: block
   BatchConfig:
@@ -534,7 +536,7 @@ $defs:
     type: object
     properties:
       max_events:
-        description: 'Maximum events per batch before flush. Default: 10000.'
+        description: "Maximum events per batch before flush. Default: 10000."
         type: integer
         format: uint32
         minimum: 0
@@ -543,12 +545,12 @@ $defs:
         description: Maximum uncompressed batch size (bytes) before flush.
         type:
         - integer
-        - 'null'
+        - "null"
         format: uint64
         minimum: 0
         default: null
       timeout_secs:
-        description: 'Max batch age (seconds) before flush. Default: 1.'
+        description: "Max batch age (seconds) before flush. Default: 1."
         type: integer
         format: uint32
         minimum: 0
@@ -592,13 +594,13 @@ $defs:
         description: Directory to load all YAML transform files from.
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       files:
         description: Explicit list of transform YAML file paths (loaded in order).
         type:
         - array
-        - 'null'
+        - "null"
         items:
           type: string
         default: null
@@ -657,9 +659,9 @@ $defs:
           Set it explicitly (or set `version_check` to `warn`/`disabled`) when
           deliberately running a different Vector to the pre-shipped one.
         type: string
-        default: 0.59.0
+        default: "0.59.0"
       version_check:
-        description: 'Version check mode: strict, warn, disabled.'
+        description: "Version check mode: strict, warn, disabled."
         type: string
         default: strict
       version_source:

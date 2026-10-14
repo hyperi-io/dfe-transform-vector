@@ -24,7 +24,7 @@ pub struct LoadedTransform {
     /// Original file path (for diagnostics).
     pub path: PathBuf,
     /// Parsed YAML value.
-    pub yaml: serde_yaml_ng::Value,
+    pub yaml: serde_json::Value,
 }
 
 /// Load transform YAML files according to the config.
@@ -93,7 +93,9 @@ fn load_files(paths: &[PathBuf]) -> Result<Vec<LoadedTransform>> {
                 path.display()
             ))
         })?;
-        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content)?;
+        let origin = path.display().to_string();
+        let yaml: serde_json::Value =
+            scalo::yaml::from_str(&content, &origin, scalo::yaml::Profile::Config)?;
         debug!(path = %path.display(), "loaded transform file");
         transforms.push(LoadedTransform {
             path: path.clone(),

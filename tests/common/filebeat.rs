@@ -171,8 +171,10 @@ pub fn corpus_conf(log_name: &str) -> Option<serde_json::Value> {
     let common = format!("{dir}/test-common-config.yml");
     for candidate in [per_file, common] {
         if let Some(bytes) = corpus().get(&candidate) {
+            let text = std::str::from_utf8(bytes).expect("config yml is UTF-8");
             let doc: serde_json::Value =
-                serde_yaml_ng::from_slice(bytes).expect("config yml parses");
+                scalo::yaml::from_str(text, &candidate, scalo::yaml::Profile::Data)
+                    .expect("config yml parses");
             if let Some(conf) = doc.get("fields").and_then(|f| f.get("_conf")) {
                 return Some(conf.clone());
             }

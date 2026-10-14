@@ -149,7 +149,8 @@ fn end_to_end_assembly_with_transforms() {
     // Verify sink YAML content — the size cap reads the last transform, and
     // the sink reads the size cap
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
-    let sink_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&sink).unwrap();
+    let sink_yaml: serde_json::Value =
+        scalo::yaml::from_str(&sink, "config.yaml", scalo::yaml::Profile::Config).unwrap();
     assert_eq!(
         sink_yaml["transforms"]["dfe_size_cap"]["inputs"][0].as_str(),
         Some("filter"),
@@ -528,8 +529,10 @@ fn a_plaintext_or_unset_security_protocol_leaves_tls_off() {
 /// the TLS a config file asked for.
 #[test]
 fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
-    let file: Config = serde_yaml_ng::from_str(
+    let file: Config = scalo::yaml::from_str(
         "source:\n  tls:\n    enabled: true\nsink:\n  tls:\n    enabled: true\n",
+        "config.yaml",
+        scalo::yaml::Profile::Config,
     )
     .unwrap();
 
