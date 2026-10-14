@@ -192,8 +192,13 @@ async fn main() {
                 return;
             }
             AppCommand::EmitContract => {
-                let contract = deployment::contract();
-                println!("{}", contract.to_json());
+                match deployment::contract().to_json() {
+                    Ok(json) => println!("{json}"),
+                    Err(e) => {
+                        eprintln!("error: failed to serialise the deployment contract: {e}");
+                        std::process::exit(1);
+                    }
+                }
                 return;
             }
             AppCommand::Assemble { dir } => {

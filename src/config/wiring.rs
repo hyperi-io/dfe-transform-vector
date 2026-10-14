@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use tracing::debug;
 
 use super::generate::{
@@ -51,17 +51,9 @@ pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Componen
 
     for lt in transforms {
         for kind in &["sources", "transforms", "sinks"] {
-            if let Some(Value::Mapping(entries)) = lt.yaml.get(Value::String(kind.to_string())) {
-                for (label_val, component_val) in entries {
-                    let label = label_val
-                        .as_str()
-                        .ok_or_else(|| {
-                            crate::Error::Config(format!(
-                                "non-string component label in {}",
-                                lt.path.display()
-                            ))
-                        })?
-                        .to_string();
+            if let Some(Value::Object(entries)) = lt.yaml.get(*kind) {
+                for (label, component_val) in entries {
+                    let label = label.clone();
 
                     let inputs = extract_inputs(component_val);
 
@@ -87,7 +79,7 @@ pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Componen
 pub fn validate_kafka_components(transforms: &[LoadedTransform]) -> Result<()> {
     for lt in transforms {
         for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
-            let Some(Value::Mapping(entries)) = lt.yaml.get(section) else {
+            let Some(Value::Object(entries)) = lt.yaml.get(section) else {
                 continue;
             };
             for (label, component) in entries {
@@ -96,9 +88,8 @@ pub fn validate_kafka_components(transforms: &[LoadedTransform]) -> Result<()> {
                 }
                 kafka_floor(&vector_kafka_client_config(component)).map_err(|e| {
                     crate::Error::Validation(format!(
-                        "transform file {}: Kafka {kind} '{}' refused: {e}",
+                        "transform file {}: Kafka {kind} '{label}' refused: {e}",
                         lt.path.display(),
-                        label.as_str().unwrap_or_default()
                     ))
                 })?;
             }
@@ -312,8 +303,8 @@ fn detect_cycles(components: &[Component]) -> Result<()> {
 
 /// Extract the `inputs` field from a YAML component value.
 fn extract_inputs(value: &Value) -> Vec<String> {
-    match value.get(Value::String("inputs".to_string())) {
-        Some(Value::Sequence(seq)) => seq
+    match value.get("inputs") {
+        Some(Value::Array(seq)) => seq
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
@@ -329,7 +320,8 @@ mod tests {
     fn make_transform(yaml_str: &str) -> LoadedTransform {
         LoadedTransform {
             path: "test.yaml".into(),
-            yaml: serde_yaml_ng::from_str(yaml_str).unwrap(),
+            yaml: scalo::yaml::from_str(yaml_str, "test.yaml", scalo::yaml::Profile::Config)
+                .unwrap(),
         }
     }
 

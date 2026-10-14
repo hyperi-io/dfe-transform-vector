@@ -27,7 +27,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use scalo::transport::kafka::MESSAGE_MAX_BYTES;
-use serde_yaml_ng::Value;
+use serde_json::{Map, Value};
+
+/// A YAML mapping in the generated Vector config.
+type Mapping = Map<String, Value>;
 
 use super::kafka_defaults;
 use super::loader::{
@@ -63,41 +66,41 @@ const RECORD_FRAMING_BYTES: u64 = 128;
 /// `secret`.
 #[must_use]
 pub fn generate_global_yaml(vector: &VectorConfig, secrets: &[SecretBackend]) -> Value {
-    let mut root = serde_yaml_ng::Mapping::new();
+    let mut root = Mapping::new();
 
     // Vector's default is the HOST's timezone, so a transform that parses a
     // zone-less timestamp would produce a different instant on every pod. DFE
     // events are UTC end to end.
-    root.insert(val("timezone"), val("UTC"));
+    root.insert(key("timezone"), val("UTC"));
 
     if !vector.data_dir.is_empty() {
-        root.insert(val("data_dir"), val(&vector.data_dir));
+        root.insert(key("data_dir"), val(&vector.data_dir));
     }
 
     // Written out even when off, so a change of Vector's own default cannot
     // open an unauthenticated listener.
-    let mut api = serde_yaml_ng::Mapping::new();
-    api.insert(val("enabled"), Value::Bool(vector.api_enabled));
+    let mut api = Mapping::new();
+    api.insert(key("enabled"), Value::Bool(vector.api_enabled));
     if vector.api_enabled && !vector.api_address.is_empty() {
-        api.insert(val("address"), val(&vector.api_address));
+        api.insert(key("address"), val(&vector.api_address));
     }
-    root.insert(val("api"), Value::Mapping(api));
+    root.insert(key("api"), Value::Object(api));
 
-    let mut backends = serde_yaml_ng::Mapping::new();
+    let mut backends = Mapping::new();
     for secret in secrets {
-        let mut backend = serde_yaml_ng::Mapping::new();
-        backend.insert(val("type"), val("directory"));
-        backend.insert(val("path"), val(&secret.dir.to_string_lossy()));
+        let mut backend = Mapping::new();
+        backend.insert(key("type"), val("directory"));
+        backend.insert(key("path"), val(&secret.dir.to_string_lossy()));
         // A mounted Secret written by hand often ends in a newline, which
         // would otherwise become part of the credential.
-        backend.insert(val("remove_trailing_whitespace"), Value::Bool(true));
-        backends.insert(val(secret.name), Value::Mapping(backend));
+        backend.insert(key("remove_trailing_whitespace"), Value::Bool(true));
+        backends.insert(key(secret.name), Value::Object(backend));
     }
     if !backends.is_empty() {
-        root.insert(val("secret"), Value::Mapping(backends));
+        root.insert(key("secret"), Value::Object(backends));
     }
 
-    Value::Mapping(root)
+    Value::Object(root)
 }
 
 /// Generate the `sources.dfe_source` YAML for this deployment's transport.
@@ -122,88 +125,88 @@ pub fn generate_source_yaml(source: &SourceConfig, bridge: &BridgeConfig) -> Val
 /// source whose sink has them, and deprecates setting them on the source. With
 /// them on, the RPC does not return until the record has reached the sink, so
 /// the bridge answers its own sender only once Vector has delivered.
-fn direct_source_component(bridge: &BridgeConfig) -> serde_yaml_ng::Mapping {
-    let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val("vector"));
-    component.insert(val("address"), val(&bridge.to_vector));
+fn direct_source_component(bridge: &BridgeConfig) -> Mapping {
+    let mut component = Mapping::new();
+    component.insert(key("type"), val("vector"));
+    component.insert(key("address"), val(&bridge.to_vector));
     component
 }
 
 /// An `{enabled: <on>}` block.
 fn enabled_block(on: bool) -> Value {
-    let mut block = serde_yaml_ng::Mapping::new();
-    block.insert(val("enabled"), Value::Bool(on));
-    Value::Mapping(block)
+    let mut block = Mapping::new();
+    block.insert(key("enabled"), Value::Bool(on));
+    Value::Object(block)
 }
 
-fn kafka_source_component(source: &SourceConfig) -> serde_yaml_ng::Mapping {
-    let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val(KAFKA_COMPONENT_TYPE));
-    component.insert(val("bootstrap_servers"), val(&source.brokers.join(",")));
+fn kafka_source_component(source: &SourceConfig) -> Mapping {
+    let mut component = Mapping::new();
+    component.insert(key("type"), val(KAFKA_COMPONENT_TYPE));
+    component.insert(key("bootstrap_servers"), val(&source.brokers.join(",")));
     component.insert(
-        val("topics"),
-        Value::Sequence(source.topics.iter().map(|t| val(t)).collect()),
+        key("topics"),
+        Value::Array(source.topics.iter().map(|t| val(t)).collect()),
     );
-    component.insert(val("group_id"), val(&source.group_id));
+    component.insert(key("group_id"), val(&source.group_id));
 
     // Decoding
-    let mut decoding = serde_yaml_ng::Mapping::new();
-    decoding.insert(val("codec"), val(&source.decoding.codec));
-    component.insert(val("decoding"), Value::Mapping(decoding));
+    let mut decoding = Mapping::new();
+    decoding.insert(key("codec"), val(&source.decoding.codec));
+    component.insert(key("decoding"), Value::Object(decoding));
 
     // Session and commit timing
     component.insert(
-        val("session_timeout_ms"),
+        key("session_timeout_ms"),
         Value::Number(source.session_timeout_ms.into()),
     );
     component.insert(
-        val("commit_interval_ms"),
+        key("commit_interval_ms"),
         Value::Number(source.commit_interval_ms.into()),
     );
     if let Some(drain_ms) = source.drain_timeout_ms {
-        component.insert(val("drain_timeout_ms"), Value::Number(drain_ms.into()));
+        component.insert(key("drain_timeout_ms"), Value::Number(drain_ms.into()));
     }
 
     // Offset reset
-    component.insert(val("auto_offset_reset"), val(&source.auto_offset_reset));
+    component.insert(key("auto_offset_reset"), val(&source.auto_offset_reset));
 
     // Consumer lag metric
     if source.topic_lag_metric {
-        let mut metrics = serde_yaml_ng::Mapping::new();
-        metrics.insert(val("topic_lag_metric"), Value::Bool(true));
-        component.insert(val("metrics"), Value::Mapping(metrics));
+        let mut metrics = Mapping::new();
+        metrics.insert(key("topic_lag_metric"), Value::Bool(true));
+        component.insert(key("metrics"), Value::Object(metrics));
     }
 
     // SASL
     if source.sasl.enabled {
-        component.insert(val("sasl"), build_sasl_block(Side::Source, &source.sasl));
+        component.insert(key("sasl"), build_sasl_block(Side::Source, &source.sasl));
     }
 
     // TLS
     if source.tls.enabled {
-        component.insert(val("tls"), build_tls_block(&source.tls));
+        component.insert(key("tls"), build_tls_block(&source.tls));
     }
 
     // librdkafka options — production defaults + user overrides
     let rdkafka = build_source_librdkafka(source);
-    component.insert(val("librdkafka_options"), Value::Mapping(rdkafka));
+    component.insert(key("librdkafka_options"), Value::Object(rdkafka));
 
     component
 }
 
 /// Wrap one component under its section and label, the shape every generated
 /// file takes.
-fn wrap(name: &str, label: &str, component: serde_yaml_ng::Mapping) -> Value {
-    Value::Mapping(section(name, label, component))
+fn wrap(name: &str, label: &str, component: Mapping) -> Value {
+    Value::Object(section(name, label, component))
 }
 
 /// `{<name>: {<label>: <component>}}`.
-fn section(name: &str, label: &str, component: serde_yaml_ng::Mapping) -> serde_yaml_ng::Mapping {
-    let mut components = serde_yaml_ng::Mapping::new();
-    components.insert(val(label), Value::Mapping(component));
+fn section(name: &str, label: &str, component: Mapping) -> Mapping {
+    let mut components = Mapping::new();
+    components.insert(key(label), Value::Object(component));
 
-    let mut root = serde_yaml_ng::Mapping::new();
-    root.insert(val(name), Value::Mapping(components));
+    let mut root = Mapping::new();
+    root.insert(key(name), Value::Object(components));
     root
 }
 
@@ -242,7 +245,7 @@ pub fn generate_sink_yaml(
         SIZE_CAP_LABEL,
         size_cap_component(sink, inputs),
     ));
-    Value::Mapping(root)
+    Value::Object(root)
 }
 
 /// The largest record, in encoded bytes, the Kafka sink is handed.
@@ -271,17 +274,17 @@ fn pipeline_message_max_bytes() -> u64 {
 ///
 /// Measures the record as the sink's codec encodes it: the JSON of the whole
 /// event, or the `message` field for `raw_bytes`.
-fn size_cap_component(sink: &SinkConfig, inputs: &[String]) -> serde_yaml_ng::Mapping {
+fn size_cap_component(sink: &SinkConfig, inputs: &[String]) -> Mapping {
     let encoded = match sink.encoding.as_str() {
         "raw_bytes" => r#"string(.message) ?? """#,
         _ => "encode_json(.)",
     };
     let condition = format!("length({encoded}) <= {}", max_record_bytes(sink));
 
-    let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val("filter"));
-    component.insert(val("inputs"), input_list(inputs));
-    component.insert(val("condition"), val(&condition));
+    let mut component = Mapping::new();
+    component.insert(key("type"), val("filter"));
+    component.insert(key("inputs"), input_list(inputs));
+    component.insert(key("condition"), val(&condition));
     component
 }
 
@@ -295,104 +298,100 @@ fn direct_sink_component(
     bridge: &BridgeConfig,
     inputs: &[String],
     acknowledged: bool,
-) -> serde_yaml_ng::Mapping {
-    let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val("vector"));
-    component.insert(val("inputs"), input_list(inputs));
+) -> Mapping {
+    let mut component = Mapping::new();
+    component.insert(key("type"), val("vector"));
+    component.insert(key("inputs"), input_list(inputs));
     // A URI, not a bind address: this end dials the supervisor's listener.
     component.insert(
-        val("address"),
+        key("address"),
         val(&format!("http://{}", bridge.from_vector)),
     );
-    component.insert(val("acknowledgements"), enabled_block(acknowledged));
+    component.insert(key("acknowledgements"), enabled_block(acknowledged));
     // The bridge is this process's own listener, bound only after `vector
     // validate` runs, and its health is the supervisor's readiness.
-    component.insert(val("healthcheck"), enabled_block(false));
-    component.insert(val("buffer"), build_buffer_block(&sink.buffer));
+    component.insert(key("healthcheck"), enabled_block(false));
+    component.insert(key("buffer"), build_buffer_block(&sink.buffer));
 
     component
 }
 
-fn kafka_sink_component(
-    sink: &SinkConfig,
-    inputs: &[String],
-    acknowledged: bool,
-) -> serde_yaml_ng::Mapping {
-    let mut component = serde_yaml_ng::Mapping::new();
-    component.insert(val("type"), val(KAFKA_COMPONENT_TYPE));
-    component.insert(val("inputs"), input_list(inputs));
-    component.insert(val("bootstrap_servers"), val(&sink.brokers.join(",")));
-    component.insert(val("topic"), val(&sink.topic));
+fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool) -> Mapping {
+    let mut component = Mapping::new();
+    component.insert(key("type"), val(KAFKA_COMPONENT_TYPE));
+    component.insert(key("inputs"), input_list(inputs));
+    component.insert(key("bootstrap_servers"), val(&sink.brokers.join(",")));
+    component.insert(key("topic"), val(&sink.topic));
 
     // Key field (partition key)
     if !sink.key_field.is_empty() {
-        component.insert(val("key_field"), val(&sink.key_field));
+        component.insert(key("key_field"), val(&sink.key_field));
     }
 
     // Encoding
-    let mut encoding = serde_yaml_ng::Mapping::new();
-    encoding.insert(val("codec"), val(&sink.encoding));
-    component.insert(val("encoding"), Value::Mapping(encoding));
+    let mut encoding = Mapping::new();
+    encoding.insert(key("codec"), val(&sink.encoding));
+    component.insert(key("encoding"), Value::Object(encoding));
 
     // Compression
     if sink.compression != "none" {
-        component.insert(val("compression"), val(&sink.compression));
+        component.insert(key("compression"), val(&sink.compression));
     }
 
     // Acknowledgements — on the sink (not source) per Vector 0.53+ guidance
-    component.insert(val("acknowledgements"), enabled_block(acknowledged));
+    component.insert(key("acknowledgements"), enabled_block(acknowledged));
 
     // Healthcheck
-    component.insert(val("healthcheck"), enabled_block(true));
+    component.insert(key("healthcheck"), enabled_block(true));
 
     // Timeouts
     component.insert(
-        val("message_timeout_ms"),
+        key("message_timeout_ms"),
         Value::Number(sink.message_timeout_ms.into()),
     );
     component.insert(
-        val("socket_timeout_ms"),
+        key("socket_timeout_ms"),
         Value::Number(sink.socket_timeout_ms.into()),
     );
 
     // Vector-level batch
-    let mut batch = serde_yaml_ng::Mapping::new();
+    let mut batch = Mapping::new();
     batch.insert(
-        val("max_events"),
+        key("max_events"),
         Value::Number(sink.batch.max_events.into()),
     );
     batch.insert(
-        val("timeout_secs"),
+        key("timeout_secs"),
         Value::Number(sink.batch.timeout_secs.into()),
     );
     if let Some(max_bytes) = sink.batch.max_bytes {
-        batch.insert(val("max_bytes"), Value::Number(max_bytes.into()));
+        batch.insert(key("max_bytes"), Value::Number(max_bytes.into()));
     }
-    component.insert(val("batch"), Value::Mapping(batch));
+    component.insert(key("batch"), Value::Object(batch));
 
     // SASL
     if sink.sasl.enabled {
-        component.insert(val("sasl"), build_sasl_block(Side::Sink, &sink.sasl));
+        component.insert(key("sasl"), build_sasl_block(Side::Sink, &sink.sasl));
     }
 
     // TLS
     if sink.tls.enabled {
-        component.insert(val("tls"), build_tls_block(&sink.tls));
+        component.insert(key("tls"), build_tls_block(&sink.tls));
     }
 
     // Buffer
-    component.insert(val("buffer"), build_buffer_block(&sink.buffer));
+    component.insert(key("buffer"), build_buffer_block(&sink.buffer));
 
     // librdkafka options — production defaults + user overrides
     let rdkafka = build_sink_librdkafka(sink);
-    component.insert(val("librdkafka_options"), Value::Mapping(rdkafka));
+    component.insert(key("librdkafka_options"), Value::Object(rdkafka));
 
     component
 }
 
 /// A component's wired `inputs` list.
 fn input_list(inputs: &[String]) -> Value {
-    Value::Sequence(inputs.iter().map(|i| val(i)).collect())
+    Value::Array(inputs.iter().map(|i| val(i)).collect())
 }
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
@@ -403,28 +402,25 @@ fn input_list(inputs: &[String]) -> Value {
 /// config key accepted, validated and inert.
 #[must_use]
 pub fn generate_observability_yaml(address: &str) -> Value {
-    let mut metrics_source = serde_yaml_ng::Mapping::new();
-    metrics_source.insert(val("type"), val("internal_metrics"));
+    let mut metrics_source = Mapping::new();
+    metrics_source.insert(key("type"), val("internal_metrics"));
 
-    let mut sources = serde_yaml_ng::Mapping::new();
-    sources.insert(val("internal_metrics"), Value::Mapping(metrics_source));
+    let mut sources = Mapping::new();
+    sources.insert(key("internal_metrics"), Value::Object(metrics_source));
 
-    let mut prom_sink = serde_yaml_ng::Mapping::new();
-    prom_sink.insert(val("type"), val("prometheus_exporter"));
-    prom_sink.insert(
-        val("inputs"),
-        Value::Sequence(vec![val("internal_metrics")]),
-    );
-    prom_sink.insert(val("address"), val(address));
+    let mut prom_sink = Mapping::new();
+    prom_sink.insert(key("type"), val("prometheus_exporter"));
+    prom_sink.insert(key("inputs"), Value::Array(vec![val("internal_metrics")]));
+    prom_sink.insert(key("address"), val(address));
 
-    let mut sinks = serde_yaml_ng::Mapping::new();
-    sinks.insert(val("prometheus_exporter"), Value::Mapping(prom_sink));
+    let mut sinks = Mapping::new();
+    sinks.insert(key("prometheus_exporter"), Value::Object(prom_sink));
 
-    let mut root = serde_yaml_ng::Mapping::new();
-    root.insert(val("sources"), Value::Mapping(sources));
-    root.insert(val("sinks"), Value::Mapping(sinks));
+    let mut root = Mapping::new();
+    root.insert(key("sources"), Value::Object(sources));
+    root.insert(key("sinks"), Value::Object(sinks));
 
-    Value::Mapping(root)
+    Value::Object(root)
 }
 
 /// librdkafka options the generator derives from the big dials, with the
@@ -505,7 +501,7 @@ const SERVICE_PRODUCER_OVERRIDES: &[(&str, &str)] = &[
     ("enable.idempotence", "true"),
 ];
 
-fn build_source_librdkafka(source: &SourceConfig) -> serde_yaml_ng::Mapping {
+fn build_source_librdkafka(source: &SourceConfig) -> Mapping {
     let base = kafka_defaults::consumer_profile("production");
     let user_overrides: HashMap<String, String> = source
         .librdkafka_options
@@ -514,9 +510,9 @@ fn build_source_librdkafka(source: &SourceConfig) -> serde_yaml_ng::Mapping {
         .collect();
     let merged = kafka_defaults::merge_layers(&base, SERVICE_CONSUMER_OVERRIDES, &user_overrides);
 
-    let mut m = serde_yaml_ng::Mapping::new();
+    let mut m = Mapping::new();
     for (k, v) in &merged {
-        m.insert(val(k), val(v));
+        m.insert(key(k), val(v));
     }
     insert_security_options(&mut m, &source.sasl, &source.tls);
     m
@@ -543,10 +539,10 @@ fn sink_librdkafka_layers(sink: &SinkConfig) -> HashMap<String, String> {
     merged
 }
 
-fn build_sink_librdkafka(sink: &SinkConfig) -> serde_yaml_ng::Mapping {
-    let mut m = serde_yaml_ng::Mapping::new();
+fn build_sink_librdkafka(sink: &SinkConfig) -> Mapping {
+    let mut m = Mapping::new();
     for (k, v) in &sink_librdkafka_layers(sink) {
-        m.insert(val(k), val(v));
+        m.insert(key(k), val(v));
     }
 
     // Compression from big-dial config (overrides scalo default if different)
@@ -557,7 +553,7 @@ fn build_sink_librdkafka(sink: &SinkConfig) -> serde_yaml_ng::Mapping {
         "snappy" => "snappy",
         _ => "zstd",
     };
-    m.insert(val("compression.type"), val(compression));
+    m.insert(key("compression.type"), val(compression));
     insert_security_options(&mut m, &sink.sasl, &sink.tls);
     m
 }
@@ -591,15 +587,15 @@ fn verification_off(tls: &TlsConfig) -> bool {
 }
 
 /// Write the security options the big dials derive over the merged layers.
-fn insert_security_options(m: &mut serde_yaml_ng::Mapping, sasl: &SaslConfig, tls: &TlsConfig) {
+fn insert_security_options(m: &mut Mapping, sasl: &SaslConfig, tls: &TlsConfig) {
     if let Some(protocol) = security_protocol(sasl, tls) {
-        m.insert(val("security.protocol"), val(protocol));
+        m.insert(key("security.protocol"), val(protocol));
     }
     if let Some(mechanism) = sasl_mechanism(sasl) {
-        m.insert(val("sasl.mechanism"), val(&mechanism));
+        m.insert(key("sasl.mechanism"), val(&mechanism));
     }
     if verification_off(tls) {
-        m.insert(val("enable.ssl.certificate.verification"), val("false"));
+        m.insert(key("enable.ssl.certificate.verification"), val("false"));
     }
 }
 
@@ -671,10 +667,10 @@ pub fn vector_kafka_client_config(component: &Value) -> scalo::transport::KafkaC
     };
     let options: BTreeMap<String, String> = component
         .get("librdkafka_options")
-        .and_then(Value::as_mapping)
+        .and_then(Value::as_object)
         .into_iter()
         .flatten()
-        .filter_map(|(k, v)| Some((k.as_str()?.to_string(), scalar_text(v)?)))
+        .filter_map(|(k, v)| Some((k.clone(), scalar_text(v)?)))
         .collect();
 
     let mut client = kafka_client_config(&brokers, &sasl, &tls, &options);
@@ -711,58 +707,58 @@ fn scalar_text(value: &Value) -> Option<String> {
 /// reference so no credential is written into the Vector config.
 fn build_sasl_block(side: Side, sasl: &super::loader::SaslConfig) -> Value {
     let secret = SecretNames::of(side, sasl);
-    let mut m = serde_yaml_ng::Mapping::new();
-    m.insert(val("enabled"), Value::Bool(true));
+    let mut m = Mapping::new();
+    m.insert(key("enabled"), Value::Bool(true));
     m.insert(
-        val("mechanism"),
+        key("mechanism"),
         val(&normalise_sasl_mechanism(&sasl.mechanism)),
     );
-    m.insert(val("username"), val(&secret.username_ref()));
-    m.insert(val("password"), val(&secret.password_ref()));
-    Value::Mapping(m)
+    m.insert(key("username"), val(&secret.username_ref()));
+    m.insert(key("password"), val(&secret.password_ref()));
+    Value::Object(m)
 }
 
 fn build_tls_block(tls: &super::loader::TlsConfig) -> Value {
-    let mut m = serde_yaml_ng::Mapping::new();
-    m.insert(val("enabled"), Value::Bool(true));
+    let mut m = Mapping::new();
+    m.insert(key("enabled"), Value::Bool(true));
 
     if let Some(ref ca) = tls.ca_cert_file {
-        m.insert(val("ca_file"), val(ca));
+        m.insert(key("ca_file"), val(ca));
     }
     if let Some(ref cert) = tls.cert_file {
-        m.insert(val("crt_file"), val(cert));
+        m.insert(key("crt_file"), val(cert));
     }
-    if let Some(ref key) = tls.key_file {
-        m.insert(val("key_file"), val(key));
+    if let Some(ref key_file) = tls.key_file {
+        m.insert(key("key_file"), val(key_file));
     }
     if tls.skip_verify {
-        m.insert(val("verify_certificate"), Value::Bool(false));
-        m.insert(val("verify_hostname"), Value::Bool(false));
+        m.insert(key("verify_certificate"), Value::Bool(false));
+        m.insert(key("verify_hostname"), Value::Bool(false));
     }
 
-    Value::Mapping(m)
+    Value::Object(m)
 }
 
 fn build_buffer_block(buffer: &BufferConfig) -> Value {
-    let mut m = serde_yaml_ng::Mapping::new();
-    m.insert(val("type"), val(&buffer.buffer_type));
+    let mut m = Mapping::new();
+    m.insert(key("type"), val(&buffer.buffer_type));
 
     match buffer.buffer_type.as_str() {
         "memory" => {
             if let Some(max_events) = buffer.max_events {
-                m.insert(val("max_events"), Value::Number(max_events.into()));
+                m.insert(key("max_events"), Value::Number(max_events.into()));
             }
         }
         "disk" => {
             if let Some(max_size) = buffer.max_size {
-                m.insert(val("max_size"), Value::Number(max_size.into()));
+                m.insert(key("max_size"), Value::Number(max_size.into()));
             }
         }
         _ => {}
     }
 
-    m.insert(val("when_full"), val(&buffer.when_full));
-    Value::Mapping(m)
+    m.insert(key("when_full"), val(&buffer.when_full));
+    Value::Object(m)
 }
 
 /// Normalise SASL mechanism from config format to Vector's expected format.
@@ -781,6 +777,11 @@ fn normalise_sasl_mechanism(mechanism: &str) -> String {
 /// Shorthand for creating a YAML string value.
 fn val(s: &str) -> Value {
     Value::String(s.to_string())
+}
+
+/// Shorthand for a mapping key.
+fn key(s: &str) -> String {
+    s.to_string()
 }
 
 #[cfg(test)]
@@ -866,7 +867,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_source_yaml(&source, &BridgeConfig::default());
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("dfe_source"));
         assert!(text.contains("type: kafka"));
@@ -876,13 +877,13 @@ mod tests {
         assert!(text.contains("codec: json"));
         // Production librdkafka defaults (from scalo kafka_config)
         assert!(text.contains("cooperative-sticky"));
-        assert!(text.contains("fetch.min.bytes: '1048576'"));
-        assert!(text.contains("fetch.wait.max.ms: '100'"));
-        assert!(text.contains("queued.min.messages: '20000'"));
+        assert!(text.contains("fetch.min.bytes: \"1048576\""));
+        assert!(text.contains("fetch.wait.max.ms: \"100\""));
+        assert!(text.contains("queued.min.messages: \"20000\""));
         // Overridden off the shared baseline's `false` -- see
         // SERVICE_CONSUMER_OVERRIDES.
-        assert!(text.contains("enable.auto.commit: 'true'"));
-        assert!(text.contains("statistics.interval.ms: '1000'"));
+        assert!(text.contains("enable.auto.commit: \"true\""));
+        assert!(text.contains("statistics.interval.ms: \"1000\""));
         // Removed settings — back to librdkafka defaults
         assert!(!text.contains("queued.max.messages.kbytes"));
         assert!(!text.contains("socket.receive.buffer.bytes"));
@@ -917,7 +918,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_source_yaml(&source, &BridgeConfig::default());
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("SCRAM-SHA-512"));
         assert!(text.contains("security.protocol: SASL_SSL"));
@@ -943,16 +944,15 @@ mod tests {
             sasl: credentials,
             ..Default::default()
         };
-        let text =
-            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
-                .unwrap()
-                + &serde_yaml_ng::to_string(&generate_sink_yaml(
-                    &sink,
-                    &BridgeConfig::default(),
-                    &["src".into()],
-                    true,
-                ))
-                .unwrap();
+        let text = scalo::yaml::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+            .unwrap()
+            + &scalo::yaml::to_string(&generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+            ))
+            .unwrap();
 
         assert!(!text.contains("kafka-pass"), "a password leaked: {text}");
         assert!(!text.contains("kafka-user"), "a username leaked: {text}");
@@ -976,16 +976,15 @@ mod tests {
             },
             ..Default::default()
         };
-        let text =
-            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
-                .unwrap();
+        let text = scalo::yaml::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+            .unwrap();
         assert!(text.contains("username: SECRET[dfe_source_sasl.username]"));
         assert!(text.contains("password: SECRET[dfe_source_sasl.password]"));
     }
 
     #[test]
     fn the_producer_is_idempotent() {
-        let text = serde_yaml_ng::to_string(&generate_sink_yaml(
+        let text = scalo::yaml::to_string(&generate_sink_yaml(
             &SinkConfig::default(),
             &BridgeConfig::default(),
             &["src".into()],
@@ -993,7 +992,7 @@ mod tests {
         ))
         .unwrap();
         assert!(
-            text.contains("enable.idempotence: 'true'"),
+            text.contains("enable.idempotence: \"true\""),
             "an unlimited retry on a non-idempotent producer reorders and duplicates: {text}"
         );
     }
@@ -1003,14 +1002,14 @@ mod tests {
         let mut sink = SinkConfig::default();
         sink.librdkafka_options
             .insert("enable.idempotence".into(), "false".into());
-        let text = serde_yaml_ng::to_string(&generate_sink_yaml(
+        let text = scalo::yaml::to_string(&generate_sink_yaml(
             &sink,
             &BridgeConfig::default(),
             &["src".into()],
             true,
         ))
         .unwrap();
-        assert!(text.contains("enable.idempotence: 'false'"));
+        assert!(text.contains("enable.idempotence: \"false\""));
     }
 
     /// scalo's pipeline-wide record ceiling, which every other stage's producer
@@ -1050,7 +1049,7 @@ mod tests {
             .get("sinks")
             .and_then(|s| s.get(SINK_LABEL))
             .and_then(|s| s.get("inputs"))
-            .and_then(Value::as_sequence)
+            .and_then(Value::as_array)
             .expect("sink inputs");
         assert_eq!(sink_inputs, &vec![val(SIZE_CAP_LABEL)]);
 
@@ -1060,7 +1059,7 @@ mod tests {
             .expect("the size cap transform");
         assert_eq!(cap.get("type").and_then(Value::as_str), Some("filter"));
         assert_eq!(
-            cap.get("inputs").and_then(Value::as_sequence),
+            cap.get("inputs").and_then(Value::as_array),
             Some(&vec![val("last")])
         );
     }
@@ -1192,10 +1191,10 @@ mod tests {
             .insert("custom.option".into(), "value".into());
 
         let yaml = generate_source_yaml(&source, &BridgeConfig::default());
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         // User override replaces default
-        assert!(text.contains("fetch.max.bytes: '52428800'"));
+        assert!(text.contains("fetch.max.bytes: \"52428800\""));
         // Custom option included
         assert!(text.contains("custom.option: value"));
     }
@@ -1203,15 +1202,14 @@ mod tests {
     #[test]
     fn source_commits_offsets_and_says_how_often() {
         let source = SourceConfig::default();
-        let text =
-            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
-                .unwrap();
+        let text = scalo::yaml::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+            .unwrap();
 
         // A commit interval with auto-commit off arms no timer, so the interval
         // is inert and lag stops moving between rebalances.
-        assert!(text.contains("enable.auto.commit: 'true'"));
+        assert!(text.contains("enable.auto.commit: \"true\""));
         assert!(text.contains("commit_interval_ms: 5000"));
-        assert!(!text.contains("enable.auto.commit: 'false'"));
+        assert!(!text.contains("enable.auto.commit: \"false\""));
     }
 
     #[test]
@@ -1221,11 +1219,10 @@ mod tests {
             .librdkafka_options
             .insert("enable.auto.commit".into(), "false".into());
 
-        let text =
-            serde_yaml_ng::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
-                .unwrap();
+        let text = scalo::yaml::to_string(&generate_source_yaml(&source, &BridgeConfig::default()))
+            .unwrap();
 
-        assert!(text.contains("enable.auto.commit: 'false'"));
+        assert!(text.contains("enable.auto.commit: \"false\""));
     }
 
     #[test]
@@ -1239,13 +1236,13 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_source_yaml(&source, &BridgeConfig::default());
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         // Vector TLS block
         assert!(text.contains("verify_certificate: false"));
         assert!(text.contains("verify_hostname: false"));
         // librdkafka option
-        assert!(text.contains("enable.ssl.certificate.verification: 'false'"));
+        assert!(text.contains("enable.ssl.certificate.verification: \"false\""));
     }
 
     #[test]
@@ -1259,13 +1256,13 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         // Vector TLS block
         assert!(text.contains("verify_certificate: false"));
         assert!(text.contains("verify_hostname: false"));
         // librdkafka option
-        assert!(text.contains("enable.ssl.certificate.verification: 'false'"));
+        assert!(text.contains("enable.ssl.certificate.verification: \"false\""));
     }
 
     #[test]
@@ -1284,7 +1281,7 @@ mod tests {
             &["last_transform".into()],
             true,
         );
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("dfe_sink"));
         assert!(text.contains("type: kafka"));
@@ -1294,17 +1291,17 @@ mod tests {
         assert!(text.contains("codec: json"));
         assert!(text.contains("compression: zstd"));
         // Production librdkafka defaults (from scalo kafka_config)
-        assert!(text.contains("linger.ms: '100'"));
+        assert!(text.contains("linger.ms: \"100\""));
         assert!(text.contains("compression.type: zstd"));
-        assert!(text.contains("socket.nagle.disable: 'true'"));
-        assert!(text.contains("statistics.interval.ms: '1000'"));
+        assert!(text.contains("socket.nagle.disable: \"true\""));
+        assert!(text.contains("statistics.interval.ms: \"1000\""));
         // Service-specific override: producer queue cap
-        assert!(text.contains("queue.buffering.max.kbytes: '262144'"));
+        assert!(text.contains("queue.buffering.max.kbytes: \"262144\""));
         // Removed settings — back to librdkafka defaults
         assert!(!text.contains("batch.size"));
         assert!(!text.contains("batch.num.messages"));
         // The pipeline's record ceiling, not librdkafka's 1,000,000 default.
-        assert!(text.contains(&format!("message.max.bytes: '{}'", pipeline_ceiling())));
+        assert!(text.contains(&format!("message.max.bytes: \"{}\"", pipeline_ceiling())));
         // Acknowledgements on sink
         assert!(text.contains("acknowledgements:"));
         // Healthcheck
@@ -1331,7 +1328,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: memory"));
         assert!(text.contains("max_events: 1000"));
@@ -1350,7 +1347,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: disk"));
         assert!(text.contains("max_size: 268435488"));
@@ -1368,7 +1365,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("max_events: 5000"));
         assert!(text.contains("max_bytes: 8388608"));
@@ -1409,7 +1406,7 @@ mod tests {
             ..Default::default()
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         // Vector-level compression omitted
         assert!(!text.contains("\n    compression:"));
@@ -1420,7 +1417,7 @@ mod tests {
     #[test]
     fn observability_yaml() {
         let yaml = generate_observability_yaml("127.0.0.1:9598");
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("internal_metrics"));
         assert!(text.contains("prometheus_exporter"));
@@ -1430,7 +1427,7 @@ mod tests {
     #[test]
     fn observability_yaml_honours_configured_address() {
         let yaml = generate_observability_yaml("127.0.0.1:19598");
-        let text = serde_yaml_ng::to_string(&yaml).unwrap();
+        let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("127.0.0.1:19598"));
         assert!(!text.contains(":9598"), "hardcoded default leaked: {text}");
@@ -1545,7 +1542,7 @@ mod tests {
     /// floor client, including the hostname check scalo reads from raw maps.
     #[test]
     fn a_vector_kafka_component_maps_onto_the_floor_client() {
-        let component: Value = serde_yaml_ng::from_str(
+        let component: Value = scalo::yaml::from_str(
             r#"
 type: kafka
 bootstrap_servers: "kafka-1:9093, kafka-2:9093"
@@ -1561,6 +1558,8 @@ librdkafka_options:
   socket.keepalive.enable: true
   queue.buffering.max.ms: 5
 "#,
+            "generated.yaml",
+            scalo::yaml::Profile::Trusted,
         )
         .unwrap();
 
@@ -1587,8 +1586,12 @@ librdkafka_options:
     /// A component with no security blocks is what librdkafka runs by default.
     #[test]
     fn a_bare_vector_kafka_component_is_plaintext() {
-        let component: Value =
-            serde_yaml_ng::from_str("type: kafka\nbootstrap_servers: kafka:9092\n").unwrap();
+        let component: Value = scalo::yaml::from_str(
+            "type: kafka\nbootstrap_servers: kafka:9092\n",
+            "generated.yaml",
+            scalo::yaml::Profile::Trusted,
+        )
+        .unwrap();
 
         let client = vector_kafka_client_config(&component);
 

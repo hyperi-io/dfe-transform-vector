@@ -149,7 +149,7 @@ fn write_transform(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).expect("create the transforms dir");
     std::fs::write(
         dir.join("01_filebeat.yaml"),
-        serde_yaml_ng::to_string(&doc).expect("transform serialises"),
+        scalo::yaml::to_string(&doc).expect("transform serialises"),
     )
     .expect("write the transform file");
 }

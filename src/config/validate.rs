@@ -262,7 +262,7 @@ pub fn assembled_config_uses_disk_buffer(config_dir: &Path) -> bool {
 /// Every YAML document in the assembled directory, with the file it came from.
 ///
 /// A file that cannot be read or parsed is left out: `vector validate` reports it.
-fn assembled_documents(config_dir: &Path) -> Vec<(PathBuf, serde_yaml_ng::Value)> {
+fn assembled_documents(config_dir: &Path) -> Vec<(PathBuf, serde_json::Value)> {
     let Ok(entries) = std::fs::read_dir(config_dir) else {
         return Vec::new();
     };
@@ -271,8 +271,7 @@ fn assembled_documents(config_dir: &Path) -> Vec<(PathBuf, serde_yaml_ng::Value)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|e| e == "yaml" || e == "yml"))
         .filter_map(|path| {
-            let text = std::fs::read_to_string(&path).ok()?;
-            let value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text).ok()?;
+            let value = scalo::yaml::from_path(&path, scalo::yaml::Profile::Config).ok()?;
             Some((path, value))
         })
         .collect()
@@ -312,7 +311,7 @@ pub fn unreadable_enrichment_tables(config_dir: &Path) -> Vec<UnreadableTable> {
     for (_, document) in assembled_documents(config_dir) {
         let Some(tables) = document
             .get("enrichment_tables")
-            .and_then(serde_yaml_ng::Value::as_mapping)
+            .and_then(serde_json::Value::as_object)
         else {
             continue;
         };
@@ -322,7 +321,7 @@ pub fn unreadable_enrichment_tables(config_dir: &Path) -> Vec<UnreadableTable> {
             };
             if let Some(reason) = unreadable_file(Path::new(path)) {
                 unreadable.push(UnreadableTable {
-                    name: name.as_str().unwrap_or_default().to_string(),
+                    name: name.clone(),
                     path: PathBuf::from(path),
                     reason,
                 });
@@ -333,8 +332,8 @@ pub fn unreadable_enrichment_tables(config_dir: &Path) -> Vec<UnreadableTable> {
 }
 
 /// The file an enrichment table loads, for the table types that load one.
-fn enrichment_table_file(table: &serde_yaml_ng::Value) -> Option<&str> {
-    use serde_yaml_ng::Value;
+fn enrichment_table_file(table: &serde_json::Value) -> Option<&str> {
+    use serde_json::Value;
 
     match table.get("type").and_then(Value::as_str)? {
         "file" => table.get("file")?.get("path")?.as_str(),
@@ -372,8 +371,8 @@ async fn check_enrichment_tables(config_dir: &Path) -> Result<()> {
 ///
 /// Vector accepts `buffer` as either a mapping or a list of them (buffer
 /// stages), so both shapes are checked.
-fn yaml_declares_disk_buffer(value: &serde_yaml_ng::Value) -> bool {
-    use serde_yaml_ng::Value;
+fn yaml_declares_disk_buffer(value: &serde_json::Value) -> bool {
+    use serde_json::Value;
 
     let is_disk = |v: &Value| {
         v.get("type")
@@ -382,11 +381,11 @@ fn yaml_declares_disk_buffer(value: &serde_yaml_ng::Value) -> bool {
     };
 
     match value {
-        Value::Mapping(map) => {
+        Value::Object(map) => {
             for (k, v) in map {
-                if k.as_str() == Some("buffer") {
+                if k == "buffer" {
                     match v {
-                        Value::Sequence(stages) => {
+                        Value::Array(stages) => {
                             if stages.iter().any(is_disk) {
                                 return true;
                             }
@@ -404,7 +403,7 @@ fn yaml_declares_disk_buffer(value: &serde_yaml_ng::Value) -> bool {
             }
             false
         }
-        Value::Sequence(seq) => seq.iter().any(yaml_declares_disk_buffer),
+        Value::Array(seq) => seq.iter().any(yaml_declares_disk_buffer),
         _ => false,
     }
 }

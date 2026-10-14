@@ -156,12 +156,14 @@ fn the_assembled_exporter_binds_the_configured_address() {
 
     let observability =
         std::fs::read_to_string(out.path().join("99_observability.yaml")).expect("read");
-    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&observability).expect("parse");
+    let parsed: serde_json::Value =
+        scalo::yaml::from_str(&observability, "config.yaml", scalo::yaml::Profile::Config)
+            .expect("parse");
     let address = parsed
         .get("sinks")
         .and_then(|s| s.get("prometheus_exporter"))
         .and_then(|e| e.get("address"))
-        .and_then(serde_yaml_ng::Value::as_str);
+        .and_then(serde_json::Value::as_str);
     assert_eq!(
         address,
         Some("127.0.0.1:19598"),

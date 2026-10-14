@@ -99,9 +99,9 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
 }
 
 /// Write a YAML value to a file in the output directory.
-fn write_yaml(dir: &Path, filename: &str, value: &serde_yaml_ng::Value) -> Result<()> {
+fn write_yaml(dir: &Path, filename: &str, value: &serde_json::Value) -> Result<()> {
     let path = dir.join(filename);
-    let content = serde_yaml_ng::to_string(value)?;
+    let content = scalo::yaml::to_string(value)?;
     std::fs::write(&path, content)?;
     debug!(path = %path.display(), "wrote config file");
     Ok(())
@@ -144,7 +144,7 @@ fn write_transforms(
             .unwrap_or("transform.yaml");
 
         let filename = format!("50_{:03}_{original_name}", i);
-        let content = serde_yaml_ng::to_string(&yaml)?;
+        let content = scalo::yaml::to_string(&yaml)?;
         let path = dir.join(&filename);
         std::fs::write(&path, &content)?;
         debug!(path = %path.display(), "wrote transform file");
@@ -155,29 +155,23 @@ fn write_transforms(
 
 /// Inject auto-wired `inputs` into transform components that lack them.
 fn inject_wired_inputs(
-    yaml: &mut serde_yaml_ng::Value,
+    yaml: &mut serde_json::Value,
     wired_inputs: &std::collections::HashMap<&str, &[String]>,
 ) {
-    use serde_yaml_ng::Value;
+    use serde_json::Value;
 
-    let transforms_key = Value::String("transforms".to_string());
-    let inputs_key = Value::String("inputs".to_string());
+    const INPUTS_KEY: &str = "inputs";
 
-    if let Some(Value::Mapping(entries)) = yaml.get_mut(&transforms_key) {
-        for (label_val, component_val) in entries.iter_mut() {
-            let label = match label_val.as_str() {
-                Some(s) => s,
-                None => continue,
-            };
-
-            if let Some(inputs) = wired_inputs.get(label)
-                && let Value::Mapping(component_map) = component_val
-                && !component_map.contains_key(&inputs_key)
+    if let Some(Value::Object(entries)) = yaml.get_mut("transforms") {
+        for (label, component_val) in entries.iter_mut() {
+            if let Some(inputs) = wired_inputs.get(label.as_str())
+                && let Value::Object(component_map) = component_val
+                && !component_map.contains_key(INPUTS_KEY)
             {
                 let inputs_val =
-                    Value::Sequence(inputs.iter().map(|s| Value::String(s.clone())).collect());
-                component_map.insert(inputs_key.clone(), inputs_val);
-                debug!(label, "injected auto-wired inputs into transform");
+                    Value::Array(inputs.iter().map(|s| Value::String(s.clone())).collect());
+                component_map.insert(INPUTS_KEY.to_string(), inputs_val);
+                debug!(label = %label, "injected auto-wired inputs into transform");
             }
         }
     }

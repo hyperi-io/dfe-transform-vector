@@ -48,7 +48,12 @@ fn load_central_profiles() -> Option<CentralProfiles> {
         }
     };
 
-    let raw: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&content) {
+    let origin = path.display().to_string();
+    let raw: serde_json::Value = match scalo::yaml::from_str(
+        &content,
+        &origin,
+        scalo::yaml::Profile::Config,
+    ) {
         Ok(v) => v,
         Err(e) => {
             warn!(path = %path.display(), error = %e, "Failed to parse central librdkafka config, using scalo defaults");
@@ -58,23 +63,23 @@ fn load_central_profiles() -> Option<CentralProfiles> {
 
     let mut profiles = CentralProfiles::default();
 
-    if let Some(consumer) = raw.get("consumer").and_then(|v| v.as_mapping()) {
+    if let Some(consumer) = raw.get("consumer").and_then(serde_json::Value::as_object) {
         for (name, settings) in consumer {
-            if let (Some(name), Some(settings)) = (name.as_str(), settings.as_mapping()) {
+            if let Some(settings) = settings.as_object() {
                 let map = parse_profile_map(settings);
                 if !map.is_empty() {
-                    profiles.consumer.insert(name.to_string(), map);
+                    profiles.consumer.insert(name.clone(), map);
                 }
             }
         }
     }
 
-    if let Some(producer) = raw.get("producer").and_then(|v| v.as_mapping()) {
+    if let Some(producer) = raw.get("producer").and_then(serde_json::Value::as_object) {
         for (name, settings) in producer {
-            if let (Some(name), Some(settings)) = (name.as_str(), settings.as_mapping()) {
+            if let Some(settings) = settings.as_object() {
                 let map = parse_profile_map(settings);
                 if !map.is_empty() {
-                    profiles.producer.insert(name.to_string(), map);
+                    profiles.producer.insert(name.clone(), map);
                 }
             }
         }
@@ -91,18 +96,18 @@ fn load_central_profiles() -> Option<CentralProfiles> {
 }
 
 /// Parse a YAML mapping of string key-value pairs into a HashMap.
-fn parse_profile_map(mapping: &serde_yaml_ng::Mapping) -> HashMap<String, String> {
+fn parse_profile_map(
+    mapping: &serde_json::Map<String, serde_json::Value>,
+) -> HashMap<String, String> {
     let mut map = HashMap::with_capacity(mapping.len());
-    for (k, v) in mapping {
-        if let Some(key) = k.as_str() {
-            let value = match v {
-                serde_yaml_ng::Value::String(s) => s.clone(),
-                serde_yaml_ng::Value::Bool(b) => b.to_string(),
-                serde_yaml_ng::Value::Number(n) => n.to_string(),
-                _ => continue,
-            };
-            map.insert(key.to_string(), value);
-        }
+    for (key, v) in mapping {
+        let value = match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        map.insert(key.clone(), value);
     }
     map
 }
@@ -268,19 +273,10 @@ mod tests {
 
     #[test]
     fn parse_profile_map_handles_types() {
-        let mut mapping = serde_yaml_ng::Mapping::new();
-        mapping.insert(
-            serde_yaml_ng::Value::String("key1".into()),
-            serde_yaml_ng::Value::String("value1".into()),
-        );
-        mapping.insert(
-            serde_yaml_ng::Value::String("key2".into()),
-            serde_yaml_ng::Value::Bool(true),
-        );
-        mapping.insert(
-            serde_yaml_ng::Value::String("key3".into()),
-            serde_yaml_ng::Value::Number(42.into()),
-        );
+        let mut mapping = serde_json::Map::new();
+        mapping.insert("key1".into(), serde_json::Value::String("value1".into()));
+        mapping.insert("key2".into(), serde_json::Value::Bool(true));
+        mapping.insert("key3".into(), serde_json::Value::Number(42.into()));
 
         let map = parse_profile_map(&mapping);
         assert_eq!(map["key1"], "value1");
