@@ -61,22 +61,24 @@ fn contract_produces_valid_structure() {
     assert!(keda.min_replicas >= 1);
     assert!(keda.max_replicas > keda.min_replicas);
 
-    // One required Kafka Secret, mounted into both endpoints' SASL names.
+    // One required Kafka Secret, mounted into both endpoints' SASL names, and
+    // its broker's mechanism into the one name both endpoints read.
     assert_eq!(c.secrets.len(), 1, "one Kafka secret group");
     assert_eq!(c.secrets[0].group_name, "kafka");
     assert!(!c.secrets[0].optional);
-    let env_vars: Vec<&str> = c.secrets[0]
+    let env_vars: Vec<(&str, &str)> = c.secrets[0]
         .env_vars
         .iter()
-        .map(|s| s.env_var.as_str())
+        .map(|s| (s.env_var.as_str(), s.secret_key.as_str()))
         .collect();
     assert_eq!(
         env_vars,
         [
-            "DFE_TRANSFORM_SOURCE_SASL_USERNAME",
-            "DFE_TRANSFORM_SOURCE_SASL_PASSWORD",
-            "DFE_TRANSFORM_SINK_SASL_USERNAME",
-            "DFE_TRANSFORM_SINK_SASL_PASSWORD",
+            ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", "username"),
+            ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", "password"),
+            ("DFE_TRANSFORM_SINK_SASL_USERNAME", "username"),
+            ("DFE_TRANSFORM_SINK_SASL_PASSWORD", "password"),
+            ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", "sasl.mechanism"),
         ]
     );
 
@@ -92,6 +94,7 @@ fn contract_produces_valid_structure() {
 ///
 /// Each name spells the field it fills -- `DFE_TRANSFORM_SINK_SASL_PASSWORD` is
 /// `sink.sasl.password` -- so a name read into the other endpoint fails here too.
+/// A shared `KAFKA_SASL_*` name spells the field on both.
 #[test]
 fn every_contract_secret_env_var_reaches_the_config() {
     use dfe_transform_vector::config::loader::Config;
@@ -105,7 +108,16 @@ fn every_contract_secret_env_var_reaches_the_config() {
                 .env_var
                 .strip_prefix(&format!("{prefix}_"))
                 .unwrap_or_else(|| panic!("{} lacks the {prefix} prefix", env.env_var));
-            let pointer = format!("/{}", field.to_ascii_lowercase().replace('_', "/"));
+            let path = |field: &str| field.to_ascii_lowercase().replace('_', "/");
+            let pointers: Vec<String> = field.strip_prefix("KAFKA_").map_or_else(
+                || vec![format!("/{}", path(field))],
+                |shared| {
+                    ["source", "sink"]
+                        .iter()
+                        .map(|endpoint| format!("/{endpoint}/{}", path(shared)))
+                        .collect()
+                },
+            );
 
             let sentinel = format!("sentinel-{}", env.key_name);
             let config = with_vars(&[(env.env_var.as_str(), Some(sentinel.as_str()))], || {
@@ -115,10 +127,10 @@ fn every_contract_secret_env_var_reaches_the_config() {
             });
 
             let applied = serde_json::to_value(&config).expect("config serialises");
-            let reached = applied
-                .pointer(&pointer)
-                .and_then(serde_json::Value::as_str)
-                == Some(sentinel.as_str());
+            let reached = pointers.iter().all(|pointer| {
+                applied.pointer(pointer).and_then(serde_json::Value::as_str)
+                    == Some(sentinel.as_str())
+            });
             // The message carries the env var and group names only, never a value.
             assert!(
                 reached,
@@ -261,11 +273,19 @@ fn the_contract_default_config_is_one_the_app_accepts() {
     let mut config: Config = serde_json::from_value(default_config)
         .expect("the contract's default config must deserialise into the app's Config");
 
+    // The Secret's mechanism is a librdkafka name, as the kafka chart writes it.
     let mounted: Vec<(&str, Option<&str>)> = c
         .secrets
         .iter()
         .flat_map(|group| &group.env_vars)
-        .map(|env| (env.env_var.as_str(), Some("from-the-secret")))
+        .map(|env| {
+            let value = if env.secret_key == "sasl.mechanism" {
+                "SCRAM-SHA-512"
+            } else {
+                "from-the-secret"
+            };
+            (env.env_var.as_str(), Some(value))
+        })
         .collect();
     with_vars(&mounted, || {
         config.apply_flat_env(&c.env_prefix);

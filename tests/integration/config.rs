@@ -542,6 +542,107 @@ fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
     assert!(config.sink.tls.enabled, "sink TLS was switched off");
 }
 
+/// `full_config` through the flat env layer with
+/// `DFE_TRANSFORM_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`),
+/// plus any other names in `extra`.
+fn with_secret_mechanism(mechanism: Option<&str>, extra: &[(&str, Option<&str>)]) -> Config {
+    use scalo::config::flat_env::ApplyFlatEnv;
+
+    let mut vars = vec![("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", mechanism)];
+    vars.extend_from_slice(extra);
+    with_vars(&vars, || {
+        let mut config = full_config(None);
+        config.apply_flat_env("DFE_TRANSFORM");
+        config
+    })
+}
+
+/// The Kafka source and sink as written into the Vector config.
+fn written_kafka_components(config: &Config) -> (String, String) {
+    use dfe_transform_vector::config::generate;
+
+    let source = generate::generate_source_yaml(&config.source, &config.bridge);
+    let sink = generate::generate_sink_yaml(&config.sink, &config.bridge, &["t".into()], true);
+    (
+        scalo::yaml::to_string(&source).unwrap(),
+        scalo::yaml::to_string(&sink).unwrap(),
+    )
+}
+
+/// The Kafka Secret carries the broker's mechanism in librdkafka's spelling,
+/// and both Vector components must dial with it. Confluent Cloud serves PLAIN
+/// alone, so a client left on the SCRAM default never joins.
+#[test]
+fn the_secret_mechanism_reaches_both_components_in_every_spelling() {
+    for (given, written) in [
+        ("PLAIN", "PLAIN"),
+        ("SCRAM-SHA-256", "SCRAM-SHA-256"),
+        ("SCRAM-SHA-512", "SCRAM-SHA-512"),
+        ("plain", "PLAIN"),
+        ("scram_sha_256", "SCRAM-SHA-256"),
+    ] {
+        let config = with_secret_mechanism(Some(given), &[]);
+
+        assert_eq!(config.source.sasl.mechanism, given);
+        assert_eq!(config.sink.sasl.mechanism, given);
+        config
+            .validate()
+            .unwrap_or_else(|e| panic!("{given}: refused at startup: {e}"));
+        let (source, sink) = written_kafka_components(&config);
+        for (side, text) in [("source", &source), ("sink", &sink)] {
+            assert!(
+                text.contains(&format!("sasl.mechanism: {written}"))
+                    && text.contains(&format!("mechanism: {written}")),
+                "{given}: the {side} is not written with {written}:\n{text}"
+            );
+        }
+    }
+}
+
+/// No mechanism in the env, or the empty one a plaintext broker's Secret
+/// carries, leaves both components on the built-in SCRAM-SHA-512.
+#[test]
+fn an_absent_or_empty_secret_mechanism_keeps_the_default() {
+    for mechanism in [None, Some("")] {
+        let config = with_secret_mechanism(mechanism, &[]);
+
+        assert_eq!(config.source.sasl.mechanism, "scram_sha_512");
+        assert_eq!(config.sink.sasl.mechanism, "scram_sha_512");
+        config.validate().expect("the default validates");
+        let (source, sink) = written_kafka_components(&config);
+        assert!(source.contains("sasl.mechanism: SCRAM-SHA-512"), "{source}");
+        assert!(sink.contains("sasl.mechanism: SCRAM-SHA-512"), "{sink}");
+    }
+}
+
+/// A mechanism the transform cannot authenticate with stops startup rather
+/// than reaching Vector.
+#[test]
+fn an_unknown_secret_mechanism_is_refused_at_startup() {
+    for mechanism in ["GSSAPI", "OAUTHBEARER", "SCRAM-SHA-1"] {
+        let err = with_secret_mechanism(Some(mechanism), &[])
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("source.sasl.mechanism") && err.contains(mechanism),
+            "{mechanism}: expected the key and the value in the error, got: {err}"
+        );
+    }
+}
+
+/// Two clusters: the endpoint's own name outranks the Secret's shared one.
+#[test]
+fn a_per_endpoint_mechanism_overrides_the_secret_one() {
+    let config = with_secret_mechanism(
+        Some("PLAIN"),
+        &[("DFE_TRANSFORM_SINK_SASL_MECHANISM", Some("scram_sha_256"))],
+    );
+
+    assert_eq!(config.source.sasl.mechanism, "PLAIN");
+    assert_eq!(config.sink.sasl.mechanism, "scram_sha_256");
+}
+
 /// `config-check` run by the binary from `dir`, returning what it printed.
 fn config_check_in(dir: &std::path::Path) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
@@ -989,7 +1090,14 @@ fn config_validation_accepts_all_valid_compressions() {
 
 #[test]
 fn config_validation_accepts_all_valid_sasl_mechanisms() {
-    for mech in &["plain", "scram_sha_256", "scram_sha_512"] {
+    for mech in &[
+        "plain",
+        "scram_sha_256",
+        "scram_sha_512",
+        "PLAIN",
+        "SCRAM-SHA-256",
+        "SCRAM-SHA-512",
+    ] {
         let mut config = full_config(None);
         config.source.sasl.mechanism = (*mech).into();
         config.source.sasl.enabled = true;
