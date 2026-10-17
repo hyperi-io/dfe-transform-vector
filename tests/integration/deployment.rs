@@ -127,16 +127,16 @@ fn every_contract_secret_env_var_reaches_the_config() {
             });
 
             let applied = serde_json::to_value(&config).expect("config serialises");
-            for pointer in &pointers {
-                let reached = applied.pointer(pointer).and_then(serde_json::Value::as_str)
-                    == Some(sentinel.as_str());
-                // The message carries the env var, group and field names only, never a value.
-                assert!(
-                    reached,
-                    "{} ({}) was set and {pointer}, a field its name spells, did not read it",
-                    env.env_var, group.group_name
-                );
-            }
+            let reached = pointers.iter().all(|pointer| {
+                applied.pointer(pointer).and_then(serde_json::Value::as_str)
+                    == Some(sentinel.as_str())
+            });
+            // The message carries the env var and group names only, never a value.
+            assert!(
+                reached,
+                "{} ({}) was set and the config field its name spells did not read it",
+                env.env_var, group.group_name
+            );
         }
     }
 }
