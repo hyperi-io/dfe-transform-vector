@@ -40,7 +40,8 @@ use crate::Result;
 pub struct SaslConfig {
     /// Enable SASL authentication.
     pub enabled: bool,
-    /// SASL mechanism: plain, scram_sha_256, scram_sha_512.
+    /// SASL mechanism: plain, scram_sha_256, scram_sha_512, or librdkafka's
+    /// PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, in any case.
     pub mechanism: String,
     /// SASL username. Leave empty when `secret_dir` supplies it.
     pub username: String,
@@ -85,6 +86,42 @@ impl std::fmt::Debug for SaslConfig {
             .field("password", &password)
             .field("secret_dir", &self.secret_dir)
             .finish()
+    }
+}
+
+/// A SASL mechanism the Kafka clients authenticate with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaslMechanism {
+    /// PLAIN, which rides TLS only.
+    Plain,
+    /// SCRAM-SHA-256.
+    ScramSha256,
+    /// SCRAM-SHA-512.
+    ScramSha512,
+}
+
+impl SaslMechanism {
+    /// Read this config's spelling (`scram_sha_512`) or librdkafka's
+    /// (`SCRAM-SHA-512`), in any case, or `None` for a mechanism the transform
+    /// cannot authenticate with.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "plain" => Some(Self::Plain),
+            "scram_sha_256" => Some(Self::ScramSha256),
+            "scram_sha_512" => Some(Self::ScramSha512),
+            _ => None,
+        }
+    }
+
+    /// The name librdkafka, and so Vector, takes in `sasl.mechanism`.
+    #[must_use]
+    pub const fn as_librdkafka(self) -> &'static str {
+        match self {
+            Self::Plain => "PLAIN",
+            Self::ScramSha256 => "SCRAM-SHA-256",
+            Self::ScramSha512 => "SCRAM-SHA-512",
+        }
     }
 }
 
@@ -719,6 +756,13 @@ impl ApplyFlatEnv for Config {
             self.sink.tls.enabled = true;
         }
 
+        // The chart mounts it from the credential's Secret in librdkafka's
+        // spelling. The per-endpoint names below override it.
+        if let Some(v) = flat_env::flat_env_string(prefix, "KAFKA_SASL_MECHANISM") {
+            self.source.sasl.mechanism.clone_from(&v);
+            self.sink.sasl.mechanism = v;
+        }
+
         // Source
         if let Some(v) = flat_env::flat_env_string(prefix, "SOURCE_TRANSPORT") {
             self.source.transport = parse_transport(&v, self.source.transport);
@@ -1285,11 +1329,11 @@ impl Config {
         if !sasl.enabled {
             return Ok(());
         }
-        let valid_mechanisms = ["plain", "scram_sha_256", "scram_sha_512"];
-        if !valid_mechanisms.contains(&sasl.mechanism.as_str()) {
+        if SaslMechanism::parse(&sasl.mechanism).is_none() {
             return Err(crate::Error::Validation(format!(
-                "{prefix}.mechanism must be one of: {}",
-                valid_mechanisms.join(", ")
+                "{prefix}.mechanism must be one of: plain, scram_sha_256, scram_sha_512 \
+                 (or PLAIN, SCRAM-SHA-256, SCRAM-SHA-512), got '{}'",
+                sasl.mechanism
             )));
         }
         // Vector expands no `${VAR}`, so a placeholder would reach the broker

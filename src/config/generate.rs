@@ -763,15 +763,14 @@ fn build_buffer_block(buffer: &BufferConfig) -> Value {
 
 /// Normalise SASL mechanism from config format to Vector's expected format.
 ///
-/// Config uses lowercase with underscores (e.g., `scram_sha_512`).
-/// Vector expects uppercase with hyphens (e.g., `SCRAM-SHA-512`).
+/// Config takes `scram_sha_512` or librdkafka's `SCRAM-SHA-512`, and Vector
+/// expects the latter. A name this app does not authenticate with, as a user's
+/// own Vector component may carry, is upper-cased with hyphens.
 fn normalise_sasl_mechanism(mechanism: &str) -> String {
-    match mechanism {
-        "plain" => "PLAIN".to_string(),
-        "scram_sha_256" => "SCRAM-SHA-256".to_string(),
-        "scram_sha_512" => "SCRAM-SHA-512".to_string(),
-        other => other.to_uppercase().replace('_', "-"),
-    }
+    super::loader::SaslMechanism::parse(mechanism).map_or_else(
+        || mechanism.to_uppercase().replace('_', "-"),
+        |known| known.as_librdkafka().to_string(),
+    )
 }
 
 /// Shorthand for creating a YAML string value.
@@ -1455,6 +1454,21 @@ mod tests {
         assert_eq!(normalise_sasl_mechanism("plain"), "PLAIN");
         assert_eq!(normalise_sasl_mechanism("scram_sha_256"), "SCRAM-SHA-256");
         assert_eq!(normalise_sasl_mechanism("scram_sha_512"), "SCRAM-SHA-512");
+    }
+
+    /// The Kafka Secret's spelling reaches Vector as librdkafka's own name,
+    /// padded or in either case.
+    #[test]
+    fn librdkafka_mechanism_spellings_are_written_as_librdkafka_names() {
+        for (given, written) in [
+            ("PLAIN", "PLAIN"),
+            ("SCRAM-SHA-256", "SCRAM-SHA-256"),
+            ("SCRAM-SHA-512", "SCRAM-SHA-512"),
+            ("scram-sha-512", "SCRAM-SHA-512"),
+            (" PLAIN ", "PLAIN"),
+        ] {
+            assert_eq!(normalise_sasl_mechanism(given), written, "{given:?}");
+        }
     }
 
     /// The security floor judges the client Vector runs, so the protocol and

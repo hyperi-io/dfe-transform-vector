@@ -323,7 +323,9 @@ $defs:
         type: boolean
         default: false
       mechanism:
-        description: "SASL mechanism: plain, scram_sha_256, scram_sha_512."
+        description: |-
+          SASL mechanism: plain, scram_sha_256, scram_sha_512, or librdkafka's
+          PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, in any case.
         type: string
         default: scram_sha_512
       username:
