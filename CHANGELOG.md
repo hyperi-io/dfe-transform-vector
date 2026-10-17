@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.52](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.51...v1.0.52) (2026-10-17)
+
+### Bug Fixes
+
+* **deps:** update Rust crate tokio-util to >=0.7.20, <0.8 ([#121](https://github.com/hyperi-io/dfe-transform-vector/issues/121)) ([41d6c85](https://github.com/hyperi-io/dfe-transform-vector/commit/41d6c85566593779b22e8bd1b63f758d1650bff5))
+* read the Kafka SASL mechanism from env ([#122](https://github.com/hyperi-io/dfe-transform-vector/issues/122)) ([e953fbb](https://github.com/hyperi-io/dfe-transform-vector/commit/e953fbbb6f350ee170fdeb3a1df3652214636eb0))
+* rebuild on scalo 2.14.17 ([7998926](https://github.com/hyperi-io/dfe-transform-vector/commit/79989267b3bcd295551e150dea5cdc7ab051c6cc))
+
 ## [1.0.51](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.50...v1.0.51) (2026-10-15)
 
 ### Bug Fixes
