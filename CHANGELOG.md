@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.53](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.52...v1.0.53) (2026-10-20)
+
+### Bug Fixes
+
+* accept grpc and kafka as transport names ([#125](https://github.com/hyperi-io/dfe-transform-vector/issues/125)) ([2d1faec](https://github.com/hyperi-io/dfe-transform-vector/commit/2d1faec4b8ba835474bc92fb0a44d49cbd88c356))
+
 ## [1.0.52](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.51...v1.0.52) (2026-10-17)
 
 ### Bug Fixes
