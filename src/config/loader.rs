@@ -250,17 +250,45 @@ impl PipelineConfig {
 ///
 /// One deployment runs one of them: `bus` is a broker between the stages,
 /// `direct` is gRPC between them and needs no broker at all. The record and the
-/// transform are identical either way -- only who hands the record over changes.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+/// transform are identical either way. Only who hands the record over changes.
+/// `kafka` and `grpc` read as the same two, the names the other DFE stages use,
+/// and a config always writes `bus` and `direct` back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
     /// Kafka topics.
     #[default]
+    #[serde(alias = "kafka")]
     Bus,
     /// A scalo Push listener (source) or client (sink), bridged to Vector.
+    #[serde(alias = "grpc")]
     Direct,
+}
+
+// Written by hand because the derive lists only the canonical names and a
+// validator must also take `grpc` and `kafka`.
+impl schemars::JsonSchema for Transport {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Transport".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and the\ntransform are identical either way. Only who hands the record over changes.\n`kafka` and `grpc` read as the same two, the names the other DFE stages use,\nand a config always writes `bus` and `direct` back.",
+            "oneOf": [
+                {
+                    "description": "Kafka topics.",
+                    "type": "string",
+                    "enum": ["bus", "kafka"]
+                },
+                {
+                    "description": "A scalo Push listener (source) or client (sink), bridged to Vector.",
+                    "type": "string",
+                    "enum": ["direct", "grpc"]
+                }
+            ]
+        })
+    }
 }
 
 impl Transport {

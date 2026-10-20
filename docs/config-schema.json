@@ -301,17 +301,23 @@
       }
     },
     "Transport": {
-      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and the\ntransform are identical either way -- only who hands the record over changes.",
+      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and the\ntransform are identical either way. Only who hands the record over changes.\n`kafka` and `grpc` read as the same two, the names the other DFE stages use,\nand a config always writes `bus` and `direct` back.",
       "oneOf": [
         {
           "description": "Kafka topics.",
           "type": "string",
-          "const": "bus"
+          "enum": [
+            "bus",
+            "kafka"
+          ]
         },
         {
           "description": "A scalo Push listener (source) or client (sink), bridged to Vector.",
           "type": "string",
-          "const": "direct"
+          "enum": [
+            "direct",
+            "grpc"
+          ]
         }
       ]
     },
