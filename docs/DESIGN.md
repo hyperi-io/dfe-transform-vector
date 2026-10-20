@@ -569,7 +569,7 @@ The wrapper's config declares a **pinned Vector version**:
 
 ```yaml
 vector:
-  version: "0.59.0"              # Expected version
+  version: "0.60.0"              # Expected version
   version_check: warn            # strict | warn | disabled
   binary: /usr/local/bin/vector
 ```
@@ -610,7 +610,7 @@ Dockerfile copies it into the runtime image alongside the Vector binary.
 ```dockerfile
 # Runtime image — CI builds the wrapper binary externally
 FROM debian:trixie-slim
-ARG VECTOR_VERSION=0.59.0
+ARG VECTOR_VERSION=0.60.0
 ARG TARGETARCH
 
 # Wrapper binary (built by CI, copied in)
