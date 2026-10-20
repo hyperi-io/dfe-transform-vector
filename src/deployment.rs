@@ -23,6 +23,10 @@ use scalo::deployment::{
 /// the two cannot drift.
 const DESCRIPTION: &str = "Vector subprocess wrapper for Kafka-to-Kafka transform pipelines";
 
+/// The `source.transport` values that bind the Push listener: the name
+/// `Transport::Direct` serialises to, and the alias the other DFE stages use.
+const PUSH_TRANSPORTS: [&str; 2] = ["direct", "grpc"];
+
 /// Build the deployment contract for dfe-transform-vector.
 ///
 /// This contract drives generation of:
@@ -51,7 +55,7 @@ pub fn contract() -> DeploymentContract {
         // Vector's API gets no port: it binds loopback, when it runs at all.
         extra_ports: vec![
             PortContract::tcp("push", 6000)
-                .when_equals("config.source.transport", "direct")
+                .when_one_of("config.source.transport", PUSH_TRANSPORTS)
                 .bound_from("source.listen")
                 .app_protocol("kubernetes.io/h2c"),
         ],

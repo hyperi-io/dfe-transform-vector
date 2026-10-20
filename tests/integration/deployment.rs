@@ -44,11 +44,17 @@ fn contract_produces_valid_structure() {
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(port_names, vec!["push"]);
     let push = &c.extra_ports[0];
-    assert_eq!(
-        push.when.as_ref().map(ToString::to_string).as_deref(),
-        Some("config.source.transport is \"direct\""),
-        "the Push port must render only on the direct transport"
-    );
+    let gate = push.when.as_ref().expect("the Push port is gated");
+    for name in ["direct", "grpc", "bus", "kafka", "tcp"] {
+        let mut config = c.default_config.clone().expect("default_config present");
+        config["source"]["transport"] = serde_json::Value::from(name);
+        let direct = matches!(name, "direct" | "grpc");
+        assert_eq!(
+            gate.holds_in(&config),
+            Some(direct),
+            "the Push port must render only on the direct transport, under either name (transport {name})"
+        );
+    }
     assert!(
         c.undeclared_listeners().is_empty(),
         "every listener in default_config needs a port: {:?}",

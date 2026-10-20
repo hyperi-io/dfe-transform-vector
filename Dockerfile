@@ -90,7 +90,7 @@ USER 1000
 
 EXPOSE 9090
 # Conditional listeners, not EXPOSEd -- publish explicitly when enabled:
-#   6000/tcp push -- when config.source.transport is "direct"
+#   6000/tcp push -- when config.source.transport is one of "direct", "grpc"
 
 # Shell form maps any curl failure to exit 1, the only unhealthy status Docker defines.
 # hadolint ignore=DL3025

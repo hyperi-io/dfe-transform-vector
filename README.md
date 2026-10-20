@@ -38,6 +38,8 @@ flowchart TB
 One deployment runs one transport, and the transform you author is identical on
 both. What changes is who hands the record over.
 
+`source.transport` and `sink.transport` also take `kafka` for `bus` and `grpc` for `direct`, the names the other DFE stages use.
+
 | | `bus` | `direct` |
 |---|---|---|
 | In | Kafka `<source>_land` | a scalo Push listener on `source.listen` |
@@ -114,14 +116,14 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 
 | Variable | Description |
 |----------|-------------|
-| `DFE_TRANSFORM_SOURCE_TRANSPORT` | `bus` or `direct` |
+| `DFE_TRANSFORM_SOURCE_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
 | `DFE_TRANSFORM_SOURCE_LISTEN` | Push listener bind address (direct) |
 | `DFE_TRANSFORM_SOURCE__BROKERS` | Kafka source broker addresses |
 | `DFE_TRANSFORM_SOURCE__TOPICS` | Source topic list |
 | `DFE_TRANSFORM_SOURCE__GROUP_ID` | Consumer group ID |
 | `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}` | Kafka SASL credentials per endpoint; the chart mounts the Kafka Secret's `username` and `password` into all four |
 | `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` | Sets `source.tls.enabled` and `sink.tls.enabled` true when the value contains `SSL`; never sets them false |
-| `DFE_TRANSFORM_SINK_TRANSPORT` | `bus` or `direct` |
+| `DFE_TRANSFORM_SINK_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
 | `DFE_TRANSFORM_SINK_ENDPOINT` | Next stage's Push listener (direct) |
 | `DFE_TRANSFORM_SINK__BROKERS` | Kafka sink broker addresses |
 | `DFE_TRANSFORM_SINK__TOPIC` | Sink output topic, and the routing key on direct |

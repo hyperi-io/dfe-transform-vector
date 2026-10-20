@@ -759,7 +759,7 @@ No chart is committed. At release, hyperi-ci runs the binary's `generate-artefac
 ### 9.2 What the Contract Fixes
 
 - Probes on 9090 (`/livez`, `/readyz`) with a 120 s startup budget.
-- The Push port 6000, `appProtocol: kubernetes.io/h2c`, only while `config.source.transport` is `direct`.
+- The Push port 6000, `appProtocol: kubernetes.io/h2c`, only while `config.source.transport` is `direct` or `grpc`.
 - The Kafka Secret's `username` and `password` in `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}`. The assembler writes them to owner-only files under `vector.config_dir`, which Vector reads through its `directory` secret backend.
 - Writable paths `data` at `/var/lib/vector` and `run` at `/var/run/vector`, beside the library's `/tmp`, under a read-only root filesystem.
 - Requests 100m/128Mi, limits 500m/512Mi, a 90 s grace period, uid and gid 1000.

@@ -1500,6 +1500,67 @@ fn the_floor_skips_a_side_on_the_direct_transport() {
         .expect("a direct sink carries no Kafka client for the floor to refuse");
 }
 
+/// dfe-engine and the other DFE stages name the transports `grpc` and `kafka`,
+/// so a config file naming either loads as the transport it names.
+#[test]
+fn a_config_file_may_name_the_transport_grpc_or_kafka() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("transport.yaml");
+    let load = |yaml: &str| {
+        fs::write(&path, yaml).unwrap();
+        // Only the file may set the transport here.
+        with_vars(
+            &[
+                ("DFE_TRANSFORM_SOURCE_TRANSPORT", None),
+                ("DFE_TRANSFORM_SINK_TRANSPORT", None),
+                ("DFE_TRANSFORM_SOURCE__TRANSPORT", None),
+                ("DFE_TRANSFORM_SINK__TRANSPORT", None),
+            ],
+            || Config::load(Some(path.to_str().unwrap())),
+        )
+    };
+
+    let direct = load(
+        "source:\n  transport: grpc\n  listen: 0.0.0.0:6000\nsink:\n  transport: grpc\n  endpoint: http://dfe-loader:6000\n",
+    )
+    .unwrap();
+    assert_eq!(direct.source.transport, Transport::Direct);
+    assert_eq!(direct.sink.transport, Transport::Direct);
+
+    let bus = load(
+        "source:\n  transport: kafka\n  topics: [raw]\nsink:\n  transport: kafka\n  topic: enriched\n",
+    )
+    .unwrap();
+    assert_eq!(bus.source.transport, Transport::Bus);
+    assert_eq!(bus.sink.transport, Transport::Bus);
+
+    assert!(
+        load("sink:\n  transport: tcp\n").is_err(),
+        "a transport name the config does not know must fail the load"
+    );
+}
+
+/// A validator reading the emitted schema must take every transport name the
+/// config file reads, each for the transport the file reads it as.
+#[test]
+fn the_emitted_schema_lists_every_transport_name_the_file_reads() {
+    let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+    let branches = schema["$defs"]["Transport"]["oneOf"].as_array().unwrap();
+    let mut listed = Vec::new();
+    for branch in branches {
+        let names = branch["enum"].as_array().unwrap();
+        let canonical: Transport = serde_json::from_value(names[0].clone()).unwrap();
+        assert_eq!(serde_json::to_value(canonical).unwrap(), names[0]);
+        for name in names {
+            let read: Transport = serde_json::from_value(name.clone()).unwrap();
+            assert_eq!(read, canonical, "{name} reads as another transport");
+            listed.push(name.as_str().unwrap().to_string());
+        }
+    }
+    listed.sort();
+    assert_eq!(listed, ["bus", "direct", "grpc", "kafka"]);
+}
+
 /// A raw `librdkafka_options` entry that weakens the transport.
 ///
 /// Over a big dial the derived-key check refuses it outright. With the big
