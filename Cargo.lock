@@ -3270,9 +3270,9 @@ dependencies = [
 
 [[package]]
 name = "scalo"
-version = "2.14.18"
+version = "2.14.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d3c6b53a20c42f7c0b062a05eb458e3ad6f74b94b3431466a1ca5a38e7fa0f1"
+checksum = "1142b6ab1b3e4fa1847b2f92eb63ff78d3177d0e380a32c42d18ebcb9256f207"
 dependencies = [
  "backon",
  "bytes",
@@ -3806,7 +3806,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
