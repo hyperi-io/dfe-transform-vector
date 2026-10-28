@@ -3,6 +3,16 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.56](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.55...v1.0.56) (2026-10-28)
+
+### Bug Fixes
+
+* declare the repo classification as product ([#130](https://github.com/hyperi-io/dfe-transform-vector/issues/130)) ([fbd1118](https://github.com/hyperi-io/dfe-transform-vector/commit/fbd1118f91e1c9f10fee4d4e6f2ed0a52c98e573))
+* **deps:** update Rust crate tokio to >=1.53.3, <2 ([#128](https://github.com/hyperi-io/dfe-transform-vector/issues/128)) ([c221ec1](https://github.com/hyperi-io/dfe-transform-vector/commit/c221ec1321eb74126ec98a49f94e683859728c5d))
+* **deps:** update Rust crate tokio to >=1.54.1, <2 ([#129](https://github.com/hyperi-io/dfe-transform-vector/issues/129)) ([b51d431](https://github.com/hyperi-io/dfe-transform-vector/commit/b51d431134a9a4956b2855aa8927eab6ec5d947d))
+* rebuild on scalo 2.14.21 ([c52e59a](https://github.com/hyperi-io/dfe-transform-vector/commit/c52e59a9c63058bd629ccce8dbab90314d832c64))
+* take pulldown-cmark to 0.13.5 for RUSTSEC-2026-0414 ([#131](https://github.com/hyperi-io/dfe-transform-vector/issues/131)) ([5dd8e3e](https://github.com/hyperi-io/dfe-transform-vector/commit/5dd8e3e59949942ff1a12e64c8c41f92e5907cd4))
+
 ## [1.0.55](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.54...v1.0.55) (2026-10-24)
 
 ### Bug Fixes
