@@ -430,7 +430,10 @@ async fn run_transform_service(
     let bridge_task = if bridge::is_enabled(&config) {
         let lent = BridgeRuntime {
             pool: runtime.worker_pool.clone(),
-            pressure: runtime.governor.as_ref().map(scalo::SelfRegulationGovernor::pressure),
+            pressure: runtime
+                .governor
+                .as_ref()
+                .map(scalo::SelfRegulationGovernor::pressure),
             memory_guard: Some(Arc::clone(&runtime.memory_guard)),
         };
         let bridge = bridge::Bridge::build(&config, lent).await?;
