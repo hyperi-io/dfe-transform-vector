@@ -124,7 +124,9 @@ pick_port_base() {
 }
 
 #######################################
-# Path to the pgo-driver binary, building it if it is not there yet.
+# Path to the pgo-driver binary, building it if it is not there yet. CI
+# builds it first in .hyperi-ci.yaml's pgo.workload_setup_cmd, before the
+# workload timeout starts, so the build here is the local fallback.
 #######################################
 resolve_driver() {
     local path="${PGO_DRIVER_PATH:-}"
