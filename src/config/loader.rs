@@ -923,6 +923,10 @@ impl Config {
     ///   4. `.env` in the working directory, read by scalo's cascade, never a parent's
     ///   5. Config YAML file
     ///   6. Hard-coded defaults
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `config_path` is set but missing, a config file cannot be read or parsed, or an environment override does not deserialise.
     pub fn load(config_path: Option<&str>) -> Result<Self> {
         // Start with defaults
         let mut config = Config::default();
@@ -1045,6 +1049,11 @@ impl Config {
     }
 
     /// Validate the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] naming the first field that is empty, out of range or inconsistent with the rest of the config.
+    #[allow(clippy::too_many_lines, reason = "one flat sequence of field checks")]
     pub fn validate(&self) -> Result<()> {
         // Pipeline
         if self.pipeline.name.is_empty() {
@@ -1076,7 +1085,7 @@ impl Config {
                 ));
             }
         }
-        self.validate_sasl("source.sasl", &self.source.sasl)?;
+        Self::validate_sasl("source.sasl", &self.source.sasl)?;
         Self::validate_librdkafka_options(
             "source",
             &self.source.librdkafka_options,
@@ -1160,8 +1169,8 @@ impl Config {
                 ));
             }
         }
-        self.validate_sasl("sink.sasl", &self.sink.sasl)?;
-        self.validate_buffer(&self.sink.buffer)?;
+        Self::validate_sasl("sink.sasl", &self.sink.sasl)?;
+        Self::validate_buffer(&self.sink.buffer)?;
         Self::validate_librdkafka_options(
             "sink",
             &self.sink.librdkafka_options,
@@ -1353,7 +1362,7 @@ impl Config {
         Ok(())
     }
 
-    fn validate_sasl(&self, prefix: &str, sasl: &SaslConfig) -> Result<()> {
+    fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
         if !sasl.enabled {
             return Ok(());
         }
@@ -1431,7 +1440,7 @@ impl Config {
         }
     }
 
-    fn validate_buffer(&self, buffer: &BufferConfig) -> Result<()> {
+    fn validate_buffer(buffer: &BufferConfig) -> Result<()> {
         let valid_types = ["memory", "disk"];
         if !valid_types.contains(&buffer.buffer_type.as_str()) {
             return Err(crate::Error::Validation(format!(

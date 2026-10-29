@@ -167,25 +167,22 @@ pub fn backends(config: &Config, config_dir: &Path) -> Vec<SecretBackend> {
 pub fn materialise(config: &Config, config_dir: &Path) -> Result<()> {
     for (side, sasl) in authenticating(config) {
         let names = SecretNames::of(side, sasl);
-        match &sasl.secret_dir {
-            Some(dir) => {
-                for key in [names.username, names.password] {
-                    let path = Path::new(dir).join(key);
-                    std::fs::File::open(&path).map_err(|e| {
-                        crate::Error::Config(format!(
-                            "{side}.sasl.secret_dir: cannot read {path}: {e}",
-                            side = side.as_str(),
-                            path = path.display()
-                        ))
-                    })?;
-                }
+        if let Some(dir) = &sasl.secret_dir {
+            for key in [names.username, names.password] {
+                let path = Path::new(dir).join(key);
+                std::fs::File::open(&path).map_err(|e| {
+                    crate::Error::Config(format!(
+                        "{side}.sasl.secret_dir: cannot read {path}: {e}",
+                        side = side.as_str(),
+                        path = path.display()
+                    ))
+                })?;
             }
-            None => {
-                let dir = config_dir.join(PRIVATE_DIR);
-                create_private_dir(&dir)?;
-                write_private(&dir.join(names.username), &sasl.username)?;
-                write_private(&dir.join(names.password), &sasl.password)?;
-            }
+        } else {
+            let dir = config_dir.join(PRIVATE_DIR);
+            create_private_dir(&dir)?;
+            write_private(&dir.join(names.username), &sasl.username)?;
+            write_private(&dir.join(names.password), &sasl.password)?;
         }
     }
     Ok(())
@@ -316,7 +313,7 @@ mod tests {
         let mut config = Config::default();
         config.source.transport = Transport::Direct;
         config.source.sasl = sasl("u", "p", None);
-        assert!(backends(&config, dir.path()).is_empty());
+        assert_eq!(backends(&config, dir.path()), Vec::new());
 
         materialise(&config, dir.path()).unwrap();
         assert!(!dir.path().join(PRIVATE_DIR).exists());

@@ -33,6 +33,10 @@ pub struct LoadedTransform {
 /// (sorted by filename for deterministic ordering).
 /// If `config.files` is set, loads files in declared order.
 /// If neither is set, returns an empty list.
+///
+/// # Errors
+///
+/// Returns an error when the directory is missing or unreadable, or a transform file cannot be read or parsed.
 pub fn load_transforms(config: &TransformConfig) -> Result<Vec<LoadedTransform>> {
     if let Some(ref dir) = config.dir {
         load_from_directory(dir)

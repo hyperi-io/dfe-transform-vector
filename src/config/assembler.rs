@@ -43,6 +43,10 @@ pub const DEFAULT_CONFIG_DIR: &str = "/var/run/vector/config";
 /// Assemble the full Vector config directory from big-dial config.
 ///
 /// Returns the path to the assembled config directory.
+///
+/// # Errors
+///
+/// Returns an error when the output directory cannot be cleaned or written, the secret files cannot be materialised, a transform file fails to load, or the wired topology is invalid.
 pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     // Clean and create output directory
     if output_dir.exists() {
@@ -143,7 +147,7 @@ fn write_transforms(
             .and_then(|n| n.to_str())
             .unwrap_or("transform.yaml");
 
-        let filename = format!("50_{:03}_{original_name}", i);
+        let filename = format!("50_{i:03}_{original_name}");
         let content = scalo::yaml::to_string(&yaml)?;
         let path = dir.join(&filename);
         std::fs::write(&path, &content)?;
@@ -223,7 +227,7 @@ mod tests {
         // No transform files when empty
         let transform_files: Vec<_> = fs::read_dir(output.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
             .collect();
         assert!(transform_files.is_empty());
@@ -259,7 +263,7 @@ mod tests {
         // Transform files should exist in the config dir (flat, prefixed with 50_)
         let transform_files: Vec<_> = fs::read_dir(output.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
             .collect();
         assert_eq!(transform_files.len(), 2);
