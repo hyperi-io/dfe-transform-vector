@@ -227,7 +227,7 @@ mod tests {
         // No transform files when empty
         let transform_files: Vec<_> = fs::read_dir(output.path())
             .unwrap()
-            .filter_map(Result::ok)
+            .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
             .collect();
         assert!(transform_files.is_empty());
@@ -263,7 +263,7 @@ mod tests {
         // Transform files should exist in the config dir (flat, prefixed with 50_)
         let transform_files: Vec<_> = fs::read_dir(output.path())
             .unwrap()
-            .filter_map(Result::ok)
+            .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("50_"))
             .collect();
         assert_eq!(transform_files.len(), 2);

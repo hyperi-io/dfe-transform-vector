@@ -268,25 +268,6 @@ fn detect_cycles(components: &[Component]) -> Result<()> {
         Black,
     }
 
-    // Build adjacency list: label → list of downstream labels
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    adjacency.insert(SOURCE_LABEL.to_string(), vec![]);
-
-    for c in components {
-        adjacency.entry(c.label.clone()).or_default();
-        for input in &c.inputs {
-            adjacency
-                .entry(input.clone())
-                .or_default()
-                .push(c.label.clone());
-        }
-    }
-
-    let mut colours: HashMap<String, Colour> = HashMap::new();
-    for key in adjacency.keys() {
-        colours.insert(key.clone(), Colour::White);
-    }
-
     fn dfs(
         node: &str,
         adjacency: &HashMap<String, Vec<String>>,
@@ -308,6 +289,25 @@ fn detect_cycles(components: &[Component]) -> Result<()> {
         }
         colours.insert(node.to_string(), Colour::Black);
         Ok(())
+    }
+
+    // Build adjacency list: label → list of downstream labels
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    adjacency.insert(SOURCE_LABEL.to_string(), vec![]);
+
+    for c in components {
+        adjacency.entry(c.label.clone()).or_default();
+        for input in &c.inputs {
+            adjacency
+                .entry(input.clone())
+                .or_default()
+                .push(c.label.clone());
+        }
+    }
+
+    let mut colours: HashMap<String, Colour> = HashMap::new();
+    for key in adjacency.keys() {
+        colours.insert(key.clone(), Colour::White);
     }
 
     for label in adjacency.keys() {
