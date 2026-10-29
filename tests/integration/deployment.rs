@@ -149,7 +149,7 @@ fn every_contract_secret_env_var_reaches_the_config() {
 
 #[test]
 fn emit_dockerfile_produces_valid_output() {
-    let dockerfile = deployment::emit_dockerfile();
+    let dockerfile = deployment::emit_dockerfile().expect("the contract is valid");
 
     // Base image -- cascade-resolved (debian:trixie-slim by default), so just
     // assert a FROM line with an explicitly tagged image, not a specific distro.
@@ -234,7 +234,7 @@ fn checked_in_dockerfile_matches_emit_dockerfile() {
     // issue #13 (missing Vector binary) sneak through.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Dockerfile");
     let on_disk = std::fs::read_to_string(&path).expect("read Dockerfile");
-    let emitted = deployment::emit_dockerfile();
+    let emitted = deployment::emit_dockerfile().expect("the contract is valid");
     assert_eq!(
         on_disk.trim(),
         emitted.trim(),
@@ -423,23 +423,30 @@ fn inside(root: &std::path::Path, path: &str) -> std::path::PathBuf {
 
 /// Stand up under `root` the directories the image creates.
 fn image_filesystem(root: &std::path::Path) {
-    let dockerfile = deployment::emit_dockerfile();
-    let created = dockerfile
+    let dockerfile = deployment::emit_dockerfile().expect("the contract is valid");
+    let mut created = 0;
+    // scalo's writable-path line quotes its paths, the Vector layer's does not.
+    for line in dockerfile
         .lines()
-        .find_map(|l| l.trim().strip_prefix("RUN mkdir -p "))
-        .expect("the image creates its directories with one mkdir");
-    for dir in created
-        .split_whitespace()
-        .take_while(|t| t.starts_with('/'))
+        .filter_map(|l| l.trim().strip_prefix("RUN mkdir -p "))
     {
-        std::fs::create_dir_all(inside(root, dir)).expect("image directory");
+        for dir in line
+            .split_whitespace()
+            .map(|t| t.trim_matches('\''))
+            .take_while(|t| t.starts_with('/'))
+        {
+            std::fs::create_dir_all(inside(root, dir)).expect("image directory");
+            created += 1;
+        }
     }
+    assert!(created > 0, "the image creates its directories with mkdir");
 }
 
 #[test]
 fn emit_compose_generates_without_panic() {
     let contract = deployment::contract();
-    let compose = scalo::deployment::generate_compose_fragment(&contract);
+    let compose =
+        scalo::deployment::generate_compose_fragment(&contract).expect("the contract is valid");
 
     assert!(!compose.is_empty(), "compose fragment is empty");
     assert!(

@@ -48,9 +48,12 @@ pub const DEFAULT_CONFIG_DIR: &str = "/var/run/vector/config";
 ///
 /// Returns an error when the output directory cannot be cleaned or written, the secret files cannot be materialised, a transform file fails to load, or the wired topology is invalid.
 pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
-    // Clean and create output directory
+    // Clean and create output directory. The credential directory stays: a
+    // process that restarts Vector mid-reload reads it, and a directory removed
+    // and rebuilt is missing for a moment. `secrets::materialise` replaces its
+    // files whole and drops the ones no longer needed.
     if output_dir.exists() {
-        std::fs::remove_dir_all(output_dir).map_err(|e| {
+        clean_dir(output_dir).map_err(|e| {
             crate::Error::Io(std::io::Error::new(
                 e.kind(),
                 format!("failed to clean config dir {}: {e}", output_dir.display()),
@@ -100,6 +103,22 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
 
     info!(dir = %output_dir.display(), "assembled Vector config directory");
     Ok(output_dir.to_path_buf())
+}
+
+/// Remove everything in `dir` except the credential directory.
+fn clean_dir(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_name() == secrets::PRIVATE_DIR {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// Write a YAML value to a file in the output directory.

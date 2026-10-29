@@ -29,7 +29,7 @@ use dfe_transform_vector::config::loader::{
     BridgeConfig, Config, MetricsConfig, PipelineConfig, SinkConfig, SourceConfig, TransformConfig,
     Transport, VectorConfig,
 };
-use dfe_transform_vector::config::validate::vector_validate;
+use dfe_transform_vector::config::validate::{validate_args, vector_validate};
 use dfe_transform_vector::vector::spawn_vector;
 use scalo::governor::{Hysteresis, MemoryPressureSource, PressureSource, UnifiedPressure};
 use scalo::memory::{MemoryGuard, MemoryGuardConfig, UsageSource};
@@ -955,10 +955,7 @@ async fn the_assembled_direct_config_passes_vector_validate() {
     assembler::assemble(&config, &config_dir).expect("assemble");
 
     let output = std::process::Command::new(vector_binary)
-        .arg("validate")
-        .arg("--no-environment")
-        .arg("--config-dir")
-        .arg(&config_dir)
+        .args(validate_args(&config_dir))
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
         .output()
         .expect("run vector validate");

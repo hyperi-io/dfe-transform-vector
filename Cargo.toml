@@ -68,7 +68,7 @@ tokio-util = { version = ">=0.7.20, <0.8", features = ["rt"] }
 #
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = "2.14.20", features = [
+scalo = { version = "2.14.22", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -82,7 +82,7 @@ scalo = { version = "2.14.20", features = [
     "service-metrics",
     "transport-grpc",
     "transport-grpc-vector-compat",
-    "transport-kafka",
+    "transport-kafka-config",
     "version-check",
     "worker-batch",
 ] }
@@ -144,7 +144,7 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 testcontainers = ">=0.27.3, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = "2.14.20", features = [
+scalo = { version = "2.14.22", features = [
     "transport-kafka",
 ] }
 # The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.

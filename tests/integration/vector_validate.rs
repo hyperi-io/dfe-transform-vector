@@ -24,6 +24,7 @@ use dfe_transform_vector::config::loader::{
     BufferConfig, Config, DecodingConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig,
     TlsConfig, TransformConfig, VectorConfig,
 };
+use dfe_transform_vector::config::validate::validate_args;
 use tempfile::TempDir;
 
 use crate::common;
@@ -102,10 +103,7 @@ fn assemble_and_validate(config: &Config, work_dir: &Path) -> std::process::Outp
 
     // Run vector validate (--no-environment skips health checks since Kafka isn't running)
     Command::new(vector_bin)
-        .arg("validate")
-        .arg("--no-environment")
-        .arg("--config-dir")
-        .arg(&config_dir)
+        .args(validate_args(&config_dir))
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
         .output()
         .expect("failed to run vector validate")
@@ -295,10 +293,7 @@ fn vector_validate_full_chain_sasl_tls() {
     let vector_bin = common::vector_binary_path()
         .expect("Vector binary should be available (checked by caller)");
     let output = Command::new(vector_bin)
-        .arg("validate")
-        .arg("--no-environment")
-        .arg("--config-dir")
-        .arg(&config_dir)
+        .args(validate_args(&config_dir))
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
         .output()
         .expect("failed to run vector validate");
@@ -559,10 +554,7 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
     let vector_bin = common::vector_binary_path()
         .expect("Vector binary should be available (checked by caller)");
     let output = Command::new(vector_bin)
-        .arg("validate")
-        .arg("--no-environment")
-        .arg("--config-dir")
-        .arg(&config_dir)
+        .args(validate_args(&config_dir))
         .env("VECTOR_DATA_DIR", &config.vector.data_dir)
         .output()
         .expect("failed to run vector validate");

@@ -183,12 +183,24 @@ async fn main() {
     if let Some(ref cmd) = app.command {
         match cmd {
             AppCommand::EmitDockerfile => {
-                println!("{}", deployment::emit_dockerfile());
+                match deployment::emit_dockerfile() {
+                    Ok(dockerfile) => println!("{dockerfile}"),
+                    Err(e) => {
+                        eprintln!("error: the deployment contract is invalid: {e}");
+                        std::process::exit(1);
+                    }
+                }
                 return;
             }
             AppCommand::EmitCompose => {
                 let contract = deployment::contract();
-                println!("{}", generate_compose_fragment(&contract));
+                match generate_compose_fragment(&contract) {
+                    Ok(compose) => println!("{compose}"),
+                    Err(e) => {
+                        eprintln!("error: the deployment contract is invalid: {e}");
+                        std::process::exit(1);
+                    }
+                }
                 return;
             }
             AppCommand::EmitContract => {

@@ -13,10 +13,9 @@
 //! health paths, ports, secrets, KEDA scaling, and default config.
 
 use scalo::deployment::{
-    CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
-    KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
-    SecretEnvContract, SecretGroupContract, SecurityContract, ServiceAccount, WritablePath,
-    base_image_from_cascade,
+    DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
+    NativeDepsContract, PortContract, ResourceList, ResourcesContract, SecretEnvContract,
+    SecretGroupContract, WritablePath, base_image_from_cascade,
 };
 
 /// The chart description and the OCI image description, kept as one string so
@@ -59,7 +58,6 @@ pub fn contract() -> DeploymentContract {
                 .bound_from("source.listen")
                 .app_protocol("kubernetes.io/h2c"),
         ],
-        unbound_listen_paths: vec![],
         hot_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
@@ -153,7 +151,6 @@ pub fn contract() -> DeploymentContract {
         base_image: base_image_from_cascade(),
         native_deps: NativeDepsContract::default(),
         image_profile: ImageProfile::default(),
-        schema_version: CONTRACT_SCHEMA_VERSION,
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
@@ -187,9 +184,7 @@ pub fn contract() -> DeploymentContract {
                 memory: "512Mi".into(),
             },
         },
-        security: SecurityContract::default(),
-        singleton: false,
-        service_account: ServiceAccount::Own,
+        ..DeploymentContract::default()
     }
 }
 
@@ -197,7 +192,10 @@ pub fn contract() -> DeploymentContract {
 ///
 /// `Config::apply_flat_env` reads these names: a credential per endpoint, and
 /// one mechanism for both, since the Secret names its broker's. Each
-/// `key_name` is distinct because the chart renders it as a values key.
+/// `key_name` is distinct because the chart renders it as a values key. The
+/// security protocol is not here: the DFE Kafka user Secret carries no
+/// `security.protocol` key, so a required mount of it would stop the pod, and
+/// the deployment sets `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` as plain env.
 fn secrets() -> Vec<SecretGroupContract> {
     let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
         env_var: env_var.into(),
@@ -314,12 +312,16 @@ const SHA256_ARM64_PLACEHOLDER: &str = "@VECTOR_SHA256_ARM64@";
 /// When `hyperi-ci` grows an overlay framework this override moves into
 /// `.hyperi-ci.yaml`.
 ///
+/// # Errors
+///
+/// Returns the contract's validation error: scalo refuses to generate from a
+/// bad contract.
+///
 /// # Panics
 ///
 /// Panics when scalo's generated Dockerfile has no `USER ` directive to anchor the Vector layer on.
-#[must_use]
-pub fn emit_dockerfile() -> String {
-    let base = scalo::deployment::generate_dockerfile(&contract(), None);
+pub fn emit_dockerfile() -> Result<String, scalo::DeploymentError> {
+    let base = scalo::deployment::generate_dockerfile(&contract(), None)?;
 
     // The fragment is a REAL Dockerfile file, not a Rust string literal, so
     // hadolint and shellcheck can read it. Shell embedded in `format!` is
@@ -366,7 +368,7 @@ pub fn emit_dockerfile() -> String {
 
     // +1 to keep the newline with `before`, so the splice starts on its own line.
     let (before, after) = base.split_at(idx + 1);
-    format!("{before}{vector_layer}\n{after}")
+    Ok(format!("{before}{vector_layer}\n{after}"))
 }
 
 #[cfg(test)]
@@ -387,7 +389,7 @@ mod tests {
     #[test]
     fn test_contract_carries_reflectable_config() {
         let c = contract();
-        assert_eq!(c.schema_version, CONTRACT_SCHEMA_VERSION);
+        assert_eq!(c.schema_version, scalo::deployment::CONTRACT_SCHEMA_VERSION);
         assert!(c.config_schema.is_some());
         assert!(c.capabilities.iter().any(|cap| cap.name == "vector"));
     }

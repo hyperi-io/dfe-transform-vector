@@ -165,6 +165,8 @@ pub fn backends(config: &Config, config_dir: &Path) -> Vec<SecretBackend> {
 ///
 /// A file that cannot be written, or a `secret_dir` file that cannot be read.
 pub fn materialise(config: &Config, config_dir: &Path) -> Result<()> {
+    let private = config_dir.join(PRIVATE_DIR);
+    let mut written: Vec<&str> = Vec::new();
     for (side, sasl) in authenticating(config) {
         let names = SecretNames::of(side, sasl);
         if let Some(dir) = &sasl.secret_dir {
@@ -179,37 +181,64 @@ pub fn materialise(config: &Config, config_dir: &Path) -> Result<()> {
                 })?;
             }
         } else {
-            let dir = config_dir.join(PRIVATE_DIR);
-            create_private_dir(&dir)?;
-            write_private(&dir.join(names.username), &sasl.username)?;
-            write_private(&dir.join(names.password), &sasl.password)?;
+            create_private_dir(&private)?;
+            write_private(&private.join(names.username), &sasl.username)?;
+            write_private(&private.join(names.password), &sasl.password)?;
+            written.extend([names.username, names.password]);
+        }
+    }
+    drop_unneeded(&private, &written)
+}
+
+/// Remove the files under `private` that no credential needs now, and the
+/// directory itself when none does. A reader only ever finds a file replaced
+/// whole, or one nothing wants any more.
+fn drop_unneeded(private: &Path, wanted: &[&str]) -> Result<()> {
+    if wanted.is_empty() {
+        if private.exists() {
+            std::fs::remove_dir_all(private)?;
+        }
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(private)? {
+        let entry = entry?;
+        if !wanted.iter().any(|name| entry.file_name() == *name) {
+            std::fs::remove_file(entry.path())?;
         }
     }
     Ok(())
 }
 
-/// Create `dir` readable by this user alone.
+/// Create `dir` readable by this user alone, or tighten it when it exists.
 fn create_private_dir(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
-/// Write `value` to `path`, readable by this user alone.
+/// Write `value` to `path`, readable by this user alone, replacing any file
+/// there in one step. The value goes to a sibling first and is then moved over
+/// `path`, so a reader finds the old file or the new one, never a truncated one.
 fn write_private(path: &Path, value: &str) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
+    let mut staged = path.as_os_str().to_owned();
+    staged.push(".new");
+    let staged = PathBuf::from(staged);
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(path)?;
+        .open(&staged)?;
     file.write_all(value.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&staged, path)?;
     Ok(())
 }
 

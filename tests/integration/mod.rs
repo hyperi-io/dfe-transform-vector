@@ -13,6 +13,7 @@ mod config_reach;
 // poll loop it sits after cannot express that as an assert.
 #[allow(clippy::panic)]
 mod container_hygiene;
+mod credential_reassembly;
 mod deployment;
 mod direct_transport;
 mod fixtures;
