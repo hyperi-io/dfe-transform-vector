@@ -172,12 +172,13 @@ strip = false
 unsafe_code = "deny"
 
 [lints.clippy]
-# Pedantic/nursery are advisory — not promoted to errors via -D warnings.
-# Run `cargo clippy` without -D to see suggestions.
-unwrap_used = "warn"
-expect_used = "warn"
+# Groups get priority = -1 so an individual lint level always wins
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+# Types keep descriptive names even where the module path repeats them, so call sites read without it.
 module_name_repetitions = "allow"
+# #[must_use] goes where dropping the value is a bug, not on every pure function.
 must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
 
