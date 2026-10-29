@@ -181,4 +181,24 @@ dbg_macro = "deny"
 module_name_repetitions = "allow"
 # #[must_use] goes where dropping the value is a bug, not on every pure function.
 must_use_candidate = "allow"
+# The lints below fire in tests/ (54 sites) and one in main.rs, and the rest of src is clean.
+# 6 doc comments, 5 map then unwrap_or chains, 2 let-else candidates.
+doc_markdown = "allow"
+map_unwrap_or = "allow"
+manual_let_else = "allow"
+# 10 raw strings, 8 closures, 8 bare #[ignore] attributes.
+needless_raw_string_hashes = "allow"
+redundant_closure_for_method_calls = "allow"
+ignore_without_reason = "allow"
+# 2 float compares, 2 file extension compares, 2 similar names, 2 Duration subtractions, 2 empty asserts.
+float_cmp = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+similar_names = "allow"
+unchecked_time_subtraction = "allow"
+assert_is_empty = "allow"
+# 1 single-arm match, 1 filter_map then next, 1 push_str of a format!, and 2 functions over 150 lines (the startup sequence in main.rs, one e2e test).
+single_match_else = "allow"
+filter_map_next = "allow"
+format_push_string = "allow"
+too_many_lines = "allow"
 
