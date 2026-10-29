@@ -46,6 +46,10 @@ pub struct WiringResult {
 /// Extract all components from loaded transform YAMLs.
 ///
 /// Parses `sources`, `transforms`, and `sinks` top-level keys.
+///
+/// # Errors
+///
+/// Currently never fails: every input yields a component list.
 pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Component>> {
     let mut components = Vec::new();
 
@@ -76,6 +80,10 @@ pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Componen
 /// security floor, as the generated `dfe_source` and `dfe_sink` are held.
 ///
 /// Vector runs them on its own librdkafka client, so nothing else checks them.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] naming the transform file and component that fails the floor.
 pub fn validate_kafka_components(transforms: &[LoadedTransform]) -> Result<()> {
     for lt in transforms {
         for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
@@ -103,6 +111,10 @@ pub fn validate_kafka_components(transforms: &[LoadedTransform]) -> Result<()> {
 ///
 /// Returns a `WiringResult` with the labels that should be wired as
 /// sink inputs, and the full component list.
+///
+/// # Errors
+///
+/// Currently never fails: every component list yields a wiring.
 pub fn auto_wire(mut components: Vec<Component>) -> Result<WiringResult> {
     if components.is_empty() {
         // No transforms: source wires directly to sink
@@ -165,10 +177,12 @@ pub fn auto_wire(mut components: Vec<Component>) -> Result<WiringResult> {
         .collect();
 
     // If no terminal found (shouldn't happen if we have transforms), fallback
-    #[allow(clippy::unwrap_used)]
     let sink_inputs = if terminal.is_empty() {
         // Fall back: use the last component in file-order (vec is non-empty — checked above)
-        vec![components.last().unwrap().label.clone()]
+        components
+            .last()
+            .map(|c| vec![c.label.clone()])
+            .unwrap_or_default()
     } else {
         terminal
     };
@@ -187,6 +201,10 @@ pub fn auto_wire(mut components: Vec<Component>) -> Result<WiringResult> {
 /// - All `inputs` references resolve to defined components
 /// - No orphaned transforms (every transform is reachable from dfe_source)
 /// - No cycles
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] for an undefined input, an orphaned transform or a cycle.
 pub fn validate_dag(result: &WiringResult) -> Result<()> {
     // Build the full set of defined labels
     let mut defined: HashSet<String> = HashSet::new();
@@ -243,30 +261,11 @@ pub fn validate_dag(result: &WiringResult) -> Result<()> {
 
 /// Detect cycles in the component graph using DFS with white/grey/black colouring.
 fn detect_cycles(components: &[Component]) -> Result<()> {
-    // Build adjacency list: label → list of downstream labels
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    adjacency.insert(SOURCE_LABEL.to_string(), vec![]);
-
-    for c in components {
-        adjacency.entry(c.label.clone()).or_default();
-        for input in &c.inputs {
-            adjacency
-                .entry(input.clone())
-                .or_default()
-                .push(c.label.clone());
-        }
-    }
-
     #[derive(Clone, Copy, PartialEq)]
     enum Colour {
         White,
         Grey,
         Black,
-    }
-
-    let mut colours: HashMap<String, Colour> = HashMap::new();
-    for key in adjacency.keys() {
-        colours.insert(key.clone(), Colour::White);
     }
 
     fn dfs(
@@ -290,6 +289,25 @@ fn detect_cycles(components: &[Component]) -> Result<()> {
         }
         colours.insert(node.to_string(), Colour::Black);
         Ok(())
+    }
+
+    // Build adjacency list: label → list of downstream labels
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    adjacency.insert(SOURCE_LABEL.to_string(), vec![]);
+
+    for c in components {
+        adjacency.entry(c.label.clone()).or_default();
+        for input in &c.inputs {
+            adjacency
+                .entry(input.clone())
+                .or_default()
+                .push(c.label.clone());
+        }
+    }
+
+    let mut colours: HashMap<String, Colour> = HashMap::new();
+    for key in adjacency.keys() {
+        colours.insert(key.clone(), Colour::White);
     }
 
     for label in adjacency.keys() {

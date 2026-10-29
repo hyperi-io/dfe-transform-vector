@@ -143,7 +143,10 @@ pub enum ReloadTrigger {
 
 /// Send SIGHUP to Vector by PID for config reload.
 fn send_sighup(pid: u32) -> crate::Result<()> {
-    signal::kill(Pid::from_raw(pid as i32), Signal::SIGHUP).map_err(|e| {
+    let raw = i32::try_from(pid).map_err(|_| {
+        crate::Error::Vector(format!("Vector PID {pid} does not fit a signal target"))
+    })?;
+    signal::kill(Pid::from_raw(raw), Signal::SIGHUP).map_err(|e| {
         crate::Error::Vector(format!("failed to send SIGHUP to Vector PID {pid}: {e}"))
     })?;
     debug!(pid, "sent SIGHUP to Vector for config reload");
@@ -333,7 +336,7 @@ pub async fn run_reload_loop(
     loop {
         // Wait for either: poll interval, manual trigger, or shutdown
         let trigger = tokio::select! {
-            _ = tokio::time::sleep(poll_interval) => {
+            () = tokio::time::sleep(poll_interval) => {
                 // Check for file changes
                 let new_snapshot = FileSnapshot::capture(&current_config);
                 if !snapshot.has_changed(&new_snapshot) {
@@ -418,7 +421,7 @@ pub async fn run_reload_loop(
         // Send SIGHUP to Vector to pick up the new config
         let pid = vector_pid
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .copied();
         let Some(pid) = pid else {

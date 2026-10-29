@@ -34,8 +34,8 @@
 //! Configuration via environment variables:
 //! - `PGO_DRIVER_DURATION_SECS` (default 300) -- how long to drive load
 //! - `PGO_DRIVER_PUSH_ENDPOINT` (default `http://127.0.0.1:6000`) -- source.listen
-//! - `PGO_DRIVER_TO_VECTOR` (default `127.0.0.1:6100`) -- bridge.to_vector
-//! - `PGO_DRIVER_FROM_VECTOR` (default `127.0.0.1:6101`) -- bridge.from_vector
+//! - `PGO_DRIVER_TO_VECTOR` (default `127.0.0.1:6100`) -- `bridge.to_vector`
+//! - `PGO_DRIVER_FROM_VECTOR` (default `127.0.0.1:6101`) -- `bridge.from_vector`
 //! - `PGO_DRIVER_SINK_LISTEN` (default `127.0.0.1:6200`) -- the next stage
 //! - `PGO_DRIVER_VECTOR_METRICS` (default `127.0.0.1:9598`) -- the exposition
 //! - `PGO_DRIVER_RPS` (default 5000) -- records per second
@@ -52,6 +52,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use std::env;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -461,13 +462,15 @@ fn exposition(served: u64, received: u64, sent: u64) -> String {
     let mut text = String::with_capacity(96 * 1024);
 
     text.push_str("# TYPE vector_component_received_events_total counter\n");
-    text.push_str(&format!(
-        "vector_component_received_events_total{{component_id=\"dfe_source\",component_kind=\"source\",component_type=\"vector\"}} {received}\n"
-    ));
+    let _ = writeln!(
+        text,
+        "vector_component_received_events_total{{component_id=\"dfe_source\",component_kind=\"source\",component_type=\"vector\"}} {received}"
+    );
     text.push_str("# TYPE vector_component_sent_events_total counter\n");
-    text.push_str(&format!(
-        "vector_component_sent_events_total{{component_id=\"dfe_sink\",component_kind=\"sink\",component_type=\"vector\"}} {sent}\n"
-    ));
+    let _ = writeln!(
+        text,
+        "vector_component_sent_events_total{{component_id=\"dfe_sink\",component_kind=\"sink\",component_type=\"vector\"}} {sent}"
+    );
     text.push_str("# TYPE vector_started_total counter\n");
     text.push_str("vector_started_total 1\n");
 
@@ -475,38 +478,45 @@ fn exposition(served: u64, received: u64, sent: u64) -> String {
         let labels = format!(
             "component_id=\"transform_{i}\",component_kind=\"transform\",component_type=\"remap\""
         );
-        text.push_str(&format!(
-            "# TYPE vector_component_received_event_bytes_total_{i} counter\n"
-        ));
-        text.push_str(&format!(
-            "vector_component_received_event_bytes_total_{i}{{{labels}}} {}\n",
+        let _ = writeln!(
+            text,
+            "# TYPE vector_component_received_event_bytes_total_{i} counter"
+        );
+        let _ = writeln!(
+            text,
+            "vector_component_received_event_bytes_total_{i}{{{labels}}} {}",
             served * (i + 1) * 977
-        ));
-        text.push_str(&format!("# TYPE vector_buffer_events_{i} gauge\n"));
-        text.push_str(&format!(
-            "vector_buffer_events_{i}{{{labels}}} {}\n",
+        );
+        let _ = writeln!(text, "# TYPE vector_buffer_events_{i} gauge");
+        let _ = writeln!(
+            text,
+            "vector_buffer_events_{i}{{{labels}}} {}",
             (i % 17) as f64 * 1.5
-        ));
-        text.push_str(&format!(
-            "# TYPE vector_component_send_duration_seconds_{i} histogram\n"
-        ));
+        );
+        let _ = writeln!(
+            text,
+            "# TYPE vector_component_send_duration_seconds_{i} histogram"
+        );
         for (n, le) in ["0.001", "0.005", "0.05", "0.5", "5", "+Inf"]
             .iter()
             .enumerate()
         {
-            text.push_str(&format!(
-                "vector_component_send_duration_seconds_{i}_bucket{{{labels},le=\"{le}\"}} {}\n",
+            let _ = writeln!(
+                text,
+                "vector_component_send_duration_seconds_{i}_bucket{{{labels},le=\"{le}\"}} {}",
                 served * (n as u64 + 1)
-            ));
+            );
         }
-        text.push_str(&format!(
-            "vector_component_send_duration_seconds_{i}_sum{{{labels}}} {}\n",
+        let _ = writeln!(
+            text,
+            "vector_component_send_duration_seconds_{i}_sum{{{labels}}} {}",
             served as f64 * 0.42
-        ));
-        text.push_str(&format!(
-            "vector_component_send_duration_seconds_{i}_count{{{labels}}} {}\n",
+        );
+        let _ = writeln!(
+            text,
+            "vector_component_send_duration_seconds_{i}_count{{{labels}}} {}",
             served * 6
-        ));
+        );
     }
 
     text

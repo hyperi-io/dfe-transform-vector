@@ -319,6 +319,10 @@ const SHA256_ARM64_PLACEHOLDER: &str = "@VECTOR_SHA256_ARM64@";
 ///
 /// When `hyperi-ci` grows an overlay framework this override moves into
 /// `.hyperi-ci.yaml`.
+///
+/// # Panics
+///
+/// Panics when scalo's generated Dockerfile has no `USER ` directive to anchor the Vector layer on.
 #[must_use]
 pub fn emit_dockerfile() -> String {
     let base = scalo::deployment::generate_dockerfile(&contract(), None);
