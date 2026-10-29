@@ -113,8 +113,8 @@ fn parse_profile_map(
 }
 
 /// Get the cached central profiles, loading on first access.
-fn get_central() -> &'static Option<CentralProfiles> {
-    CENTRAL_PROFILES.get_or_init(load_central_profiles)
+fn get_central() -> Option<&'static CentralProfiles> {
+    CENTRAL_PROFILES.get_or_init(load_central_profiles).as_ref()
 }
 
 /// Convert a scalo const profile to a HashMap.
@@ -131,7 +131,7 @@ fn profile_to_map(profile: &[(&str, &str)]) -> HashMap<String, String> {
 /// falls back to `scalo::kafka_config` constants.
 #[must_use]
 pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
-    if let Some(Some(central)) = Some(get_central())
+    if let Some(central) = get_central()
         && let Some(profile) = central.consumer.get(profile_name)
     {
         return profile.clone();
@@ -158,7 +158,7 @@ pub fn consumer_profile(profile_name: &str) -> HashMap<String, String> {
 /// falls back to `scalo::kafka_config` constants.
 #[must_use]
 pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
-    if let Some(Some(central)) = Some(get_central())
+    if let Some(central) = get_central()
         && let Some(profile) = central.producer.get(profile_name)
     {
         return profile.clone();
@@ -186,6 +186,10 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
 /// fallback) baseline, then service-specific overrides, then the user's
 /// `librdkafka_options` from config YAML.
 #[must_use]
+#[allow(
+    clippy::implicit_hasher,
+    reason = "callers pass std HashMaps, a hasher parameter buys nothing"
+)]
 pub fn merge_layers(
     base: &HashMap<String, String>,
     service_overrides: &[(&str, &str)],

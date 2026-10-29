@@ -54,6 +54,10 @@ pub fn validate_args(config_dir: &Path) -> Vec<OsString> {
 ///
 /// Returns `Ok(())` if validation passes, or an error naming each unreadable
 /// table file, or with details from Vector's stderr output.
+///
+/// # Errors
+///
+/// Returns an error when an enrichment table file is unreadable, the `vector` binary cannot run, or `vector validate` rejects the config.
 pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) -> Result<()> {
     check_enrichment_tables(config_dir).await?;
 
@@ -116,6 +120,10 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
 /// - `strict`: error if versions don't match
 /// - `warn`: log warning if versions don't match
 /// - `disabled`: skip check entirely
+///
+/// # Errors
+///
+/// Returns an error when the `vector` binary cannot run or exits non-zero, or when the version differs from the pin under `strict`.
 pub async fn check_vector_version(vector_config: &VectorConfig) -> Result<String> {
     if vector_config.version_check == "disabled" {
         debug!("vector version check disabled");
@@ -224,8 +232,8 @@ pub fn classify_data_dir(mountinfo: Option<&str>, data_dir: &Path) -> DataDirBac
     }
 
     match best {
-        // Only the rootfs covers it, so it is the writable layer.
-        Some((_, "/", _)) => DataDirBacking::Ephemeral,
+        // Only the rootfs covers it, or nothing does, so it is the writable layer.
+        Some((_, "/", _)) | None => DataDirBacking::Ephemeral,
         Some((_, _, root)) => {
             // kubelet exposes an emptyDir by its source path. It IS its own
             // mount, so the mount-point test alone would call it external --
@@ -237,7 +245,6 @@ pub fn classify_data_dir(mountinfo: Option<&str>, data_dir: &Path) -> DataDirBac
                 DataDirBacking::ExternalMount
             }
         }
-        None => DataDirBacking::Ephemeral,
     }
 }
 
@@ -692,7 +699,7 @@ mod tests {
         std::fs::write(&table, "abbreviation\nUTC\n").expect("write table");
         write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&table));
 
-        assert!(unreadable_enrichment_tables(tmp.path()).is_empty());
+        assert_eq!(unreadable_enrichment_tables(tmp.path()), Vec::new());
     }
 
     #[test]
@@ -734,7 +741,7 @@ mod tests {
             "enrichment_tables:\n  cache:\n    type: memory\n    ttl: 60\n",
         );
 
-        assert!(unreadable_enrichment_tables(tmp.path()).is_empty());
+        assert_eq!(unreadable_enrichment_tables(tmp.path()), Vec::new());
     }
 
     /// A stand-in for a Vector binary whose `validate` passes, as the real one

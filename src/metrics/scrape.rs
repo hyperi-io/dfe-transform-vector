@@ -643,6 +643,11 @@ fn format_le(bound: f64) -> String {
 }
 
 /// Clamp an exposition float into the counter's integer domain.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "v is finite and positive, and the cast saturates"
+)]
 fn to_u64(v: f64) -> u64 {
     if v.is_finite() && v > 0.0 {
         // `as` saturates at u64::MAX for a finite float since Rust 1.45.
@@ -797,8 +802,8 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
         };
 
         for (total, fresh) in [(3.0, 3), (3.0, 0), (5.0, 2), (1.0, 1), (0.0, 0)] {
-            let recorded = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
-            assert_eq!(recorded, fresh, "at a total of {total}");
+            let counted = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
+            assert_eq!(counted, fresh, "at a total of {total}");
             assert_eq!(
                 crate::metrics::dropped_since(&snapshotter, TOO_LARGE),
                 fresh,
@@ -822,8 +827,8 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
         };
 
         for (total, fresh) in [(4.0, 4), (4.0, 0), (10.0, 6), (2.0, 2)] {
-            let recorded = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
-            assert_eq!(recorded, fresh, "at a total of {total}");
+            let counted = metrics::with_local_recorder(&recorder, || drops.record(&at(total)));
+            assert_eq!(counted, fresh, "at a total of {total}");
             assert_eq!(
                 crate::metrics::dropped_since(&snapshotter, DEAD_LETTER_REJECTED),
                 fresh,
@@ -840,8 +845,8 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
 
     fn holding(sink_received: f64, sent: f64) -> Derived {
         Derived {
-            sink_received,
             sent,
+            sink_received,
             ..Derived::default()
         }
     }
@@ -896,8 +901,8 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
     /// What the sink took on, delivered and had refused.
     fn refusing(sink_received: f64, sent: f64, sink_discarded: f64) -> Derived {
         Derived {
-            sink_received,
             sent,
+            sink_received,
             sink_discarded,
             ..Derived::default()
         }
@@ -1004,7 +1009,7 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
         let before = ReloadCounts::parse(RELOADS).expect("parses");
         let mut after = before.clone();
         after.applied += 1.0;
-        assert!(after.refused_since(&before).is_empty());
+        assert_eq!(after.refused_since(&before), Vec::<String>::new());
 
         after
             .refused
@@ -1102,24 +1107,28 @@ vector_rtt_seconds_count 9
 
     /// A counter, a gauge and a 6-bucket histogram per group, ~3000 lines.
     fn large_exposition() -> String {
+        use std::fmt::Write as _;
+
         let mut text = String::new();
         for i in 0..231 {
             let labels = format!("component_id=\"c{i}\",component_kind=\"sink\",pipeline=\"p{i}\"");
-            text.push_str(&format!("# TYPE vector_bytes_{i}_total counter\n"));
-            text.push_str(&format!("vector_bytes_{i}_total{{{labels}}} {i}\n"));
-            text.push_str(&format!("# TYPE vector_util_{i} gauge\n"));
-            text.push_str(&format!("vector_util_{i}{{{labels}}} 0.25\n"));
-            text.push_str(&format!("# TYPE vector_rtt_{i}_seconds histogram\n"));
+            writeln!(text, "# TYPE vector_bytes_{i}_total counter").unwrap();
+            writeln!(text, "vector_bytes_{i}_total{{{labels}}} {i}").unwrap();
+            writeln!(text, "# TYPE vector_util_{i} gauge").unwrap();
+            writeln!(text, "vector_util_{i}{{{labels}}} 0.25").unwrap();
+            writeln!(text, "# TYPE vector_rtt_{i}_seconds histogram").unwrap();
             for (n, le) in ["0.005", "0.01", "0.05", "0.1", "1", "+Inf"]
                 .iter()
                 .enumerate()
             {
-                text.push_str(&format!(
-                    "vector_rtt_{i}_seconds_bucket{{{labels},le=\"{le}\"}} {n}\n"
-                ));
+                writeln!(
+                    text,
+                    "vector_rtt_{i}_seconds_bucket{{{labels},le=\"{le}\"}} {n}"
+                )
+                .unwrap();
             }
-            text.push_str(&format!("vector_rtt_{i}_seconds_sum{{{labels}}} 0.42\n"));
-            text.push_str(&format!("vector_rtt_{i}_seconds_count{{{labels}}} 6\n"));
+            writeln!(text, "vector_rtt_{i}_seconds_sum{{{labels}}} 0.42").unwrap();
+            writeln!(text, "vector_rtt_{i}_seconds_count{{{labels}}} 6").unwrap();
         }
         text
     }

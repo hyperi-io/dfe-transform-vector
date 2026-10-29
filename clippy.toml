@@ -25,6 +25,10 @@ type-complexity-threshold = 350
 # Maximum lines in a function before warning
 too-many-lines-threshold = 150
 
+# unwrap_used / expect_used stay denied in shipped code, not in #[test] or #[cfg(test)]
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
 # -----------------------------------------------------------------------------
 # Style Preferences
 # -----------------------------------------------------------------------------

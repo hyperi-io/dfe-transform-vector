@@ -92,6 +92,10 @@ pub fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
 /// Spawn Vector as a child process.
 ///
 /// stdout/stderr are inherited, so Vector's logs pass through to pod stdout.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Vector`] when the process cannot be spawned.
 pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<Child> {
     info!(
         binary = %vector_config.binary,
@@ -126,12 +130,19 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
 }
 
 /// Send a signal to the Vector child process.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Vector`] when the child has no PID or the signal cannot be delivered.
 pub fn send_signal(child: &Child, sig: Signal) -> Result<()> {
     let pid = child
         .id()
         .ok_or_else(|| crate::Error::Vector("Vector process has no PID".into()))?;
 
-    signal::kill(Pid::from_raw(pid as i32), sig)
+    let raw = i32::try_from(pid).map_err(|_| {
+        crate::Error::Vector(format!("Vector PID {pid} does not fit a signal target"))
+    })?;
+    signal::kill(Pid::from_raw(raw), sig)
         .map_err(|e| crate::Error::Vector(format!("failed to send {sig} to Vector: {e}")))?;
 
     debug!(pid, signal = %sig, "sent signal to Vector");
@@ -139,6 +150,10 @@ pub fn send_signal(child: &Child, sig: Signal) -> Result<()> {
 }
 
 /// Send SIGHUP to Vector for config reload.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Vector`] when the signal cannot be delivered.
 pub fn reload_vector(child: &Child) -> Result<()> {
     send_signal(child, Signal::SIGHUP)
 }
@@ -163,6 +178,10 @@ pub fn reload_vector(child: &Child) -> Result<()> {
 /// Uses `std::sync::Mutex` intentionally — the lock is held for sub-microsecond
 /// reads/writes of a `u32` and is never held across an `.await` point.
 /// `tokio::sync::Mutex` is unnecessary overhead for this pattern.
+///
+/// # Errors
+///
+/// None in practice: a spawn failure is logged and retried after backoff, and the loop returns `Ok(())` once shutdown is requested.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_lifecycle(
     vector_config: &VectorConfig,
@@ -209,7 +228,9 @@ pub async fn run_lifecycle(
         };
 
         // Publish PID for the reload loop
-        *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = child.id();
+        *vector_pid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = child.id();
 
         let started_at = Instant::now();
 
@@ -247,7 +268,7 @@ pub async fn run_lifecycle(
         // Wait for either: child exit or shutdown signal
         let exit_status = tokio::select! {
             status = child.wait() => {
-                *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                *vector_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 match status {
                     Ok(s) => s,
                     Err(e) => {
@@ -263,7 +284,7 @@ pub async fn run_lifecycle(
             }
             _ = shutdown.changed() => {
                 // Shutdown requested — forward SIGTERM to Vector
-                *vector_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                *vector_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 lifecycle.set(State::ShuttingDown);
                 log_state_change(&VECTOR_RUNNING, false);
                 info!("shutdown requested, sending SIGTERM to Vector");
