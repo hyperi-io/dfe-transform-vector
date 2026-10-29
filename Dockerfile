@@ -51,8 +51,13 @@ ARG VECTOR_VERSION=0.60.0
 ARG VECTOR_SHA256_AMD64=89a9f134dcc35a6fbba9cb8ad0fec2d4802657bba6cb1c374a30660ef9456bdc
 ARG VECTOR_SHA256_ARM64=1540662d8bc33af5afd287f821ba930417e0f3124073bc9db6a29c59dda88dbb
 ARG TARGETARCH
-# hadolint ignore=DL4006
+# The production base carries no curl, so this layer installs it for the
+# download and purges it again. Apt versions are unpinned for the same reason
+# as the base layer's.
+# hadolint ignore=DL4006,DL3008
 RUN set -eu \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl \
     && case "${TARGETARCH:-amd64}" in \
         amd64) ARCH=x86_64; VECTOR_SHA256="${VECTOR_SHA256_AMD64}" ;; \
         arm64) ARCH=aarch64; VECTOR_SHA256="${VECTOR_SHA256_ARM64}" ;; \
@@ -79,6 +84,8 @@ RUN set -eu \
         'directory, taken from the release archive itself.' \
         > /usr/share/doc/vector/README.hyperi \
     && rm -rf /tmp/vector.tar.gz "${VDIR}" \
+    && apt-get purge -y --auto-remove curl \
+    && rm -rf /var/lib/apt/lists/* \
     && /usr/local/bin/vector --version
 
 # Vector data and config directories
