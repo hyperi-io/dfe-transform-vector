@@ -68,7 +68,8 @@ fn contract_produces_valid_structure() {
     assert!(keda.max_replicas > keda.min_replicas);
 
     // One required Kafka Secret, mounted into both endpoints' SASL names, and
-    // its broker's mechanism into the one name both endpoints read.
+    // its broker's mechanism and security protocol into the one name each that
+    // both endpoints read.
     assert_eq!(c.secrets.len(), 1, "one Kafka secret group");
     assert_eq!(c.secrets[0].group_name, "kafka");
     assert!(!c.secrets[0].optional);
@@ -85,6 +86,7 @@ fn contract_produces_valid_structure() {
             ("DFE_TRANSFORM_SINK_SASL_USERNAME", "username"),
             ("DFE_TRANSFORM_SINK_SASL_PASSWORD", "password"),
             ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", "sasl.mechanism"),
+            ("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", "security.protocol"),
         ]
     );
 
@@ -110,6 +112,22 @@ fn every_contract_secret_env_var_reaches_the_config() {
 
     for group in &c.secrets {
         for env in &group.env_vars {
+            // The protocol is not a string field: an SSL protocol turns TLS on
+            // for both endpoints, and any other leaves it as the file set it.
+            if env.secret_key == "security.protocol" {
+                let config = with_vars(&[(env.env_var.as_str(), Some("SASL_SSL"))], || {
+                    let mut config = Config::default();
+                    config.apply_flat_env(&prefix);
+                    config
+                });
+                assert!(
+                    config.source.tls.enabled && config.sink.tls.enabled,
+                    "{} ({}) was set and the config did not read it",
+                    env.env_var,
+                    group.group_name
+                );
+                continue;
+            }
             let field = env
                 .env_var
                 .strip_prefix(&format!("{prefix}_"))
@@ -287,6 +305,8 @@ fn the_contract_default_config_is_one_the_app_accepts() {
         .map(|env| {
             let value = if env.secret_key == "sasl.mechanism" {
                 "SCRAM-SHA-512"
+            } else if env.secret_key == "security.protocol" {
+                "SASL_PLAINTEXT"
             } else {
                 "from-the-secret"
             };

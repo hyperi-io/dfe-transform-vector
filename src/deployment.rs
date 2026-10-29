@@ -196,7 +196,8 @@ pub fn contract() -> DeploymentContract {
 /// The Kafka Secret the chart mounts into each endpoint's SASL env vars.
 ///
 /// `Config::apply_flat_env` reads these names: a credential per endpoint, and
-/// one mechanism for both, since the Secret names its broker's. Each
+/// one mechanism and one security protocol for both, since the Secret names its
+/// broker's. Each
 /// `key_name` is distinct because the chart renders it as a values key.
 fn secrets() -> Vec<SecretGroupContract> {
     let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
@@ -231,6 +232,11 @@ fn secrets() -> Vec<SecretGroupContract> {
                 "DFE_TRANSFORM_KAFKA_SASL_MECHANISM",
                 "mechanism",
                 "sasl.mechanism",
+            ),
+            env(
+                "DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL",
+                "security-protocol",
+                "security.protocol",
             ),
         ],
     )]
