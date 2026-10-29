@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.57](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.56...v1.0.57) (2026-10-29)
+
+### Bug Fixes
+
+* 2.2.2 round on scalo 2.14.22 ([#134](https://github.com/hyperi-io/dfe-transform-vector/issues/134)) ([205eb6f](https://github.com/hyperi-io/dfe-transform-vector/commit/205eb6fd2596e31f58b76530efa191ae2491dc31))
+* bring the clippy config to the baseline ([#133](https://github.com/hyperi-io/dfe-transform-vector/issues/133)) ([8502c73](https://github.com/hyperi-io/dfe-transform-vector/commit/8502c73d270afa7638f389de050cb3d012d702b6))
+* install curl for the Vector download and purge it after ([#135](https://github.com/hyperi-io/dfe-transform-vector/issues/135)) ([6da907f](https://github.com/hyperi-io/dfe-transform-vector/commit/6da907fdc06b7497042e1297b28eed50a733cb91))
+
 ## [1.0.56](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.55...v1.0.56) (2026-10-28)
 
 ### Bug Fixes
