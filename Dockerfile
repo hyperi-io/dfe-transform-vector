@@ -18,14 +18,16 @@ LABEL io.hyperi.profile="production"
 # Apt versions are unpinned because Debian drops superseded ones, so the digest-pinned base is what fixes the release.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl netcat-openbsd iputils-ping \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
 RUN chmod +x /usr/local/bin/dfe-transform-vector
 
-# Ubuntu 24.04 ships with ubuntu user at UID 1000 -- remove before creating appuser
+# A base image may ship its own user at UID 1000 (Ubuntu's `ubuntu`), so remove it first.
 RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create-home --uid 1000 appuser
+RUN mkdir -p '/var/lib/vector' '/var/run/vector' && chown 1000:1000 '/var/lib/vector' '/var/run/vector'
+WORKDIR /home/appuser
 # Vector binary -- downloaded inside the build for portability. Multi-arch via
 # $TARGETARCH. Bump the version deliberately: Vector's CLI flags and config
 # schema can shift between minor releases.
@@ -92,10 +94,9 @@ EXPOSE 9090
 # Conditional listeners, not EXPOSEd -- publish explicitly when enabled:
 #   6000/tcp push -- when config.source.transport is one of "direct", "grpc"
 
-# Shell form maps any curl failure to exit 1, the only unhealthy status Docker defines.
-# hadolint ignore=DL3025
+# bash builtins only, so the image needs no HTTP client. A status other than 200 exits 1.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -sf http://localhost:9090/livez > /dev/null || exit 1
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/localhost/9090 && printf 'GET /livez HTTP/1.0\\r\\n\\r\\n' >&3 && read -r _ code _ <&3 && [ \"$code\" = 200 ]"]
 
 ENTRYPOINT ["dfe-transform-vector"]
 CMD ["--config", "/etc/dfe-transform-vector/config.yaml"]
