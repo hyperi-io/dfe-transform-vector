@@ -61,6 +61,7 @@ fn build_config(buffer: BufferConfig) -> (Config, TempDir) {
         transforms: TransformConfig {
             dir: Some(FIXTURE_TRANSFORMS.to_string()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: "vector".to_string(),
@@ -247,6 +248,7 @@ fn vector_validate_full_chain_sasl_tls() {
         transforms: TransformConfig {
             dir: Some(FIXTURE_TRANSFORMS.to_string()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: "vector".to_string(),
@@ -427,6 +429,7 @@ async fn a_table_file_vector_validate_passes_but_cannot_load_fails_validation() 
     config.transforms = TransformConfig {
         dir: Some(transforms.to_string_lossy().into_owned()),
         files: None,
+        data_dir: work_dir.path().join("data").to_string_lossy().into_owned(),
     };
     let config_dir = work_dir.path().join("config");
     assembler::assemble(&config, &config_dir).expect("assembly should succeed");
@@ -510,6 +513,7 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         transforms: TransformConfig {
             dir: Some(FIXTURE_TRANSFORMS.to_string()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: "vector".to_string(),

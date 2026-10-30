@@ -51,8 +51,9 @@ both. What changes is who hands the record over.
 for each, commented per field and runnable as they stand -- copy one, replace
 the `dfe_transform` step, and you have a working pipeline. In a DFE deployment
 the supervisor generates the `sources:` and `sinks:` blocks from the big dials
-and you author only the `transforms:` block, so do not mount a whole template as
-a transform file: Vector would then run two sources and two sinks.
+and you author only the `transforms:` block, plus `enrichment_tables:` loading
+from `transforms.data_dir`. The supervisor refuses any other top-level key, so a
+whole template mounted as a transform file does not start.
 
 On `direct` Vector does not speak scalo's `Transport/Push`, so the supervisor
 translates. It accepts records on `source.listen`, hands them to Vector over
@@ -70,18 +71,19 @@ ceiling, or one Vector refused for good because a sink it feeds rejected it
 
 ## Features
 
-- **Big-dial config**: Simple YAML (pipeline name, brokers, topics, SASL/TLS)
-  generates full Vector-native source, sink, and observability YAML
-- **DAG auto-wiring**: User-supplied transform YAMLs are loaded, validated, and
-  wired between `dfe_source` and `dfe_sink` automatically
-- **Crash recovery**: Exponential backoff restarts (1s-60s), K8s-aware readiness
-- **Hot-reload**: Poll-based file watcher detects transform changes, validates, SIGHUPs Vector, then reads Vector's own counters for whether it applied the change (source/sink changes require pod restart)
-- **Version pinning**: Config-level Vector version check (strict/warn/disabled)
-- **Production Kafka tuning**: librdkafka defaults baked in with 4-layer cascade
-- **Metrics**: Vector's own `vector_*` merged into the wrapper's registry, so one
-  endpoint and one OTLP push carry both
-- **Helm chart**: A thin chart assembled at release from the deployment contract
-  on the scalo-service library chart
+- A big-dial YAML (pipeline name, brokers, topics, SASL/TLS) generates the
+  Vector-native source, sink and observability YAML.
+- Transform files are loaded, validated and wired between `dfe_source` and
+  `dfe_sink`.
+- A crashed Vector restarts with exponential backoff (1s-60s), and readiness
+  follows it.
+- A poll-based watcher validates a transform change, SIGHUPs Vector, then reads Vector's own counters for whether it applied (a source or sink change needs a pod restart).
+- The Vector version is checked against the config (strict/warn/disabled).
+- librdkafka defaults are baked in under a 4-layer cascade.
+- Vector's own `vector_*` metrics merge into the wrapper's registry, so one
+  endpoint and one OTLP push carry both.
+- A thin Helm chart is assembled at release from the deployment contract on the
+  scalo-service library chart.
 
 ## Quick Start
 
@@ -327,7 +329,7 @@ What green does NOT mean:
 | Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The library's trigger also reads `config.kafka.*`, which this app does not have, and refuses to render |
 | Set `vector.version` in a deployment's config and forget it | Leave it unset, so the default reads `VECTOR_VERSION` | A committed chart once said 0.48.0 while the image baked 0.57.0, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
-| Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials, so Vector would run two sources and two sinks |
+| Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials and refuses a transform file declaring them |
 | Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs and `Debug`, and Vector reads the credential from files through its `directory` secret backend, so it never lands in the Vector config |
 | Put a `${VAR}` placeholder in a credential or a transform | Mount the secret and set `sasl.secret_dir`, or give the credential through `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`; read the environment in VRL with `get_env_var` | Vector 0.57+ expands no `${VAR}` without `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, so the placeholder reaches the broker as the password |
 | Assume a config key you added is wired because it parses and validates | Prove it changes behaviour, and add it to the standing check that every committed config file loads | `metrics.address` and `logging.level` never left the struct. A config saying `metrics.address: 0.0.0.0:19099` still listened on 9090, so a deployment moving the metrics port lost every probe |

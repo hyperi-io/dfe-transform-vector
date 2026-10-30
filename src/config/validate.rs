@@ -340,7 +340,7 @@ pub fn unreadable_enrichment_tables(config_dir: &Path) -> Vec<UnreadableTable> {
 }
 
 /// The file an enrichment table loads, for the table types that load one.
-fn enrichment_table_file(table: &serde_json::Value) -> Option<&str> {
+pub(crate) fn enrichment_table_file(table: &serde_json::Value) -> Option<&str> {
     use serde_json::Value;
 
     match table.get("type").and_then(Value::as_str)? {

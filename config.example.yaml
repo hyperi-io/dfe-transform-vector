@@ -128,6 +128,8 @@ dfe_source: "my_source"
 #   #   - "/etc/dfe/transforms/parse.yaml"
 #   #   - "/etc/dfe/transforms/enrich.yaml"
 #   #   - "/etc/dfe/transforms/filter.yaml"
+#   # The only directory a transform file's enrichment tables may load from.
+#   data_dir: "/etc/dfe-transform-vector/data"
 
 # -----------------------------------------------------------------------------
 # Vector subprocess settings

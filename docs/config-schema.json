@@ -117,7 +117,8 @@
       "$ref": "#/$defs/TransformConfig",
       "default": {
         "dir": null,
-        "files": null
+        "files": null,
+        "data_dir": "/etc/dfe-transform-vector/data"
       }
     },
     "vector": {
@@ -639,6 +640,11 @@
             "type": "string"
           },
           "default": null
+        },
+        "data_dir": {
+          "description": "The only directory a transform file's enrichment tables may load from.",
+          "type": "string",
+          "default": "/etc/dfe-transform-vector/data"
         }
       }
     },

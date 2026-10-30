@@ -104,6 +104,7 @@ fn direct_config(work: &TempDir, vector_binary: &str) -> Config {
         transforms: TransformConfig {
             dir: Some(transforms.to_string_lossy().into_owned()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: vector_binary.into(),

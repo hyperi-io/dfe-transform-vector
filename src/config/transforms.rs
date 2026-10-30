@@ -134,6 +134,7 @@ mod tests {
         let config = TransformConfig {
             dir: Some(dir.path().to_string_lossy().into_owned()),
             files: None,
+            ..Default::default()
         };
 
         let loaded = load_transforms(&config).unwrap();
@@ -156,6 +157,7 @@ mod tests {
                 file_b.to_string_lossy().into_owned(),
                 file_a.to_string_lossy().into_owned(),
             ]),
+            ..Default::default()
         };
 
         let loaded = load_transforms(&config).unwrap();
@@ -177,6 +179,7 @@ mod tests {
         let config = TransformConfig {
             dir: Some("/nonexistent/path".into()),
             files: None,
+            ..Default::default()
         };
         let err = load_transforms(&config).unwrap_err();
         assert!(err.to_string().contains("does not exist"));

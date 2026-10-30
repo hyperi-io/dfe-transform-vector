@@ -505,14 +505,30 @@ impl Default for BufferConfig {
     }
 }
 
+/// Where the bundled filebeat pipeline and the engine's file set put the
+/// enrichment tables.
+pub const DEFAULT_TRANSFORMS_DATA_DIR: &str = "/etc/dfe-transform-vector/data";
+
 /// Transform file loading configuration.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TransformConfig {
     /// Directory to load all YAML transform files from.
     pub dir: Option<String>,
     /// Explicit list of transform YAML file paths (loaded in order).
     pub files: Option<Vec<String>>,
+    /// The only directory a transform file's enrichment tables may load from.
+    pub data_dir: String,
+}
+
+impl Default for TransformConfig {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            files: None,
+            data_dir: DEFAULT_TRANSFORMS_DATA_DIR.to_string(),
+        }
+    }
 }
 
 /// The two in-pod legs between the supervisor and Vector, on the direct
@@ -863,6 +879,9 @@ impl ApplyFlatEnv for Config {
         // Transforms
         if let Some(v) = flat_env::flat_env_string(prefix, "TRANSFORMS_DIR") {
             self.transforms.dir = Some(v);
+        }
+        if let Some(v) = flat_env::flat_env_string(prefix, "TRANSFORMS_DATA_DIR") {
+            self.transforms.data_dir = v;
         }
 
         // Vector

@@ -181,7 +181,13 @@ fn write_config(
             "encoding": "json",
             "compression": "none",
         },
-        "transforms": { "dir": transforms_dir.to_string_lossy() },
+        "transforms": {
+            "dir": transforms_dir.to_string_lossy(),
+            "data_dir": fb::timezones_csv()
+                .and_then(|table| table.parent().map(std::path::Path::to_path_buf))
+                .expect("the bundled timezones table")
+                .to_string_lossy(),
+        },
         "vector": {
             "binary": vector_binary.to_string_lossy(),
             "data_dir": data_dir.to_string_lossy(),

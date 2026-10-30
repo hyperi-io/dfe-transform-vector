@@ -131,6 +131,7 @@ properties:
     default:
       dir: null
       files: null
+      data_dir: /etc/dfe-transform-vector/data
   vector:
     description: Vector subprocess settings. **Requires restart.**
     $ref: "#/$defs/VectorConfig"
@@ -612,6 +613,10 @@ $defs:
         items:
           type: string
         default: null
+      data_dir:
+        description: The only directory a transform file's enrichment tables may load from.
+        type: string
+        default: /etc/dfe-transform-vector/data
   VectorConfig:
     description: Vector subprocess configuration.
     type: object

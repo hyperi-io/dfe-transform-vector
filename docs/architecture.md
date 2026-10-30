@@ -124,7 +124,7 @@ memory guard.
 **A failed bridge leg stops the process.** Its senders would otherwise retry for
 ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
-**Transforms cannot reach the Kafka credentials.** Vector runs without the supervisor's `DFE_TRANSFORM_*` variables, which VRL's `get_env_var` would read, and a transform naming one of the assembler's secret backends in a `SECRET[...]` is refused.
+**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks, and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_*` variables.
 
 ## Health and metrics invariants
 
@@ -181,4 +181,4 @@ scalo Push listener in and a Push client out with Vector on `vector` components
 over loopback. `templates/bus.yaml` and `templates/direct.yaml` are the whole
 topology for each, runnable as they stand. In a DFE deployment the supervisor
 generates the `sources:` and `sinks:` blocks, so a whole template mounted as a
-transform file gives Vector two sources and two sinks.
+transform file is refused.
