@@ -951,6 +951,30 @@ fn config_validation_accepts_pressure_threshold_boundaries() {
         .expect("pressure_threshold=0.5 should be valid");
 }
 
+/// A zero poll re-reads the transform files in a tight loop, and zero expiry
+/// ticks zero every merged gauge in the tick that sets it.
+#[test]
+fn config_validation_refuses_zero_intervals() {
+    for (reload_on, poll_secs, expiry_ticks, refused) in [
+        (true, 0, 4, Some("reload.poll_interval_secs")),
+        (false, 0, 4, None),
+        (true, 1, 4, None),
+        (true, 30, 0, Some("vector_metrics_expiry_ticks")),
+        (true, 30, 1, None),
+    ] {
+        let mut config = full_config(None);
+        config.reload.enabled = reload_on;
+        config.reload.poll_interval_secs = poll_secs;
+        config.metrics.vector_metrics_expiry_ticks = expiry_ticks;
+        let case = format!("reload={reload_on} poll={poll_secs} expiry={expiry_ticks}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => assert!(e.to_string().contains(field), "{case}: {e}"),
+            (outcome, _) => panic!("{case}: {outcome:?}"),
+        }
+    }
+}
+
 #[test]
 fn config_validation_catches_sasl_enabled_without_username() {
     let mut config = full_config(None);

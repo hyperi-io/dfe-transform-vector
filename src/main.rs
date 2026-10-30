@@ -25,7 +25,8 @@ use scalo::cli::{CliError, CommonArgs, ServiceApp, StandardCommand, VersionInfo}
 use scalo::deployment::generate_compose_fragment;
 use scalo::logger::security::{self, SecurityEvent, SecurityOutcome};
 use scalo::version_check::VersionCheckConfig;
-use tracing::{debug, error, info};
+use tokio::sync::mpsc::error::TrySendError;
+use tracing::{debug, error, info, warn};
 
 use dfe_transform_vector::bridge::{self, BridgeRuntime};
 use dfe_transform_vector::config::Config;
@@ -401,10 +402,19 @@ async fn run_transform_service(
                     let _ = shutdown_tx_signal.send(true);
                     return;
                 }
-                _ = sighup.recv() => {
-                    info!("received SIGHUP, triggering manual config reload");
-                    security::config_changed("signal", "system", "SIGHUP received, manual config reload");
-                    let _ = reload_tx_signal.send(ReloadTrigger::Manual).await;
+                // Never awaits: a send blocked on a full or unread channel would
+                // stop this loop reading SIGTERM.
+                _ = sighup.recv() => match reload_tx_signal.try_send(ReloadTrigger::Manual) {
+                    Ok(()) => {
+                        info!("received SIGHUP, triggering manual config reload");
+                        security::config_changed("signal", "system", "SIGHUP received, manual config reload");
+                    }
+                    Err(TrySendError::Full(_)) => {
+                        info!("received SIGHUP while a reload is already pending; folded into it");
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        warn!("received SIGHUP, but reload.enabled is false; nothing reloaded");
+                    }
                 }
             }
         }
@@ -432,6 +442,9 @@ async fn run_transform_service(
             )
             .await;
         });
+    } else {
+        // Closed, so a SIGHUP is reported as ignored rather than queued.
+        drop(reload_rx);
     }
 
     // Direct transport: carry records between DFE's Push protocol and Vector's.

@@ -26,6 +26,7 @@ use tracing::{debug, error};
 
 use super::loader::VectorConfig;
 use crate::Result;
+use crate::vector::process::vector_command;
 
 /// Exit code for Vector configuration errors.
 const VECTOR_CONFIG_ERROR_EXIT: i32 = 78;
@@ -69,7 +70,7 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
         "running vector validate"
     );
 
-    let mut cmd = tokio::process::Command::new(binary);
+    let mut cmd = vector_command(binary);
     cmd.args(validate_args(config_dir))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -131,7 +132,7 @@ pub async fn check_vector_version(vector_config: &VectorConfig) -> Result<String
     }
 
     let binary = &vector_config.binary;
-    let output = tokio::process::Command::new(binary)
+    let output = vector_command(binary)
         .arg("--version")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

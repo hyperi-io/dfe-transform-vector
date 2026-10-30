@@ -263,3 +263,59 @@ async fn a_subprocess_that_exits_immediately_never_reports_running() {
         "the crash must still be reported, saw: {states:?}"
     );
 }
+
+/// A shutdown arriving during the crash backoff ends the supervisor at once,
+/// rather than after a backoff that runs up to a minute past the pod's grace.
+#[tokio::test]
+async fn a_shutdown_during_the_crash_backoff_is_not_held_by_it() {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use dfe_transform_vector::config::VectorConfig;
+    use dfe_transform_vector::vector::{BackoffConfig, SPAWN_SETTLE, run_lifecycle};
+
+    let work = tempfile::TempDir::new().expect("work dir");
+    let vector_config = VectorConfig {
+        binary: write_instant_exit_binary(work.path())
+            .to_string_lossy()
+            .into_owned(),
+        ..VectorConfig::default()
+    };
+    let backoff = BackoffConfig {
+        initial: Duration::from_secs(600),
+        ..BackoffConfig::default()
+    };
+
+    let lifecycle = Lifecycle::new();
+    let metrics = WrapperMetrics::register(metrics_manager(), "backoff-shutdown-test");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let lc = lifecycle.clone();
+    let dir = work.path().to_path_buf();
+    let task = tokio::spawn(async move {
+        run_lifecycle(
+            &vector_config,
+            &dir,
+            &lc,
+            &backoff,
+            Arc::new(Mutex::new(None)),
+            metrics.crashes_total.clone(),
+            metrics.restarts_total.clone(),
+            shutdown_rx,
+        )
+        .await
+    });
+
+    let mut rx = lifecycle.subscribe();
+    tokio::time::timeout(SPAWN_SETTLE * 12, rx.wait_for(|s| *s == State::Crashed))
+        .await
+        .expect("the instant-exit binary must crash")
+        .expect("lifecycle sender alive");
+
+    let _ = shutdown_tx.send(true);
+    let ended = tokio::time::timeout(Duration::from_secs(5), task).await;
+    assert!(
+        matches!(ended, Ok(Ok(Ok(())))),
+        "run_lifecycle was still in its 600 s backoff 5 s after shutdown: {ended:?}"
+    );
+    assert_eq!(lifecycle.state(), State::ShuttingDown);
+}

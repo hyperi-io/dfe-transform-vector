@@ -124,6 +124,8 @@ memory guard.
 **A failed bridge leg stops the process.** Its senders would otherwise retry for
 ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
+**Transforms cannot reach the Kafka credentials.** Vector runs without the supervisor's `DFE_TRANSFORM_*` variables, which VRL's `get_env_var` would read, and a transform naming one of the assembler's secret backends in a `SECRET[...]` is refused.
+
 ## Health and metrics invariants
 
 **Port 9598 is a loopback debug surface, not a scrape target.** Vector's own

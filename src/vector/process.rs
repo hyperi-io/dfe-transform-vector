@@ -89,6 +89,36 @@ pub fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
     ]
 }
 
+/// A command for the Vector binary at `binary`, without this process's own
+/// `DFE_TRANSFORM_*` variables.
+///
+/// Those carry the Kafka credentials, and VRL's `get_env_var` hands Vector's
+/// environment to any transform. Vector reads the credentials from its secret
+/// backend instead.
+#[must_use]
+pub fn vector_command(binary: &str) -> Command {
+    let own_prefix = format!("{}_", crate::config::loader::ENV_PREFIX);
+    let mut cmd = Command::new(binary);
+    for (name, _) in std::env::vars_os() {
+        if name.as_encoded_bytes().starts_with(own_prefix.as_bytes()) {
+            cmd.env_remove(name);
+        }
+    }
+    cmd
+}
+
+/// Sleep for `wait`, cut short by a shutdown request, which the caller's next
+/// shutdown check then sees.
+async fn sleep_unless_shutdown(wait: Duration, shutdown: &mut tokio::sync::watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    tokio::select! {
+        () = tokio::time::sleep(wait) => {}
+        _ = shutdown.changed() => {}
+    }
+}
+
 /// Spawn Vector as a child process.
 ///
 /// stdout/stderr are inherited, so Vector's logs pass through to pod stdout.
@@ -104,7 +134,7 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
         "spawning Vector subprocess"
     );
 
-    let mut cmd = Command::new(&vector_config.binary);
+    let mut cmd = vector_command(&vector_config.binary);
     cmd.args(vector_args(config_dir));
 
     // Pass through Vector-specific log level
@@ -220,7 +250,7 @@ pub async fn run_lifecycle(
                 error!(error = %e, "failed to spawn Vector");
                 lifecycle.set(State::Crashed);
                 crashes_total.increment(1);
-                tokio::time::sleep(current_backoff).await;
+                sleep_unless_shutdown(current_backoff, &mut shutdown).await;
                 current_backoff = next_backoff(current_backoff, backoff);
                 crash_count += 1;
                 continue;
@@ -276,7 +306,7 @@ pub async fn run_lifecycle(
                         lifecycle.set(State::Crashed);
                         crashes_total.increment(1);
                         crash_count += 1;
-                        tokio::time::sleep(current_backoff).await;
+                        sleep_unless_shutdown(current_backoff, &mut shutdown).await;
                         current_backoff = next_backoff(current_backoff, backoff);
                         continue;
                     }
@@ -351,7 +381,7 @@ pub async fn run_lifecycle(
             backoff_secs = current_backoff.as_secs_f64(),
             crash_count, "restarting Vector after backoff"
         );
-        tokio::time::sleep(current_backoff).await;
+        sleep_unless_shutdown(current_backoff, &mut shutdown).await;
         current_backoff = next_backoff(current_backoff, backoff);
     }
 }
@@ -388,6 +418,67 @@ mod tests {
             Some("--watch-config-method"),
             "--watch-config takes no value"
         );
+    }
+
+    /// VRL's `get_env_var` reads Vector's environment, so the supervisor's own
+    /// variables, the Kafka credentials among them, reach no Vector process:
+    /// not the `--version` check, not `validate`, not the running one.
+    #[tokio::test]
+    #[allow(unsafe_code)]
+    async fn no_vector_process_sees_the_supervisors_own_variables() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // SAFETY: nextest runs each test in its own process, and nothing else
+        // in this one touches the environment.
+        unsafe {
+            std::env::set_var("DFE_TRANSFORM_SINK_SASL_PASSWORD", "probe-credential");
+            std::env::set_var("DFE_TRANSFORM_PROBE_OTHER", "probe-other");
+            std::env::set_var("PROBE_OPERATOR_VARIABLE", "kept");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir(&config_dir).unwrap();
+        let script = dir.path().join("vector");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nenv > \"{}/env-$1.txt\"\necho 'vector 0.0.0 (stand-in)'\n",
+                dir.path().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = VectorConfig {
+            binary: script.to_string_lossy().into_owned(),
+            version: "0.0.0".into(),
+            version_check: "strict".into(),
+            ..VectorConfig::default()
+        };
+
+        crate::config::validate::check_vector_version(&config)
+            .await
+            .unwrap();
+        crate::config::validate::vector_validate(&config, &config_dir)
+            .await
+            .unwrap();
+        spawn_vector(&config, &config_dir)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+
+        for argv0 in ["--version", "validate", "--config-dir"] {
+            let seen = std::fs::read_to_string(dir.path().join(format!("env-{argv0}.txt")))
+                .unwrap_or_else(|e| panic!("the {argv0} run wrote no environment: {e}"));
+            assert!(
+                !seen.contains("probe-credential") && !seen.contains("probe-other"),
+                "the {argv0} run saw a DFE_TRANSFORM_ variable"
+            );
+            assert!(
+                seen.contains("PROBE_OPERATOR_VARIABLE=kept"),
+                "the {argv0} run lost the rest of the environment"
+            );
+        }
     }
 
     #[test]

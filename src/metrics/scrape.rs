@@ -176,6 +176,66 @@ pub async fn fetch_exposition(address: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{address} returned a response with no body"))
 }
 
+/// One Vector running total carried across Vector restarts.
+///
+/// A total that falls is a restarted Vector counting from zero, so the total it
+/// had reached becomes a base the new count adds to. Without it a counter stays
+/// flat after a restart until the new count passes the old one.
+#[derive(Debug, Default, Clone, Copy)]
+struct Rebased {
+    /// The raw total at the last exposition.
+    last: f64,
+    /// What every earlier Vector process counted.
+    base: f64,
+}
+
+impl Rebased {
+    /// The pod-lifetime total for this exposition's raw `total`.
+    ///
+    /// Zero says nothing -- an exposition that did not parse, a series not yet
+    /// reported -- so it leaves the state alone. A restart still shows at the
+    /// first non-zero total below the last.
+    fn lifetime(&mut self, total: f64) -> f64 {
+        if total <= 0.0 {
+            return self.base + self.last;
+        }
+        if total < self.last {
+            self.base += self.last;
+        }
+        self.last = total;
+        self.base + total
+    }
+}
+
+/// [`Derived`] carried across Vector restarts, for the counters the app
+/// publishes.
+///
+/// The per-process totals stay as they are for [`SinkProgress`] and
+/// [`DeadLetterDrops`], which detect a restart themselves.
+#[derive(Debug, Default)]
+pub struct LifetimeTotals {
+    received: Rebased,
+    sent: Rebased,
+    sink_received: Rebased,
+    sink_discarded: Rebased,
+    sink_errors: Rebased,
+    oversize: Rebased,
+}
+
+impl LifetimeTotals {
+    /// `derived`'s totals as counted since the pod started.
+    pub fn carry(&mut self, derived: &Derived) -> Derived {
+        Derived {
+            received: self.received.lifetime(derived.received),
+            sent: self.sent.lifetime(derived.sent),
+            sink_received: self.sink_received.lifetime(derived.sink_received),
+            sink_discarded: self.sink_discarded.lifetime(derived.sink_discarded),
+            sink_errors: self.sink_errors.lifetime(derived.sink_errors),
+            oversize: self.oversize.lifetime(derived.oversize),
+        }
+    }
+}
+
 /// The handle a merged series was registered on.
 enum Handle {
     Counter(metrics::Counter),
@@ -189,6 +249,8 @@ struct Tracked {
     labels: Vec<Label>,
     handle: Handle,
     unseen: u32,
+    /// The counter's total across Vector restarts. Unused for a gauge.
+    total: Rebased,
 }
 
 impl Tracked {
@@ -277,7 +339,7 @@ impl ExpositionMerger {
             pairs.sort_unstable();
 
             match &sample.value {
-                Value::Counter(v) => self.counter(&sample.metric, &pairs, to_u64(*v)),
+                Value::Counter(v) => self.counter(&sample.metric, &pairs, *v),
                 Value::Gauge(v) => self.gauge(&sample.metric, &pairs, *v),
                 // A histogram arrives pre-aggregated, and the metrics crate's
                 // Histogram takes observations, not buckets -- replaying them
@@ -290,7 +352,7 @@ impl ExpositionMerger {
                         let le = format_le(bucket.less_than);
                         let mut with_le = pairs.clone();
                         with_le.push(("le", &le));
-                        self.counter(&name, &with_le, to_u64(bucket.count));
+                        self.counter(&name, &with_le, bucket.count);
                     }
                 }
                 Value::Summary(quantiles) => {
@@ -306,7 +368,7 @@ impl ExpositionMerger {
                 // a gauge so a fractional _sum keeps its precision.
                 Value::Untyped(v) => {
                     if sample.metric.ends_with("_total") || sample.metric.ends_with("_count") {
-                        self.counter(&sample.metric, &pairs, to_u64(*v));
+                        self.counter(&sample.metric, &pairs, *v);
                     } else {
                         self.gauge(&sample.metric, &pairs, *v);
                     }
@@ -328,7 +390,7 @@ impl ExpositionMerger {
     /// One tick older, before this exposition marks what it carries as seen.
     fn tick(&mut self) {
         for tracked in self.series.values_mut() {
-            tracked.unseen += 1;
+            tracked.unseen = tracked.unseen.saturating_add(1);
         }
     }
 
@@ -340,22 +402,24 @@ impl ExpositionMerger {
         hasher.finish()
     }
 
-    /// Set a counter to `value`, registering the series on first sight.
-    fn counter(&mut self, name: &str, pairs: &[(&str, &str)], value: u64) {
+    /// Set a counter to Vector's `total` carried across Vector restarts,
+    /// registering the series on first sight.
+    fn counter(&mut self, name: &str, pairs: &[(&str, &str)], total: f64) {
         let series = self.series_hash(name, pairs);
         if let Some(tracked) = self.series.get_mut(&series)
             && tracked.matches(name, pairs)
             && let Handle::Counter(c) = &tracked.handle
         {
-            c.absolute(value);
+            c.absolute(to_u64(tracked.total.lifetime(total)));
             tracked.unseen = 0;
             return;
         }
 
         let labels = to_labels(pairs);
         let handle = metrics::counter!(name.to_string(), labels.clone());
-        handle.absolute(value);
-        self.track(series, name, labels, Handle::Counter(handle));
+        let mut carried = Rebased::default();
+        handle.absolute(to_u64(carried.lifetime(total)));
+        self.track(series, name, labels, Handle::Counter(handle), carried);
     }
 
     /// Set a gauge to `value`, registering the series on first sight.
@@ -373,10 +437,23 @@ impl ExpositionMerger {
         let labels = to_labels(pairs);
         let handle = metrics::gauge!(name.to_string(), labels.clone());
         handle.set(value);
-        self.track(series, name, labels, Handle::Gauge(handle));
+        self.track(
+            series,
+            name,
+            labels,
+            Handle::Gauge(handle),
+            Rebased::default(),
+        );
     }
 
-    fn track(&mut self, series: u64, name: &str, labels: Vec<Label>, handle: Handle) {
+    fn track(
+        &mut self,
+        series: u64,
+        name: &str,
+        labels: Vec<Label>,
+        handle: Handle,
+        total: Rebased,
+    ) {
         self.series.insert(
             series,
             Tracked {
@@ -384,26 +461,29 @@ impl ExpositionMerger {
                 labels,
                 handle,
                 unseen: 0,
+                total,
             },
         );
     }
 
-    /// Drop every series unseen for `expiry_ticks`, zeroing the gauges.
+    /// Drop every gauge unseen for `expiry_ticks`, zeroing it.
     ///
     /// Zeroed rather than unregistered: the facade hands out handles, not a
     /// registry, and a utilisation gauge frozen at its last value reads as a
-    /// component that is still busy. A counter is left flat instead --
-    /// `absolute` is monotonic, and a flat counter already rates to zero.
+    /// component that is still busy. A counter is kept, flat, because a flat
+    /// counter already rates to zero and its carried total must outlast a
+    /// Vector restart longer than the expiry.
     fn expire(&mut self) {
         let limit = self.expiry_ticks;
-        self.series.retain(|_, tracked| {
-            if tracked.unseen < limit {
-                return true;
-            }
-            if let Handle::Gauge(g) = &tracked.handle {
+        self.series.retain(|_, tracked| match &tracked.handle {
+            Handle::Counter(_) => true,
+            Handle::Gauge(g) => {
+                if tracked.unseen < limit {
+                    return true;
+                }
                 g.set(0.0);
+                false
             }
-            false
         });
     }
 }
@@ -418,9 +498,9 @@ fn to_labels(pairs: &[(&str, &str)]) -> Vec<Label> {
 
 /// Point the app's own throughput counters at Vector's.
 ///
-/// `Counter::absolute` keeps the running maximum, so a Vector restart holds
-/// the totals where they were instead of reporting a reset the pod did not
-/// have.
+/// Takes totals already carried across Vector restarts ([`LifetimeTotals`]),
+/// because `Counter::absolute` keeps the running maximum and would hold a
+/// restarted Vector's count flat until it passed the old one.
 pub fn apply_derived(metrics: &WrapperMetrics, derived: &Derived) {
     metrics
         .app
@@ -584,13 +664,14 @@ pub fn spawn_vector_scrape_task(
         let mut merger = ExpositionMerger::new(expiry_ticks);
         let mut progress = SinkProgress::new(stall_after, Instant::now());
         let mut dead_letters = [DeadLetterDrops::too_large(), DeadLetterDrops::rejected()];
+        let mut lifetime = LifetimeTotals::default();
 
         loop {
             ticker.tick().await;
             match fetch_exposition(&address).await {
                 Ok(body) => {
                     let derived = merger.merge(&body);
-                    apply_derived(&metrics, &derived);
+                    apply_derived(&metrics, &lifetime.carry(&derived));
                     for drops in &mut dead_letters {
                         drops.record(&derived);
                     }
@@ -1072,6 +1153,59 @@ vector_rtt_seconds_count 9
         assert!(
             merger.series.values().all(|t| t.unseen == 0),
             "a series carried by the exposition must not be ageing"
+        );
+    }
+
+    /// A restarted Vector counts from zero again. The merged counter and the
+    /// app's own totals keep counting from where the pod had got to, rather
+    /// than holding flat until the new count passes the old one.
+    #[test]
+    fn counts_carry_across_a_vector_restart() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let exposition = |n: u64| {
+            format!(
+                "# TYPE vector_component_sent_events_total counter\n\
+                 vector_component_sent_events_total{{component_id=\"dfe_sink\"}} {n}\n"
+            )
+        };
+        let mut merger = ExpositionMerger::new(1);
+        let mut lifetime = LifetimeTotals::default();
+
+        // 100 before the restart, then the new Vector reaches 10, 50 and 60, with
+        // two failed scrapes between that outlast the expiry, and an exposition
+        // that does not parse either side of the restart.
+        let bodies = [
+            Some(exposition(100)),
+            Some("not an exposition {".to_string()),
+            None,
+            None,
+            Some(exposition(10)),
+            Some(exposition(50)),
+            Some("not an exposition {".to_string()),
+            Some(exposition(60)),
+        ];
+        let mut published = Vec::new();
+        metrics::with_local_recorder(&recorder, || {
+            for body in &bodies {
+                match body {
+                    Some(text) => published.push(lifetime.carry(&merger.merge(text)).sent),
+                    None => merger.age(),
+                }
+            }
+        });
+        assert_eq!(published, [100.0, 100.0, 110.0, 150.0, 150.0, 160.0]);
+
+        let merged = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(key, ..)| key.key().name() == "vector_component_sent_events_total")
+            .map(|(.., value)| value);
+        assert_eq!(
+            merged,
+            Some(metrics_util::debugging::DebugValue::Counter(160)),
+            "the merged counter held flat after the restart"
         );
     }
 

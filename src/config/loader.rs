@@ -718,7 +718,7 @@ impl Default for ScalingConfig {
 }
 
 /// Environment variable prefix for all config overrides.
-const ENV_PREFIX: &str = "DFE_TRANSFORM";
+pub const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
 
@@ -1269,6 +1269,20 @@ impl Config {
                 "logging.format must be one of: {}",
                 valid_formats.join(", ")
             )));
+        }
+
+        // A zero poll interval re-reads the transform files in a tight loop.
+        if self.reload.enabled && self.reload.poll_interval_secs == 0 {
+            return Err(crate::Error::Validation(
+                "reload.poll_interval_secs must be at least 1 when reload.enabled is true".into(),
+            ));
+        }
+
+        // Zero expires every merged gauge in the tick that sets it.
+        if self.metrics.vector_metrics_expiry_ticks == 0 {
+            return Err(crate::Error::Validation(
+                "metrics.vector_metrics_expiry_ticks must be at least 1".into(),
+            ));
         }
 
         // Scaling pressure threshold must be in [0.0, 1.0]

@@ -62,6 +62,8 @@ jobs:
       runner-quality: namespace-profile-hyperi-amd64-8x16
       runner-build-arm64: namespace-profile-hyperi-arm64-32x64
       publish-target: both
+      # The filebeat corpus test reads the pipeline and corpus from this repo, beside the checkout.
+      sibling-checkouts: hyperi-io/dfe-transform-vrl
       tag: ${{ inputs.tag || '' }}
       from-head: ${{ inputs.from-head || '' }}
       bump: ${{ inputs.bump || 'auto' }}

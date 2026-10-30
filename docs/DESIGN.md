@@ -275,8 +275,9 @@ vector_buffer_byte_size{component_id="dfe_sink"} 1048576
 # ... every other Vector internal metric
 ```
 
-Counters register as counters via `absolute`, so a Vector restart holds the
-totals rather than reporting a reset the pod did not have. A histogram arrives
+Counters register as counters via `absolute`, carried across Vector restarts:
+a total that falls is a restarted Vector, and the count it had reached becomes
+a base the new count adds to. A histogram arrives
 pre-aggregated, so each cumulative `_bucket` re-registers as a counter carrying
 its `le` label: the metrics crate's `Histogram` takes observations, and
 replaying buckets through it would change the numbers.
@@ -476,7 +477,7 @@ Config change detected (file watcher or SIGHUP)
   │
   └─ Any other config change (unsafe — requires pod restart)
       ├─ Log warning: "config change requires pod restart"
-      ├─ Emit config_reloads_total{result="restart_required"}
+      ├─ Emit config_reloads_total{result="rejected"}
       └─ Keep old config running — operator must restart the pod
 ```
 
@@ -677,8 +678,8 @@ tracking is a container image pipeline concern.
 | **Bad config YAML** | `vector validate` returns exit 78 | Refuse to start. Clear error in logs + metric. Old config kept on reload. |
 | **Broken DAG wiring** | Wrapper DAG analysis before validate | Detailed error: "transform 'enrich' references unknown input 'parser' (did you mean 'parse'?)" |
 | **Vector crash** | Child process exits non-zero | Restart with exponential backoff. Readiness goes unhealthy. Metrics track crash count. |
-| **Vector hang** | Health poll timeout (Vector API unresponsive) | After N consecutive failures (configurable, default 5): SIGTERM → wait → SIGKILL → restart |
-| **OOM** | Child killed by cgroup (exit 137) | Restart. Metric emitted. Scaling pressure increases. Triggers KEDA scale-up. |
+| **Vector hang** | Only through the sink: records held and none delivered for `metrics.sink_stall_secs` | Readiness goes unhealthy. Nothing restarts a hung Vector, and liveness stays 200. |
+| **OOM** | Child killed by cgroup (exit 137) | Restart with backoff, counted as a crash. The scaling circuit opens, pinning scaling pressure to 0 until Vector runs again. |
 | **Kafka unreachable** | Vector consumer lag stops advancing | Scaling pressure stays low (no lag movement). Vector's own retry handles reconnection. |
 | **Config reload: new config invalid** | Enrichment table files readable, then `vector validate` on new config | Keep old config running, and put its config dir back. Log error. Emit `config_reloads_total{result="error"}`. |
 | **Config reload: Vector rejects SIGHUP** | Vector keeps old config and counts `component_errors_total{error_code="reload"}` | Wrapper reads the counter, emits `config_reloads_total{result="error"}` and puts back the config dir Vector runs. |

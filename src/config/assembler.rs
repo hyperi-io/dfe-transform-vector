@@ -168,11 +168,30 @@ fn write_transforms(
 
         let filename = format!("50_{i:03}_{original_name}");
         let content = scalo::yaml::to_string(&yaml)?;
+        refuse_reserved_secret_refs(&lt.path, &content)?;
         let path = dir.join(&filename);
         std::fs::write(&path, &content)?;
         debug!(path = %path.display(), "wrote transform file");
     }
 
+    Ok(())
+}
+
+/// Refuse a transform that names one of the assembler's own secret backends.
+///
+/// Vector replaces a `SECRET[<backend>.<key>]` anywhere in the file it reads,
+/// VRL included, so the check reads the text written, with the YAML escapes in
+/// the operator's file already decoded.
+fn refuse_reserved_secret_refs(source: &Path, written: &str) -> Result<()> {
+    for backend in secrets::RESERVED_BACKENDS {
+        if written.contains(&format!("SECRET[{backend}.")) {
+            return Err(crate::Error::Validation(format!(
+                "transform file {} references the secret backend '{backend}', which holds the \
+                 Kafka credentials and is not for transforms",
+                source.display()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -290,6 +309,42 @@ mod tests {
         // Sink should wire to "filter" (terminal transform)
         let sink_content = fs::read_to_string(output.path().join("90_sink.yaml")).unwrap();
         assert!(sink_content.contains("filter"));
+    }
+
+    /// Vector substitutes `SECRET[...]` in VRL text too, so naming one of the
+    /// assembler's backends would put a Kafka credential into the events, YAML
+    /// escapes or not.
+    #[test]
+    fn a_transform_naming_a_credential_backend_is_refused() {
+        for (source, refused) in [
+            (
+                r##"'.x = "SECRET[dfe_credentials.sink_sasl_password]"'"##,
+                true,
+            ),
+            (r##"'.x = "SECRET[dfe_source_sasl.password]"'"##, true),
+            (r##"'.x = "SECRET[dfe_sink_sasl.username]"'"##, true),
+            (
+                r##"".x = \"\x53ECRET[dfe_credentials.sink_sasl_password]\"""##,
+                true,
+            ),
+            (r##"".x = \"\u0053ECRET[dfe_sink_sasl.password]\"""##, true),
+            (r##"'.x = "SECRET[operator_vault.api_key]"'"##, false),
+            (r##"'.x = "dfe_credentials"'"##, false),
+        ] {
+            let transforms = TempDir::new().unwrap();
+            fs::write(
+                transforms.path().join("leak.yaml"),
+                format!("transforms:\n  leak:\n    type: remap\n    source: {source}\n"),
+            )
+            .unwrap();
+            let output = TempDir::new().unwrap();
+            let config = test_config(Some(transforms.path().to_string_lossy().into_owned()));
+            let assembled = assemble(&config, output.path());
+            assert_eq!(assembled.is_err(), refused, "{source}: {assembled:?}");
+            if let Err(e) = assembled {
+                assert!(e.to_string().contains("leak.yaml"), "{e}");
+            }
+        }
     }
 
     #[test]
