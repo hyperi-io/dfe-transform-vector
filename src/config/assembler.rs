@@ -511,7 +511,9 @@ mod tests {
                         "{document}: {e}"
                     );
                 }
-                (outcome, _) => panic!("{document}: {outcome:?}"),
+                // Names the outcome only: the assembled config carries credentials.
+                (Ok(_), Some(why)) => panic!("{document}: assembled, expected a {why} refusal"),
+                (Err(e), None) => panic!("{document}: refused: {e}"),
             }
         }
     }
