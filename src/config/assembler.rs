@@ -32,9 +32,8 @@ use super::generate::{
 use super::loader::Config;
 use super::secrets;
 use super::transforms::{LoadedTransform, load_transforms};
-use super::wiring::{
-    WiringResult, auto_wire, extract_components, validate_dag, validate_kafka_components,
-};
+use super::validate::enrichment_table_file;
+use super::wiring::{WiringResult, auto_wire, extract_components, validate_dag};
 use crate::Result;
 
 /// Default output directory for assembled Vector config.
@@ -75,6 +74,9 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
 
     // Load user transform files
     let transforms = load_transforms(&config.transforms)?;
+    for lt in &transforms {
+        refuse_out_of_scope_keys(lt, Path::new(&config.transforms.data_dir), output_dir)?;
+    }
 
     // Extract components for DAG wiring
     let components = extract_components(&transforms)?;
@@ -83,7 +85,6 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     // Validate the DAG
     validate_dag(&wiring)?;
     debug!("DAG validation passed");
-    validate_kafka_components(&transforms)?;
 
     // Write transform files to subdirectory (with auto-wired inputs injected)
     write_transforms(output_dir, &transforms, &wiring)?;
@@ -168,12 +169,137 @@ fn write_transforms(
 
         let filename = format!("50_{i:03}_{original_name}");
         let content = scalo::yaml::to_string(&yaml)?;
+        refuse_reserved_secret_refs(&lt.path, &content)?;
         let path = dir.join(&filename);
         std::fs::write(&path, &content)?;
         debug!(path = %path.display(), "wrote transform file");
     }
 
     Ok(())
+}
+
+/// Refuse a transform that names one of the assembler's own secret backends.
+///
+/// Vector replaces a `SECRET[<backend>.<key>]` anywhere in the file it reads,
+/// VRL included, so the check reads the text written, with the YAML escapes in
+/// the operator's file already decoded.
+fn refuse_reserved_secret_refs(source: &Path, written: &str) -> Result<()> {
+    for backend in secrets::RESERVED_BACKENDS {
+        if written.contains(&format!("SECRET[{backend}.")) {
+            return Err(crate::Error::Validation(format!(
+                "transform file {} references the secret backend '{backend}', which holds the \
+                 Kafka credentials and is not for transforms",
+                source.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a transform file that declares more than transforms and enrichment
+/// tables loading from `data_dir`.
+///
+/// Vector runs whatever the file declares with its own reach, so a source,
+/// sink, secret backend or out-of-dir table could read the Kafka credentials in
+/// `config_dir`.
+fn refuse_out_of_scope_keys(
+    lt: &LoadedTransform,
+    data_dir: &Path,
+    config_dir: &Path,
+) -> Result<()> {
+    let refuse = |what: String| {
+        Err(crate::Error::Validation(format!(
+            "transform file {} {what}",
+            lt.path.display()
+        )))
+    };
+    let Some(document) = lt.yaml.as_object() else {
+        return Ok(());
+    };
+    for (key, value) in document {
+        match key.as_str() {
+            "transforms" => {
+                // Lua is the one transform type with file and process access.
+                let lua = value
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .find(|(_, component)| {
+                        component.get("type").and_then(serde_json::Value::as_str) == Some("lua")
+                    });
+                if let Some((label, _)) = lua {
+                    return refuse(format!(
+                        "declares transform '{label}' of type 'lua', which can read any file \
+                         Vector can"
+                    ));
+                }
+            }
+            "enrichment_tables" => {
+                let Some(tables) = value.as_object() else {
+                    return refuse("declares enrichment_tables that are not a mapping".into());
+                };
+                if !data_dir.is_absolute() {
+                    return refuse(format!(
+                        "declares enrichment tables, and transforms.data_dir '{}' is not an \
+                         absolute path",
+                        data_dir.display()
+                    ));
+                }
+                let allowed = resolve(data_dir);
+                let secrets = resolve(config_dir);
+                for (name, table) in tables {
+                    if table.get("type").and_then(serde_json::Value::as_str) == Some("memory") {
+                        continue;
+                    }
+                    let Some(file) = enrichment_table_file(table) else {
+                        return refuse(format!(
+                            "declares enrichment table '{name}' of a type that names no file \
+                             this check can place"
+                        ));
+                    };
+                    let file = Path::new(file);
+                    let resolved = resolve(file);
+                    if !file.is_absolute()
+                        || !resolved.starts_with(&allowed)
+                        || resolved.starts_with(&secrets)
+                    {
+                        return refuse(format!(
+                            "declares enrichment table '{name}' loading {}, which is outside \
+                             transforms.data_dir {}",
+                            file.display(),
+                            data_dir.display()
+                        ));
+                    }
+                }
+            }
+            other => {
+                return refuse(format!(
+                    "declares top-level key '{other}', but a transform file may declare only \
+                     transforms and enrichment_tables"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `path` as the OS resolves it, `..` and symlinks included, or with `.` and
+/// `..` folded when it does not exist yet.
+fn resolve(path: &Path) -> PathBuf {
+    if let Ok(real) = path.canonicalize() {
+        return real;
+    }
+    let mut folded = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                folded.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => folded.push(other),
+        }
+    }
+    folded
 }
 
 /// Inject auto-wired `inputs` into transform components that lack them.
@@ -226,6 +352,7 @@ mod tests {
             transforms: TransformConfig {
                 dir: transforms_dir,
                 files: None,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -290,6 +417,105 @@ mod tests {
         // Sink should wire to "filter" (terminal transform)
         let sink_content = fs::read_to_string(output.path().join("90_sink.yaml")).unwrap();
         assert!(sink_content.contains("filter"));
+    }
+
+    /// Vector runs a transform file with its own reach and substitutes
+    /// `SECRET[...]` in VRL text too, so any route to the Kafka credentials in
+    /// the config dir is refused, YAML escapes and symlinks included.
+    #[test]
+    fn a_transform_file_reaching_the_credentials_is_refused() {
+        const REMAP: &str =
+            "transforms:\n  leak:\n    type: remap\n    inputs: [dfe_source]\n    source: ";
+        let remap = |source: &str| format!("{REMAP}{source}\n");
+        let table = |path: &str| {
+            format!(
+                "enrichment_tables:\n  t:\n    type: file\n    file:\n      path: {path}\n      \
+                 encoding:\n        type: csv\n"
+            )
+        };
+        for (document, refused) in [
+            (
+                remap(r#"'.x = "SECRET[dfe_credentials.sink_sasl_password]"'"#),
+                Some("dfe_credentials"),
+            ),
+            (
+                remap(r#"'.x = "SECRET[dfe_source_sasl.password]"'"#),
+                Some("dfe_source_sasl"),
+            ),
+            (
+                remap(r#"'.x = "SECRET[dfe_sink_sasl.username]"'"#),
+                Some("dfe_sink_sasl"),
+            ),
+            (
+                remap(r#"".x = \"\x53ECRET[dfe_credentials.sink_sasl_password]\"""#),
+                Some("dfe_credentials"),
+            ),
+            (
+                remap(r#"".x = \"\u0053ECRET[dfe_sink_sasl.password]\"""#),
+                Some("dfe_sink_sasl"),
+            ),
+            (remap(r#"'.x = "SECRET[operator_vault.api_key]"'"#), None),
+            (remap(r#"'.x = "dfe_credentials"'"#), None),
+            (
+                "sources:\n  s:\n    type: file\n    include: ['{config}/.secrets/*']\n".into(),
+                Some("'sources'"),
+            ),
+            (
+                "sinks:\n  s:\n    type: console\n    inputs: [dfe_source]\n".into(),
+                Some("'sinks'"),
+            ),
+            (
+                "secret:\n  b:\n    type: directory\n    path: '{config}/.secrets'\n".into(),
+                Some("'secret'"),
+            ),
+            ("api:\n  enabled: true\n".into(), Some("'api'")),
+            (
+                "transforms:\n  l:\n    type: lua\n    version: '2'\n    inputs: [dfe_source]\n    \
+                 hooks:\n      process: process\n"
+                    .into(),
+                Some("type 'lua'"),
+            ),
+            (
+                table("{data}/../config/.secrets/sink_sasl_password"),
+                Some("outside transforms.data_dir"),
+            ),
+            (
+                table("{data}/link.csv"),
+                Some("outside transforms.data_dir"),
+            ),
+            (table("{data}/zones.csv"), None),
+        ] {
+            let work = TempDir::new().unwrap();
+            let data = work.path().join("data");
+            let config_dir = work.path().join("config");
+            let transforms = work.path().join("transforms");
+            for dir in [&data, &config_dir, &transforms] {
+                fs::create_dir_all(dir).unwrap();
+            }
+            fs::write(data.join("zones.csv"), "abbreviation\nAEST\n").unwrap();
+            fs::write(work.path().join("outside.csv"), "abbreviation\nAEST\n").unwrap();
+            std::os::unix::fs::symlink(work.path().join("outside.csv"), data.join("link.csv"))
+                .unwrap();
+            let document = document
+                .replace("{data}", &data.to_string_lossy())
+                .replace("{config}", &config_dir.to_string_lossy());
+            fs::write(transforms.join("leak.yaml"), &document).unwrap();
+            let mut config = test_config(Some(transforms.to_string_lossy().into_owned()));
+            config.transforms.data_dir = data.to_string_lossy().into_owned();
+            match (assemble(&config, &config_dir), refused) {
+                (Ok(_), None) => {}
+                (Err(e), Some(why)) => {
+                    let e = e.to_string();
+                    assert!(
+                        e.contains("leak.yaml") && e.contains(why),
+                        "{document}: {e}"
+                    );
+                }
+                // Names the outcome only: the assembled config carries credentials.
+                (Ok(_), Some(why)) => panic!("{document}: assembled, expected a {why} refusal"),
+                (Err(e), None) => panic!("{document}: refused: {e}"),
+            }
+        }
     }
 
     #[test]

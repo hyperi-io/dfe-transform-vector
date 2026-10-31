@@ -46,7 +46,11 @@ done
 "#;
 
 /// Write the stand-in, a no-op transform and a bus-transport config into `dir`.
-fn write_run_dir(dir: &Path, metrics_addr: &str, exporter_addr: &str) -> std::path::PathBuf {
+pub(super) fn write_run_dir(
+    dir: &Path,
+    metrics_addr: &str,
+    exporter_addr: &str,
+) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let stand_in = dir.join("vector-stand-in.sh");

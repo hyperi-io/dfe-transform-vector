@@ -34,6 +34,17 @@ pub const PRIVATE_DIR: &str = ".secrets";
 /// Backend for credentials written by the assembler.
 const PRIVATE_BACKEND: &str = "dfe_credentials";
 
+/// Backend for the source's `sasl.secret_dir`.
+const SOURCE_DIR_BACKEND: &str = "dfe_source_sasl";
+
+/// Backend for the sink's `sasl.secret_dir`.
+const SINK_DIR_BACKEND: &str = "dfe_sink_sasl";
+
+/// Every secret backend the assembler declares. Vector substitutes a
+/// `SECRET[<backend>.<key>]` anywhere in its config text, VRL included, so a
+/// transform naming one of these would read the Kafka credentials.
+pub const RESERVED_BACKENDS: [&str; 3] = [PRIVATE_BACKEND, SOURCE_DIR_BACKEND, SINK_DIR_BACKEND];
+
 /// Which Kafka component a credential belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -71,12 +82,12 @@ impl SecretNames {
     pub fn of(side: Side, sasl: &SaslConfig) -> Self {
         match (side, sasl.secret_dir.is_some()) {
             (Side::Source, true) => Self {
-                backend: "dfe_source_sasl",
+                backend: SOURCE_DIR_BACKEND,
                 username: "username",
                 password: "password",
             },
             (Side::Sink, true) => Self {
-                backend: "dfe_sink_sasl",
+                backend: SINK_DIR_BACKEND,
                 username: "username",
                 password: "password",
             },

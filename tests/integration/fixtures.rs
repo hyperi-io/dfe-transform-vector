@@ -105,6 +105,7 @@ fn load_fixture_transform(
     load_transforms(&dfe_transform_vector::config::loader::TransformConfig {
         dir: None,
         files: Some(vec![path.to_string_lossy().into_owned()]),
+        ..Default::default()
     })
     .unwrap_or_else(|e| panic!("failed to load {filename}: {e}"))
 }
@@ -208,6 +209,7 @@ fn fixture_full_chain_wires_without_errors() {
     let transforms = load_transforms(&dfe_transform_vector::config::loader::TransformConfig {
         dir: None,
         files: Some(files),
+        ..Default::default()
     })
     .expect("all fixtures should load");
 

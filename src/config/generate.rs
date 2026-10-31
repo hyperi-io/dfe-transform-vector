@@ -483,7 +483,7 @@ pub fn derived_sink_options(sink: &SinkConfig) -> Vec<(&'static str, &'static st
 /// Service-specific consumer librdkafka overrides for transform-vector.
 ///
 /// Vector arms its offset-commit timer only with auto-commit on, and the shared
-/// DFE baseline turns it off -- see docs/LIBRDKAFKA.md, Service-Specific
+/// DFE baseline turns it off -- see docs/librdkafka.md, Service-Specific
 /// Overrides.
 const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "true")];
 

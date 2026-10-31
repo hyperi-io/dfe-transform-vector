@@ -69,6 +69,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
         transforms: TransformConfig {
             dir: transforms_dir,
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig::default(),
         metrics: MetricsConfig::default(),
@@ -951,6 +952,30 @@ fn config_validation_accepts_pressure_threshold_boundaries() {
         .expect("pressure_threshold=0.5 should be valid");
 }
 
+/// A zero poll re-reads the transform files in a tight loop, and zero expiry
+/// ticks zero every merged gauge in the tick that sets it.
+#[test]
+fn config_validation_refuses_zero_intervals() {
+    for (reload_on, poll_secs, expiry_ticks, refused) in [
+        (true, 0, 4, Some("reload.poll_interval_secs")),
+        (false, 0, 4, None),
+        (true, 1, 4, None),
+        (true, 30, 0, Some("vector_metrics_expiry_ticks")),
+        (true, 30, 1, None),
+    ] {
+        let mut config = full_config(None);
+        config.reload.enabled = reload_on;
+        config.reload.poll_interval_secs = poll_secs;
+        config.metrics.vector_metrics_expiry_ticks = expiry_ticks;
+        let case = format!("reload={reload_on} poll={poll_secs} expiry={expiry_ticks}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => assert!(e.to_string().contains(field), "{case}: {e}"),
+            (outcome, _) => panic!("{case}: {outcome:?}"),
+        }
+    }
+}
+
 #[test]
 fn config_validation_catches_sasl_enabled_without_username() {
     let mut config = full_config(None);
@@ -1219,6 +1244,7 @@ fn config_with_all_fields_populated_validates() {
         transforms: TransformConfig {
             dir: Some("/etc/dfe-transform-vector/transforms".into()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: "/opt/vector/bin/vector".into(),
@@ -1629,61 +1655,24 @@ fn assemble_user_kafka(
     with_app_env(app_env, || assembler::assemble(&config, output.path()))
 }
 
-/// Assert `result` is the floor refusing the user's `side_feed` component.
-fn assert_user_kafka_refused(
-    result: dfe_transform_vector::Result<std::path::PathBuf>,
-    kind: &str,
-    reason: &str,
-) {
-    let message = result
-        .expect_err(&format!("the user's Kafka {kind} must be refused"))
-        .to_string();
-    assert!(
-        message.contains(USER_KAFKA_FILE)
-            && message.contains(&format!("Kafka {kind} 'side_feed' refused"))
-            && message.contains(reason),
-        "expected the floor to name {USER_KAFKA_FILE} and side_feed for '{reason}', got: {message}"
-    );
-}
-
-/// A Kafka source or sink a transform file declares runs on Vector's own
-/// client, exactly like the generated ones, so PLAIN without TLS is refused
-/// there too.
+/// A Kafka source or sink in a transform file would run on Vector's own client
+/// with the credentials in reach, so it is refused however safe its settings.
 #[test]
-fn a_user_kafka_component_with_plain_over_plaintext_is_refused_in_every_environment() {
-    let plain = "    sasl:\n      enabled: true\n      mechanism: PLAIN\n";
-    for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
-        for app_env in [None, Some("development"), Some("production")] {
-            assert_user_kafka_refused(assemble_user_kafka(section, plain, app_env), kind, "PLAIN");
-        }
-    }
-}
-
-#[test]
-fn a_user_kafka_component_that_skips_certificate_checks_is_refused_in_production() {
-    let unverified = "    sasl:\n      enabled: true\n      mechanism: SCRAM-SHA-512\n    \
-                      tls:\n      enabled: true\n      verify_certificate: false\n";
-    for (section, kind) in [("sources", "source"), ("sinks", "sink")] {
-        assemble_user_kafka(section, unverified, None).unwrap_or_else(|e| {
-            panic!("{kind}: verify_certificate off outside production must pass: {e}")
-        });
-        assert_user_kafka_refused(
-            assemble_user_kafka(section, unverified, Some("production")),
-            kind,
-            "ssl_skip_verify",
-        );
-    }
-}
-
-#[test]
-fn a_safe_user_kafka_component_passes() {
+fn a_user_kafka_component_is_refused_in_every_environment() {
     let safe = "    sasl:\n      enabled: true\n      mechanism: SCRAM-SHA-512\n    \
                 tls:\n      enabled: true\n";
     for section in ["sources", "sinks"] {
-        for app_env in [None, Some("production")] {
-            assemble_user_kafka(section, safe, app_env).unwrap_or_else(|e| {
-                panic!("{section}: SCRAM over TLS must pass under {app_env:?}: {e}")
-            });
+        for app_env in [None, Some("development"), Some("production")] {
+            let message = assemble_user_kafka(section, safe, app_env)
+                .expect_err(&format!(
+                    "a user {section} block under {app_env:?} must be refused"
+                ))
+                .to_string();
+            assert!(
+                message.contains(USER_KAFKA_FILE)
+                    && message.contains(&format!("top-level key '{section}'")),
+                "{section} under {app_env:?}: {message}"
+            );
         }
     }
 }

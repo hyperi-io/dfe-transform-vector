@@ -156,6 +156,7 @@ fn config_from_kafka_test_config(
         transforms: TransformConfig {
             dir: Some(transforms_dir.into()),
             files: None,
+            ..Default::default()
         },
         vector: VectorConfig {
             binary: "vector".into(),

@@ -2,7 +2,7 @@
 
 Why this repo exists, what owns what, and the invariants you cannot read off a
 single file. For the field-by-field design -- every config key, every generated
-block, every state transition -- read [DESIGN.md](DESIGN.md). This document sits
+block, every state transition -- read [internals.md](internals.md). This document sits
 above it.
 
 ## The problem
@@ -124,6 +124,8 @@ memory guard.
 **A failed bridge leg stops the process.** Its senders would otherwise retry for
 ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
+**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks, and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_*` variables.
+
 ## Health and metrics invariants
 
 **Port 9598 is a loopback debug surface, not a scrape target.** Vector's own
@@ -179,4 +181,4 @@ scalo Push listener in and a Push client out with Vector on `vector` components
 over loopback. `templates/bus.yaml` and `templates/direct.yaml` are the whole
 topology for each, runnable as they stand. In a DFE deployment the supervisor
 generates the `sources:` and `sinks:` blocks, so a whole template mounted as a
-transform file gives Vector two sources and two sinks.
+transform file is refused.
