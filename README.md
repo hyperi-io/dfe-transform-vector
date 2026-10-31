@@ -246,9 +246,9 @@ points at it.
 ## Documentation
 
 - [docs/architecture.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/architecture.md) -- The problem, the ownership boundary and the invariants
-- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/DESIGN.md) -- Full architecture and design
-- [docs/MIGRATION.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/MIGRATION.md) -- Migration from official Vector chart
-- [docs/LIBRDKAFKA.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/LIBRDKAFKA.md) -- Kafka tuning reference
+- [docs/internals.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/internals.md) -- Full architecture and design
+- [docs/migration.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/migration.md) -- Migration from official Vector chart
+- [docs/librdkafka.md](https://github.com/hyperi-io/dfe-transform-vector/blob/main/docs/librdkafka.md) -- Kafka tuning reference
 
 ## Issues
 
@@ -290,7 +290,7 @@ deployment asks for it.
 | `src/deployment.rs`, `src/vector-layer.dockerfile` | `contract()`, the source the Dockerfile and the released chart are generated from, and the two-binary image override spliced onto scalo's generated Dockerfile |
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
 | `pipelines/filebeat/` | The shipped filebeat pipeline |
-| `docs/` | `architecture.md` for the shape and the invariants, `DESIGN.md` for field-by-field depth, `MIGRATION.md`, `LIBRDKAFKA.md`, the generated `config-schema.*` and `capability-catalog.*` |
+| `docs/` | `architecture.md` for the shape and the invariants, `internals.md` for field-by-field depth, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
 

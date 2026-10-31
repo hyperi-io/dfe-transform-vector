@@ -2,7 +2,7 @@
 
 Why this repo exists, what owns what, and the invariants you cannot read off a
 single file. For the field-by-field design -- every config key, every generated
-block, every state transition -- read [DESIGN.md](DESIGN.md). This document sits
+block, every state transition -- read [internals.md](internals.md). This document sits
 above it.
 
 ## The problem
