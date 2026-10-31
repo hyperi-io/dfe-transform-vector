@@ -3,14 +3,17 @@
 [![Build Status](https://github.com/hyperi-io/dfe-transform-vector/actions/workflows/ci.yml/badge.svg)](https://github.com/hyperi-io/dfe-transform-vector/actions)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](https://github.com/hyperi-io/dfe-transform-vector/blob/main/LICENSE)
 
-> Vector.dev does the transform; everything around it -- config, credentials,
-> health, metrics, restarts -- is what a pipeline actually needs in production.
-> This wrapper supplies that half and keeps Vector as a subprocess.
+Runs a Vector pipeline as a transform stage in a DFE deployment. Vector does the transform, and this wrapper supplies the rest a stage needs: config, credentials, health, metrics and restarts.
 
-Rust wrapper that manages Vector.dev as a subprocess, so a Vector pipeline is a
-transform stage in the HyperI DFE (Data Fusion Engine) platform. The wrapper is
-built on the [scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime
-(config cascade, logging, metrics, health probes, CLI, deployment contract).
+## What it gives you
+
+- Vector's own transforms beyond `remap`, where dfe-transform-vrl runs VRL only.
+- One small YAML (pipeline name, brokers, topics, SASL and TLS) that generates Vector's source, sink and observability config, so you write only the `transforms:` and `enrichment_tables:` blocks.
+- Kafka in and out, or a direct gRPC push with no broker, with the same transform on both.
+- A crashed Vector restarted with backoff from 1 s to 60 s, and readiness that follows it.
+- A transform change validated and sent to Vector with a SIGHUP, then read back from Vector's own counters as applied, refused (the running config is put back) or unconfirmed, each counted on its own label.
+- Vector's `vector_*` metrics merged into the wrapper's, so one endpoint and one OTLP push carry both.
+- Built on [scalo](https://github.com/hyperi-io/scalo-rs), so the wrapper's config, logs, health probes and deployment contract work the way they do in every DFE Rust service.
 
 ## Architecture
 
@@ -69,19 +72,13 @@ ceiling, or one Vector refused for good because a sink it feeds rejected it
 (`reason="rejected"`). Under memory pressure only
 `source.listen` sheds pushes; the leg back from Vector keeps draining.
 
-## Features
+## Behaviour
 
-- A big-dial YAML (pipeline name, brokers, topics, SASL/TLS) generates the
-  Vector-native source, sink and observability YAML.
 - Transform files are loaded, validated and wired between `dfe_source` and
   `dfe_sink`.
-- A crashed Vector restarts with exponential backoff (1s-60s), and readiness
-  follows it.
-- A poll-based watcher validates a transform change, SIGHUPs Vector, then reads Vector's own counters for whether it applied (a source or sink change needs a pod restart).
+- The transform watcher polls. A source or sink change needs a pod restart.
 - The Vector version is checked against the config (strict/warn/disabled).
 - librdkafka defaults are baked in under a 4-layer cascade.
-- Vector's own `vector_*` metrics merge into the wrapper's registry, so one
-  endpoint and one OTLP push carry both.
 - A thin Helm chart is assembled at release from the deployment contract on the
   scalo-service library chart.
 
