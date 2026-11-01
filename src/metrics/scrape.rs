@@ -21,7 +21,9 @@
 //! applies to every other metric.
 //!
 //! A component Vector drops stops being scraped, so its gauges are zeroed once
-//! they have gone unseen for `metrics.vector_metrics_expiry_ticks` ticks.
+//! they have gone unseen for `metrics.vector_metrics_expiry_ticks` ticks, and
+//! its counters forgotten after an hour. The merger tracks at most 50,000
+//! series.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -81,6 +83,15 @@ const MAX_EXPOSITION_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Ticks a merged gauge may go unseen before it is zeroed.
 pub const DEFAULT_EXPIRY_TICKS: u32 = 4;
+
+/// Ticks a merged counter may go unseen before the merger forgets it: on the
+/// default 15 s metrics interval an hour, far past any Vector restart, whose
+/// carried total the counter must keep.
+const COUNTER_EXPIRY_TICKS: u32 = 240;
+
+/// The most series the merger tracks at once. Vector's own exposition is a few
+/// thousand, so this bounds label churn rather than a working pipeline.
+const MAX_SERIES: usize = 50_000;
 
 /// Minimum gap between unreachable-exporter WARN lines.
 ///
@@ -279,6 +290,11 @@ pub struct ExpositionMerger {
     /// Merged series by hash of name plus sorted labels.
     series: HashMap<u64, Tracked>,
     expiry_ticks: u32,
+    /// The ceiling on `series`; a series past it is not merged.
+    max_series: usize,
+    /// Whether the ceiling has turned a series away since the last time it
+    /// had room, so the warning logs once per episode.
+    at_ceiling: bool,
 }
 
 impl Default for ExpositionMerger {
@@ -295,6 +311,8 @@ impl ExpositionMerger {
             lines: Vec::new(),
             series: HashMap::new(),
             expiry_ticks,
+            max_series: MAX_SERIES,
+            at_ceiling: false,
         }
     }
 
@@ -415,6 +433,9 @@ impl ExpositionMerger {
             return;
         }
 
+        if !self.has_room(name) {
+            return;
+        }
         let labels = to_labels(pairs);
         let handle = metrics::counter!(name.to_string(), labels.clone());
         let mut carried = Rebased::default();
@@ -434,6 +455,9 @@ impl ExpositionMerger {
             return;
         }
 
+        if !self.has_room(name) {
+            return;
+        }
         let labels = to_labels(pairs);
         let handle = metrics::gauge!(name.to_string(), labels.clone());
         handle.set(value);
@@ -444,6 +468,24 @@ impl ExpositionMerger {
             Handle::Gauge(handle),
             Rebased::default(),
         );
+    }
+
+    /// Whether a new series fits under the ceiling, warning once when the
+    /// ceiling first turns one away.
+    fn has_room(&mut self, name: &str) -> bool {
+        if self.series.len() < self.max_series {
+            self.at_ceiling = false;
+            return true;
+        }
+        if !self.at_ceiling {
+            self.at_ceiling = true;
+            warn!(
+                series = self.series.len(),
+                metric = name,
+                "Vector reports more series than the merger tracks; new ones are not merged"
+            );
+        }
+        false
     }
 
     fn track(
@@ -466,17 +508,19 @@ impl ExpositionMerger {
         );
     }
 
-    /// Drop every gauge unseen for `expiry_ticks`, zeroing it.
+    /// Drop every gauge unseen for `expiry_ticks`, zeroing it, and every
+    /// counter unseen for [`COUNTER_EXPIRY_TICKS`].
     ///
     /// Zeroed rather than unregistered: the facade hands out handles, not a
     /// registry, and a utilisation gauge frozen at its last value reads as a
-    /// component that is still busy. A counter is kept, flat, because a flat
-    /// counter already rates to zero and its carried total must outlast a
-    /// Vector restart longer than the expiry.
+    /// component that is still busy. A counter is kept far longer, flat,
+    /// because a flat counter already rates to zero and its carried total must
+    /// outlast a Vector restart. The exporter keeps both series either way.
     fn expire(&mut self) {
         let limit = self.expiry_ticks;
+        let counter_limit = COUNTER_EXPIRY_TICKS.max(limit);
         self.series.retain(|_, tracked| match &tracked.handle {
-            Handle::Counter(_) => true,
+            Handle::Counter(_) => tracked.unseen < counter_limit,
             Handle::Gauge(g) => {
                 if tracked.unseen < limit {
                     return true;
@@ -1136,6 +1180,52 @@ vector_rtt_seconds_count 9
         assert!(
             !tracks(&merger, "vector_utilization"),
             "the dropped gauge was not expired"
+        );
+    }
+
+    /// A counter Vector stops reporting, after a transform is renamed or a
+    /// topic retired, leaves the merger once it has outlasted any restart.
+    #[test]
+    fn a_counter_that_stops_being_reported_is_dropped_after_the_counter_expiry() {
+        let tracks = |m: &ExpositionMerger| {
+            m.series
+                .values()
+                .any(|t| t.name == "vector_component_sent_events_total")
+        };
+        let mut merger = ExpositionMerger::new(2);
+        merger.merge(
+            "# TYPE vector_component_sent_events_total counter\n\
+             vector_component_sent_events_total{component_id=\"old\"} 5\n",
+        );
+        for _ in 0..COUNTER_EXPIRY_TICKS - 1 {
+            merger.age();
+        }
+        assert!(
+            tracks(&merger),
+            "a counter must outlast a long Vector restart"
+        );
+        merger.age();
+        assert!(!tracks(&merger), "a counter unseen for good was kept");
+    }
+
+    /// Label churn cannot grow the merger past its series ceiling.
+    #[test]
+    fn the_merger_tracks_no_more_series_than_its_ceiling() {
+        use std::fmt::Write as _;
+
+        let mut merger = ExpositionMerger::new(2);
+        merger.max_series = 10;
+        let mut text = String::from("# TYPE vector_util gauge\n");
+        for i in 0..25 {
+            writeln!(text, "vector_util{{component_id=\"c{i}\"}} 1").unwrap();
+        }
+        merger.merge(&text);
+        assert_eq!(merger.series.len(), 10);
+        merger.merge(&text);
+        assert_eq!(
+            merger.series.len(),
+            10,
+            "the ceiling held on the next merge"
         );
     }
 
