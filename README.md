@@ -151,7 +151,7 @@ The watcher polls the main config file as well as the transform files, so a chan
 - `metrics.*` -- the ops HTTP server is bound at startup
 - `logging.*` -- tracing subscriber configured at startup
 
-A transform change is re-assembled and validated first, including that every enrichment table file it names can be read: `vector validate --no-environment` never opens those files. Vector then applies the change, or refuses it and keeps the config it was running, and the SIGHUP succeeds either way. So the supervisor reads the outcome from Vector's `vector_reloaded_total` and `vector_component_errors_total{error_code="reload"}`, counts it in `transform_vector_config_reloads_total` as `success`, `error` or `unconfirmed`, and on a refusal puts the assembled config back to what Vector runs.
+A transform change is re-assembled and validated first, including that every enrichment table file it names can be read: `vector validate --no-environment` never opens those files. Vector then applies the change, or refuses it and keeps the config it was running, and the SIGHUP succeeds either way. So the supervisor reads the outcome from Vector's `vector_reloaded_total` and `vector_component_errors_total{error_code="reload"}`, counts it in `transform_vector_config_reloads_total` as `success`, `error` or `unconfirmed`, and on a refusal puts the assembled config back to what Vector runs. A failed reload is tried again on the same files one poll interval later, the wait doubling to five minutes, until it succeeds or the files change.
 
 ## Endpoints
 

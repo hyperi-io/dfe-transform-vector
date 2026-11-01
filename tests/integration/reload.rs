@@ -547,6 +547,96 @@ async fn a_main_config_edit_alone_is_picked_up_by_the_watcher() {
     );
 }
 
+/// A reload that fails for a reason that clears -- here `vector validate`
+/// failing once, as a Vector binary mid-upgrade would -- is tried again on
+/// the same files, with no further edit.
+#[tokio::test]
+async fn a_reload_that_failed_once_is_retried_without_another_edit() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let transforms_dir = dir.path().join("transforms");
+    std::fs::create_dir_all(&transforms_dir).unwrap();
+    std::fs::write(
+        transforms_dir.join("01_parse.yaml"),
+        remap_transform("before"),
+    )
+    .unwrap();
+
+    let (exporter, server) = crate::common::serve_expositions(|n| {
+        format!("# TYPE vector_reloaded_total counter\nvector_reloaded_total {n}\n")
+    })
+    .await;
+
+    // Fails the first `validate`, passes every one after.
+    let failed_once = dir.path().join("failed-once");
+    let binary = dir.path().join("vector-that-fails-once");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = validate ] && [ ! -e '{0}' ]; then\n  touch '{0}'\n  exit 1\nfi\nexit 0\n",
+            failed_once.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let config_path = dir.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "pipeline:\n  name: \"retry-reload\"\nsource:\n  brokers: [\"localhost:9092\"]\n  \
+             topics: [\"raw_input\"]\n  group_id: \"retry-reload-group\"\nsink:\n  \
+             brokers: [\"localhost:9092\"]\n  topic: \"out\"\ntransforms:\n  dir: \"{}\"\n\
+             vector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  version_check: \"disabled\"\n\
+             metrics:\n  vector_metrics_address: \"{exporter}\"\nreload:\n  poll_interval_secs: 1\n",
+            transforms_dir.display(),
+            binary.display(),
+            dir.path().join("data").display(),
+        ),
+    )
+    .unwrap();
+
+    let starting = load_config(Some(config_path.to_str().unwrap())).unwrap();
+    let rig = ReloadRig::start(starting, &config_path, dir.path().join("vector-config"));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    std::fs::write(
+        transforms_dir.join("01_parse.yaml"),
+        remap_transform("after"),
+    )
+    .unwrap();
+    let mtime = std::fs::metadata(transforms_dir.join("01_parse.yaml"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(transforms_dir.join("01_parse.yaml"))
+        .unwrap()
+        .set_modified(mtime + Duration::from_secs(1))
+        .unwrap();
+
+    let first_failed = eventually(Duration::from_secs(10), || failed_once.exists()).await;
+    let config_dir = rig.config_dir.clone();
+    let retried = eventually(Duration::from_secs(10), || {
+        assembled_parse(&config_dir).contains(".after = true")
+    })
+    .await;
+    rig.finish().await;
+    server.abort();
+
+    assert!(
+        first_failed,
+        "the first attempt never ran, so this proves nothing"
+    );
+    assert!(
+        retried,
+        "the failed reload was never retried, and the edit never reached Vector"
+    );
+}
+
 /// Vector refuses a reload it cannot apply and keeps the config it was
 /// running, with the SIGHUP itself succeeding. The refusal is on Vector's own
 /// counters, and the assembled directory has to go back to what Vector runs.
