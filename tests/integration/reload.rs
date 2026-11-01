@@ -478,6 +478,75 @@ async fn a_transform_edit_alone_is_reassembled_and_applied() {
     );
 }
 
+/// `transforms.dir` is documented as hot-reloaded, and it lives in the main
+/// config file: an edit there alone, with no transform file touched, is
+/// picked up by the watcher.
+#[tokio::test]
+async fn a_main_config_edit_alone_is_picked_up_by_the_watcher() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("transforms-first");
+    let second = dir.path().join("transforms-second");
+    for (at, field) in [(&first, "first"), (&second, "second")] {
+        std::fs::create_dir_all(at).unwrap();
+        std::fs::write(at.join("01_parse.yaml"), remap_transform(field)).unwrap();
+    }
+
+    let (exporter, server) = crate::common::serve_expositions(|n| {
+        format!("# TYPE vector_reloaded_total counter\nvector_reloaded_total {n}\n")
+    })
+    .await;
+
+    let config_path = dir.path().join("config.yaml");
+    let binary = write_always_ok_binary(dir.path());
+    let point_at = |transforms: &std::path::Path| {
+        std::fs::write(
+            &config_path,
+            format!(
+                "pipeline:\n  name: \"main-edit\"\nsource:\n  brokers: [\"localhost:9092\"]\n  \
+                 topics: [\"raw_input\"]\n  group_id: \"main-edit-group\"\nsink:\n  \
+                 brokers: [\"localhost:9092\"]\n  topic: \"out\"\ntransforms:\n  dir: \"{}\"\n\
+                 vector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  version_check: \"disabled\"\n\
+                 metrics:\n  vector_metrics_address: \"{exporter}\"\nreload:\n  poll_interval_secs: 1\n",
+                transforms.display(),
+                binary.display(),
+                dir.path().join("data").display(),
+            ),
+        )
+        .unwrap();
+    };
+    point_at(&first);
+
+    let starting = load_config(Some(config_path.to_str().unwrap())).unwrap();
+    let rig = ReloadRig::start(starting, &config_path, dir.path().join("vector-config"));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    point_at(&second);
+    // An mtime one second on, so a filesystem with coarse timestamps still
+    // shows the edit.
+    let mtime = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&config_path)
+        .unwrap()
+        .set_modified(mtime + Duration::from_secs(1))
+        .unwrap();
+
+    let config_dir = rig.config_dir.clone();
+    let reassembled = eventually(Duration::from_secs(10), || {
+        assembled_parse(&config_dir).contains(".second = true")
+    })
+    .await;
+    rig.finish().await;
+    server.abort();
+
+    assert!(
+        reassembled,
+        "an edit to transforms.dir in the main config file was never reloaded"
+    );
+}
+
 /// Vector refuses a reload it cannot apply and keeps the config it was
 /// running, with the SIGHUP itself succeeding. The refusal is on Vector's own
 /// counters, and the assembled directory has to go back to what Vector runs.

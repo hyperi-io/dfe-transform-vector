@@ -8,7 +8,8 @@
 
 //! Hot-reload support for transform config changes.
 //!
-//! Polls transform files and big-dial config at a configurable interval.
+//! Polls the main config file and every transform file at a configurable
+//! interval.
 //! When changes are detected, classifies them as safe (transforms only)
 //! or unsafe (source/sink changes), then triggers the appropriate reload.
 //!
@@ -92,9 +93,16 @@ struct FileSnapshot {
 }
 
 impl FileSnapshot {
-    /// Take a snapshot of modification times for all relevant files.
-    fn capture(config: &Config) -> Self {
+    /// Take a snapshot of modification times for the main config files and
+    /// every transform file.
+    fn capture(config: &Config, main: &[PathBuf]) -> Self {
         let mut mtimes = HashMap::new();
+
+        for path in main {
+            if let Ok(mtime) = path.metadata().and_then(|meta| meta.modified()) {
+                mtimes.insert(path.clone(), mtime);
+            }
+        }
 
         // Snapshot transform files
         if let Some(dir) = &config.transforms.dir {
@@ -132,6 +140,15 @@ impl FileSnapshot {
     fn has_changed(&self, other: &FileSnapshot) -> bool {
         self.mtimes != other.mtimes
     }
+}
+
+/// The main config files a reload re-reads: `config_path`, or the
+/// `config.yaml` and `config.yml` [`Config::load`] looks for without one.
+fn main_config_files(config_path: Option<&str>) -> Vec<PathBuf> {
+    config_path.map_or_else(
+        || vec![PathBuf::from("config.yaml"), PathBuf::from("config.yml")],
+        |path| vec![PathBuf::from(path)],
+    )
 }
 
 /// Reload trigger — either from the file watcher or a manual SIGHUP.
@@ -263,8 +280,9 @@ pub async fn run_reload_loop(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let poll_interval = Duration::from_secs(config.reload.poll_interval_secs);
+    let main = main_config_files(config_path.as_deref());
     let mut current_config = config;
-    let mut snapshot = FileSnapshot::capture(&current_config);
+    let mut snapshot = FileSnapshot::capture(&current_config, &main);
 
     info!(
         poll_interval_secs = current_config.reload.poll_interval_secs,
@@ -276,7 +294,7 @@ pub async fn run_reload_loop(
         let trigger = tokio::select! {
             () = tokio::time::sleep(poll_interval) => {
                 // Check for file changes
-                let new_snapshot = FileSnapshot::capture(&current_config);
+                let new_snapshot = FileSnapshot::capture(&current_config, &main);
                 if !snapshot.has_changed(&new_snapshot) {
                     continue;
                 }
@@ -436,7 +454,7 @@ pub async fn run_reload_loop(
         // Vector runs the new config, or may: the directory now holds it.
         published.commit();
         current_config = new_config;
-        snapshot = FileSnapshot::capture(&current_config);
+        snapshot = FileSnapshot::capture(&current_config, &main);
         end_reload(&lifecycle, owns_reloading);
     }
 }
@@ -558,8 +576,8 @@ mod tests {
     #[test]
     fn file_snapshot_detects_no_change() {
         let config = base_config();
-        let s1 = FileSnapshot::capture(&config);
-        let s2 = FileSnapshot::capture(&config);
+        let s1 = FileSnapshot::capture(&config, &[]);
+        let s2 = FileSnapshot::capture(&config, &[]);
         assert!(!s1.has_changed(&s2));
     }
 
@@ -569,13 +587,36 @@ mod tests {
         let mut config = base_config();
         config.transforms.dir = Some(dir.path().to_string_lossy().into_owned());
 
-        let s1 = FileSnapshot::capture(&config);
+        let s1 = FileSnapshot::capture(&config, &[]);
 
         // Add a file
         std::fs::write(dir.path().join("new.yaml"), "test").unwrap();
-        let s2 = FileSnapshot::capture(&config);
+        let s2 = FileSnapshot::capture(&config, &[]);
 
         assert!(s1.has_changed(&s2));
+    }
+
+    /// `transforms.dir` and `transforms.files` live in the main config file,
+    /// so an edit to it alone is a change to reload.
+    #[test]
+    fn file_snapshot_detects_a_main_config_edit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let main = dir.path().join("config.yaml");
+        std::fs::write(&main, "pipeline:\n  name: a\n").unwrap();
+        let config = base_config();
+
+        let before = FileSnapshot::capture(&config, std::slice::from_ref(&main));
+        let mtime = std::fs::metadata(&main).unwrap().modified().unwrap();
+        std::fs::write(&main, "pipeline:\n  name: b\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&main)
+            .unwrap()
+            .set_modified(mtime + Duration::from_secs(1))
+            .unwrap();
+        let after = FileSnapshot::capture(&config, std::slice::from_ref(&main));
+
+        assert!(before.has_changed(&after), "a main config edit went unseen");
     }
 
     /// Serve `bodies` in turn as Vector's exporter, one per connection, the

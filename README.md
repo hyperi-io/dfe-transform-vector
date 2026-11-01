@@ -137,7 +137,9 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 **Hot-reloaded (takes effect via SIGHUP to Vector):**
 
 - Transform YAML file contents (modified/added/removed in watched directory)
-- `transforms.dir` / `transforms.files` path changes
+- `transforms.dir` / `transforms.files` path changes, picked up from an edit to the main config file
+
+The watcher polls the main config file as well as the transform files, so a change listed below is logged as needing a restart when the file changes.
 
 **Requires pod restart:**
 
