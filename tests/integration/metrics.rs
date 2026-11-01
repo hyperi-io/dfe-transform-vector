@@ -439,6 +439,7 @@ async fn unreachable_exporter_counts_and_does_not_panic() {
         4,
         Duration::from_millis(1),
         stalled.clone(),
+        Arc::new(std::sync::Mutex::new(None)),
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!task.is_finished(), "the scrape loop must survive failures");
@@ -496,6 +497,7 @@ async fn a_sink_the_broker_refuses_everything_is_not_ready_and_counts_rejected()
         4,
         Duration::from_millis(300),
         stalled.clone(),
+        Arc::new(std::sync::Mutex::new(None)),
     );
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -540,3 +542,68 @@ mod _suppress_unused {
 // Marker: the old serve_metrics tests have been deleted — the wrapper no
 // longer runs a second HTTP server. Vector's own prometheus_exporter stays on
 // loopback and is merged into this registry by the scrape task above.
+
+/// A Vector the supervisor restarted can count past the old total before the
+/// next scrape. The PID change says it is a new process, so the merged
+/// counter carries the old total on rather than holding at the new one.
+#[tokio::test]
+async fn a_restart_the_supervisor_records_rebases_a_total_that_never_fell() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    use dfe_transform_vector::metrics::scrape::spawn_vector_scrape_task;
+
+    let total = Arc::new(AtomicU64::new(100));
+    let served = Arc::clone(&total);
+    let (addr, server) = crate::common::serve_expositions(move |_| {
+        format!(
+            "# TYPE vector_component_sent_events_total counter\n\
+             vector_component_sent_events_total{{component_id=\"restart_rebase_probe\"}} {}\n",
+            served.load(Ordering::Relaxed)
+        )
+    })
+    .await;
+
+    let manager = metrics_manager();
+    let metrics = Arc::new(WrapperMetrics::register(manager, "restart-rebase-test"));
+    let pid = Arc::new(Mutex::new(Some(1_u32)));
+    let task = spawn_vector_scrape_task(
+        metrics,
+        addr,
+        Duration::from_millis(20),
+        4,
+        Duration::ZERO,
+        Arc::new(AtomicBool::new(false)),
+        Arc::clone(&pid),
+    );
+    let merged = || {
+        manager
+            .render()
+            .lines()
+            .find(|l| l.contains("restart_rebase_probe") && !l.starts_with('#'))
+            .and_then(|l| l.rsplit(' ').next())
+            .and_then(|v| v.parse::<f64>().ok())
+    };
+    let reaches = |want: f64| async move {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while merged() != Some(want) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        merged()
+    };
+
+    let before = reaches(100.0).await;
+    *pid.lock().unwrap() = Some(2);
+    total.store(150, Ordering::Relaxed);
+    let after = reaches(250.0).await;
+    task.abort();
+    server.abort();
+
+    assert_eq!(before, Some(100.0), "the first Vector's total");
+    assert_eq!(
+        after,
+        Some(250.0),
+        "the restarted Vector's 150 counts on from the first one's 100"
+    );
+}

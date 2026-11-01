@@ -27,8 +27,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use metrics::Label;
@@ -216,6 +216,13 @@ impl Rebased {
         self.last = total;
         self.base + total
     }
+
+    /// The process counting this total was replaced: everything it counted
+    /// joins the base, and the next total starts from zero.
+    fn restart(&mut self) {
+        self.base += self.last;
+        self.last = 0.0;
+    }
 }
 
 /// [`Derived`] carried across Vector restarts, for the counters the app
@@ -234,6 +241,20 @@ pub struct LifetimeTotals {
 }
 
 impl LifetimeTotals {
+    /// Vector was restarted: the next totals are a new process's.
+    pub fn restarted(&mut self) {
+        for total in [
+            &mut self.received,
+            &mut self.sent,
+            &mut self.sink_received,
+            &mut self.sink_discarded,
+            &mut self.sink_errors,
+            &mut self.oversize,
+        ] {
+            total.restart();
+        }
+    }
+
     /// `derived`'s totals as counted since the pod started.
     pub fn carry(&mut self, derived: &Derived) -> Derived {
         Derived {
@@ -396,6 +417,14 @@ impl ExpositionMerger {
 
         self.expire();
         derived
+    }
+
+    /// Vector was restarted: every counter's next total is a new process's,
+    /// even one that has already passed the old total.
+    pub fn restarted(&mut self) {
+        for tracked in self.series.values_mut() {
+            tracked.total.restart();
+        }
     }
 
     /// Age every series by one tick with no exposition to match it, so a scrape
@@ -605,6 +634,11 @@ impl DeadLetterDrops {
         }
     }
 
+    /// Vector was restarted: its next total is all new drops.
+    pub fn restarted(&mut self) {
+        self.seen = 0.0;
+    }
+
     /// Count the drops since the last exposition, and return how many.
     pub fn record(&mut self, derived: &Derived) -> u64 {
         let total = (self.total)(derived);
@@ -693,6 +727,10 @@ impl SinkProgress {
 ///
 /// `stalled` is set while the sink has records waiting and has delivered none
 /// for `stall_after`, and cleared when it delivers again -- see [`SinkProgress`].
+///
+/// `vector_pid` is the supervisor's record of the running Vector. A PID other
+/// than the last one scraped is a restarted Vector, whose totals start again
+/// from zero whether or not they have passed the old ones.
 pub fn spawn_vector_scrape_task(
     metrics: Arc<WrapperMetrics>,
     address: String,
@@ -700,6 +738,7 @@ pub fn spawn_vector_scrape_task(
     expiry_ticks: u32,
     stall_after: Duration,
     stalled: Arc<AtomicBool>,
+    vector_pid: Arc<Mutex<Option<u32>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
@@ -709,11 +748,35 @@ pub fn spawn_vector_scrape_task(
         let mut progress = SinkProgress::new(stall_after, Instant::now());
         let mut dead_letters = [DeadLetterDrops::too_large(), DeadLetterDrops::rejected()];
         let mut lifetime = LifetimeTotals::default();
+        let mut scraped_pid: Option<u32> = None;
+        let current_pid = || {
+            *vector_pid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
 
         loop {
             ticker.tick().await;
-            match fetch_exposition(&address).await {
+            let pid = current_pid();
+            let fetched = fetch_exposition(&address).await;
+            // A restart during the fetch leaves it unclear which process
+            // answered, so that exposition is skipped.
+            let fetched = match fetched {
+                Ok(_) if current_pid() != pid => {
+                    Err("Vector restarted during the scrape".to_string())
+                }
+                other => other,
+            };
+            if fetched.is_ok() && pid.is_some() && scraped_pid.is_some() && pid != scraped_pid {
+                merger.restarted();
+                lifetime.restarted();
+                for drops in &mut dead_letters {
+                    drops.restarted();
+                }
+            }
+            match fetched {
                 Ok(body) => {
+                    scraped_pid = pid.or(scraped_pid);
                     let derived = merger.merge(&body);
                     apply_derived(&metrics, &lifetime.carry(&derived));
                     for drops in &mut dead_letters {
@@ -1296,6 +1359,49 @@ vector_rtt_seconds_count 9
             merged,
             Some(metrics_util::debugging::DebugValue::Counter(160)),
             "the merged counter held flat after the restart"
+        );
+    }
+
+    /// A restarted Vector can pass the old total before the next scrape, so no
+    /// decrease shows. The supervisor's restart signal rebases every count.
+    #[test]
+    fn a_restart_signal_rebases_a_count_that_never_fell() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let exposition = |n: u64| {
+            format!(
+                "# TYPE vector_component_sent_events_total counter\n\
+                 vector_component_sent_events_total{{component_id=\"dfe_sink\"}} {n}\n\
+                 # TYPE vector_component_discarded_events_total counter\n\
+                 vector_component_discarded_events_total{{component_id=\"dfe_sink\"}} {n}\n"
+            )
+        };
+        let mut merger = ExpositionMerger::new(4);
+        let mut lifetime = LifetimeTotals::default();
+        let mut drops = DeadLetterDrops::rejected();
+
+        let (published, dropped) = metrics::with_local_recorder(&recorder, || {
+            let before = merger.merge(&exposition(100));
+            let first = (lifetime.carry(&before).sent, drops.record(&before));
+            merger.restarted();
+            lifetime.restarted();
+            drops.restarted();
+            let after = merger.merge(&exposition(150));
+            let second = (lifetime.carry(&after).sent, drops.record(&after));
+            ([first.0, second.0], [first.1, second.1])
+        });
+        assert_eq!(published, [100.0, 250.0], "the app's own total");
+        assert_eq!(dropped, [100, 150], "each drop of the new Vector counted");
+        let merged = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(key, ..)| key.key().name() == "vector_component_sent_events_total")
+            .map(|(.., value)| value);
+        assert_eq!(
+            merged,
+            Some(metrics_util::debugging::DebugValue::Counter(250)),
+            "the merged counter"
         );
     }
 

@@ -345,6 +345,10 @@ async fn run_transform_service(
     // scrape tells readiness whether the sink is still delivering.
     let sink_stalled = Arc::new(AtomicBool::new(false));
     health::register_sink_progress(sink_stalled.clone());
+
+    // Shared Vector PID: the reload loop signals it, and the scrape reads a
+    // change in it as a restarted Vector.
+    let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
     spawn_vector_scrape_task(
         metrics.clone(),
         config.metrics.vector_metrics_address.clone(),
@@ -352,6 +356,7 @@ async fn run_transform_service(
         config.metrics.vector_metrics_expiry_ticks,
         std::time::Duration::from_secs(config.metrics.sink_stall_secs),
         sink_stalled,
+        vector_pid.clone(),
     );
 
     // Keep uptime_seconds fresh between scrapes.
@@ -363,9 +368,6 @@ async fn run_transform_service(
 
     // Shutdown signal channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    // Shared Vector PID for reload loop → SIGHUP
-    let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
 
     // Reload channel: SIGHUP handler and file watcher send triggers
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(4);
