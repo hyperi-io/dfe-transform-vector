@@ -1,7 +1,7 @@
 #![allow(dead_code, clippy::unwrap_used)]
 // Project:   dfe-transform-vector
 // File:      tests/common/mod.rs
-// Purpose:   Shared test infrastructure — live-first Kafka with testcontainers fallback
+// Purpose:   Shared test infrastructure: live-first Kafka, else scalo's shared broker
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -9,17 +9,17 @@
 
 //! Shared test helpers for integration and e2e tests.
 //!
-//! ## Kafka test fixture — live first, testcontainers fallback
+//! ## Kafka test fixture -- live first, then the run's shared broker
 //!
-//! Priority order (automatic — no TEST_MODE env needed):
-//! 1. **Live cluster** — if `.env` credentials authenticate successfully.
+//! Priority order (automatic -- no TEST_MODE env needed):
+//! 1. **Live cluster** -- if `.env` credentials authenticate successfully.
 //!    Faster and more realistic (cluster, not single-node).
-//! 2. **Testcontainers** — ephemeral single-node Apache Kafka spawned via
-//!    Docker. Used only when the live cluster is unreachable or creds are
-//!    stale.
-//! 3. **Skip** — if neither is available (no env creds AND no Docker).
+//! 2. **Shared broker** -- scalo's `shared_service` broker, one PLAINTEXT
+//!    container for the whole test run, joined by every nextest process.
+//! 3. **Skip** -- if neither is available (no env creds AND no Docker).
 //!
-//! The fixture owns the container (if any) and shuts it down on drop.
+//! scalo names and labels every container and removes it when the run ends.
+//! A SCRAM broker is a test's own, removed when its fixture drops.
 //!
 //! Credentials come from the project `.env` (never hard-coded), loaded from
 //! the repo root at the first call.
@@ -29,10 +29,16 @@ use std::net::ToSocketAddrs;
 use std::time::Duration;
 
 use scalo::SensitiveString;
+use scalo::deployment::test_support::shared_service::{
+    OwnedContainer, Ready, ServiceSpec, SharedContainer, Suite, container_name, start_alone,
+};
+use scalo::transport::kafka::test_support::{
+    KAFKA_IMAGE, KAFKA_PORT, docker_answers, scram_password, shared_kafka,
+};
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile};
 
 // Kept in its own file so `tests/smoke.rs` can pull it in with `#[path]`
-// without dragging the Kafka/testcontainers helpers into that binary. Left
+// without dragging the Kafka helpers into that binary. Left
 // as a module rather than re-exported, because a `pub use` that a given test
 // binary never touches trips `unused_imports` under `-D warnings`.
 pub mod metrics_fixture;
@@ -42,39 +48,41 @@ pub mod metrics_fixture;
 pub enum FixtureMode {
     /// Live cluster from `.env` / environment variables (preferred).
     Live,
-    /// Testcontainers-managed Apache Kafka (fallback).
-    Testcontainer,
+    /// A broker container scalo started (fallback).
+    Container,
 }
 
-/// Test fixture that provides a working Kafka cluster and handles cleanup.
-///
-/// Holds a container handle when in `Testcontainer` mode — the container
-/// stops on drop, preventing test leaks.
+/// Test fixture that provides a working Kafka cluster.
 pub struct KafkaFixture {
     pub config: KafkaConfig,
     pub mode: FixtureMode,
-    #[allow(dead_code)]
-    container: Option<KafkaContainerHandle>,
+    broker: Option<Broker>,
 }
 
-/// Opaque wrapper around the testcontainers Kafka container.
-/// Drop = stop container (handled by testcontainers-rs).
-enum KafkaContainerHandle {
-    /// The PLAINTEXT broker from the testcontainers module.
-    Plaintext(testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>),
-    /// The SASL/SCRAM-SHA-512 broker [`KafkaFixture::scram`] starts.
-    Scram(testcontainers::ContainerAsync<testcontainers::GenericImage>),
+/// The broker container behind a fixture.
+pub enum Broker {
+    /// The run's shared PLAINTEXT broker, removed when the run ends.
+    Shared(SharedContainer),
+    /// The SASL/SCRAM-SHA-512 broker [`KafkaFixture::scram`] starts, removed
+    /// when the fixture drops.
+    Owned(OwnedContainer),
 }
 
 impl KafkaFixture {
-    /// Acquire a Kafka fixture using live-first, testcontainers-fallback order.
-    ///
-    /// `test` names the calling test and goes into the container name, so
-    /// concurrent tests do not collide on it.
+    /// The broker container behind this fixture, `None` for a live cluster.
+    pub fn broker(&self) -> Option<&SharedContainer> {
+        match &self.broker {
+            Some(Broker::Shared(container)) => Some(container),
+            Some(Broker::Owned(owned)) => Some(&owned.container),
+            None => None,
+        }
+    }
+
+    /// Acquire a Kafka fixture: the live cluster, else the run's shared broker.
     ///
     /// Returns `None` if neither live nor Docker are available — callers
     /// should skip the test in that case.
-    pub async fn acquire(test: &str) -> Option<Self> {
+    pub async fn acquire(_test: &str) -> Option<Self> {
         load_dotenv();
 
         // 1. Try live cluster (real authenticated connection probe)
@@ -86,43 +94,42 @@ impl KafkaFixture {
             return Some(fixture);
         }
 
-        // 2. Fall back to testcontainers
-        match try_testcontainer(test).await {
+        // 2. Fall back to the run's shared broker
+        match shared_broker().await {
             Ok(fixture) => {
                 eprintln!(
-                    "kafka fixture: using TESTCONTAINER at {:?} \
-                     (live cluster unavailable — check .env or OpenBao creds)",
+                    "kafka fixture: using the SHARED BROKER at {:?} \
+                     (live cluster unavailable -- check .env or OpenBao creds)",
                     fixture.config.brokers
                 );
                 Some(fixture)
             }
             Err(e) => {
                 eprintln!(
-                    "kafka fixture: UNAVAILABLE — live cluster unreachable \
-                     AND testcontainers failed: {e}"
+                    "kafka fixture: UNAVAILABLE -- live cluster unreachable \
+                     AND no broker container: {e}"
                 );
                 None
             }
         }
     }
 
-    /// Acquire a Kafka fixture this test OWNS — always a fresh container,
-    /// never a broker that was already there.
+    /// Acquire the run's shared broker container, never the live cluster.
     ///
     /// `acquire` prefers the live cluster, which is wrong for a test that uses
-    /// the real DFE topic names: `filebeat_land` on a shared broker is
+    /// the real DFE topic names: `filebeat_land` on a shared live broker is
     /// somebody else's data. Returns `None` when no container can be started.
-    pub async fn hermetic(test: &str) -> Option<Self> {
-        match try_testcontainer(test).await {
+    pub async fn hermetic(_test: &str) -> Option<Self> {
+        match shared_broker().await {
             Ok(fixture) => {
                 eprintln!(
-                    "kafka fixture: using an OWNED TESTCONTAINER at {:?}",
+                    "kafka fixture: using the SHARED BROKER at {:?}",
                     fixture.config.brokers
                 );
                 Some(fixture)
             }
             Err(e) => {
-                eprintln!("kafka fixture: UNAVAILABLE — testcontainers failed: {e}");
+                eprintln!("kafka fixture: UNAVAILABLE -- no broker container: {e}");
                 None
             }
         }
@@ -134,16 +141,16 @@ impl KafkaFixture {
     /// Every other fixture is PLAINTEXT, so nothing else here exercises the
     /// credential path. Returns `None` when no container can be started.
     pub async fn scram(test: &str) -> Option<Self> {
-        match try_scram_testcontainer(test).await {
+        match scram_broker(test).await {
             Ok(fixture) => {
                 eprintln!(
-                    "kafka fixture: using an OWNED SCRAM TESTCONTAINER at {:?}",
+                    "kafka fixture: using an OWNED SCRAM BROKER at {:?}",
                     fixture.config.brokers
                 );
                 Some(fixture)
             }
             Err(e) => {
-                eprintln!("kafka fixture: UNAVAILABLE — SCRAM testcontainer failed: {e}");
+                eprintln!("kafka fixture: UNAVAILABLE -- SCRAM broker failed: {e}");
                 None
             }
         }
@@ -183,22 +190,22 @@ fn live_config_from_env() -> Option<KafkaConfig> {
 
 /// Probe the live cluster: TCP + authenticated metadata fetch.
 ///
-/// Returns `Some(fixture)` only if the full handshake succeeds — stale
-/// SASL creds count as a failure, triggering testcontainers fallback.
+/// Returns `Some(fixture)` only if the full handshake succeeds -- stale
+/// SASL creds count as a failure, falling back to the shared broker.
 async fn try_live_cluster() -> Option<KafkaFixture> {
     let cfg = live_config_from_env()?;
     if !tcp_reachable(&cfg.brokers).await {
         return None;
     }
-    // Authenticated probe — if SASL creds are stale, this fails and we
-    // fall through to testcontainers.
+    // Authenticated probe -- if SASL creds are stale, this fails and we
+    // fall through to the shared broker.
     if !authenticated_probe(&cfg).await {
         return None;
     }
     Some(KafkaFixture {
         config: cfg,
         mode: FixtureMode::Live,
-        container: None,
+        broker: None,
     })
 }
 
@@ -251,200 +258,49 @@ pub fn require_service_in_ci(what: &str, detail: &str) {
 }
 
 // =============================================================================
-// Container naming and cleanup
+// Broker containers
 // =============================================================================
 //
-// Every container this suite starts carries a name that says which repo, which
-// suite and which backing service it is, so an operator looking at `docker ps`
-// can tell what left it behind. testcontainers' default is a random hex name,
-// which is untraceable the moment one survives.
-//
-// Naming: `dfe-transform-vector-test-integration-<test>-<service>`, because
-// every container here is owned by exactly ONE test. nextest runs each test in
-// its own process, so nothing is shared even when it looks like it should be --
-// two tests calling `KafkaFixture::acquire` start two brokers. That was already
-// true with testcontainers' random names; the only thing a single shared name
-// would add is a collision, where the first test wins and the rest fail with
-// "name is already in use" and skip. `container_name` still takes `None` for a
-// container started once for a whole binary, but no suite does that today.
-//
-// Cleanup is belt AND braces, because `Drop` alone is not enough:
-//
-//   - Normal completion and a panic both unwind, so `Drop` stops the container.
-//   - A SIGKILL, an abort, or Ctrl-C on the test run does NOT. `Drop` never
-//     runs and the container survives.
-//
-// testcontainers-rs 0.27 has no resource reaper (no Ryuk), so the second case
-// is the one that leaves crap behind. A deterministic name would then make it
-// WORSE than a random one -- the leaked container holds the name and every
-// later run fails with "name already in use". `reap_stale` closes that: remove
-// any container already holding the name before starting, so a leak costs the
-// next run nothing and self-heals.
-//
-// The label goes on as well, so a sweep can find these regardless of name:
-//   docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vector-integration)
+// scalo's `shared_service` starts, names and labels every container: one
+// PLAINTEXT broker per test run, shared by every nextest process, and a SCRAM
+// broker a test holds alone. Names start `dfe-transform-vector-test-integration-`
+// (or `HYPERI_TEST_CONTAINER_PREFIX`), the `io.hyperi.test.suite` label is
+// `dfe-transform-vector-integration`, and a watcher removes them once the run
+// ends.
 
-/// Label marking every container this suite starts, for bulk cleanup.
-pub const TEST_SUITE_LABEL: (&str, &str) =
-    ("io.hyperi.test.suite", "dfe-transform-vector-integration");
-
-/// Labels for a container this suite starts: what it is, and whose run owns it.
-///
-/// The name says what and why; these say WHO, which is what you need when
-/// several runs share a machine and one has left something behind. The pid is
-/// the owning test process -- `ps -p <pid>` answers "is that run still alive, or
-/// is this rubbish I can remove?".
-fn test_labels(service: &str) -> Vec<(String, String)> {
-    vec![
-        (
-            TEST_SUITE_LABEL.0.to_string(),
-            TEST_SUITE_LABEL.1.to_string(),
-        ),
-        (
-            "io.hyperi.test.repo".to_string(),
-            "dfe-transform-vector".to_string(),
-        ),
-        ("io.hyperi.test.service".to_string(), service.to_string()),
-        (
-            "io.hyperi.test.owner-pid".to_string(),
-            std::process::id().to_string(),
-        ),
-    ]
-}
-
-/// Container name for a backing service in this suite.
-///
-/// Pass `Some(test)` -- the owning test -- for anything a test starts for itself,
-/// which is everything here. `None` is for a container started once for a whole
-/// test binary; nothing does that today, and using it from several tests would
-/// make them collide on the name rather than share the container.
-///
-/// Names are lowercased and non-alphanumerics collapse to `-`, because Docker
-/// only accepts `[a-zA-Z0-9][a-zA-Z0-9_.-]*`, and a Rust test path
-/// (`kafka::test_roundtrip`) has colons in it.
-#[must_use]
-pub fn container_name(test: Option<&str>, service: &str) -> String {
-    let slug = |s: &str| {
-        s.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>()
-    };
-    test.map_or_else(
-        || format!("dfe-transform-vector-test-integration-{}", slug(service)),
-        |t| {
-            format!(
-                "dfe-transform-vector-test-integration-{}-{}",
-                slug(t),
-                slug(service)
-            )
-        },
-    )
-}
-
-/// Remove a DEAD container holding `name`, so a leak from a killed run cannot
-/// block this one.
-///
-/// Never touches a RUNNING container. Two concurrent runs of this suite on one
-/// machine share these names, and force-removing a live one would sabotage the
-/// other run -- a confusing mid-test failure in a process that did nothing
-/// wrong. Leaving it means the start below fails with "name is already in use",
-/// which says what actually happened.
-///
-/// Best-effort otherwise: no Docker, nothing to remove, or an already-gone
-/// container are all fine. A failure here must not fail the test -- the start
-/// that follows reports the real problem.
-pub fn reap_stale(name: &str) {
-    let running = std::process::Command::new("docker")
-        .args(["ps", "--quiet", "--filter", &format!("name=^{name}$")])
-        .output();
-    // Non-empty stdout means a container by this name is up. Leave it alone.
-    if let Ok(out) = &running
-        && !out.stdout.is_empty()
-    {
-        return;
-    }
-    let _ = std::process::Command::new("docker")
-        .args(["rm", "--force", "--volumes", name])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-}
-
-/// The broker image the single tier runs, for both fixtures, digest-pinned. The JVM image:
-/// `apache/kafka-native` before 4.4.0 segfaults in `getpwuid` on ~2% of starts.
-///
-/// renovate: datasource=docker depName=apache/kafka
-const KAFKA_TAG: &str = "4.3.1";
-
-/// Digest of `KAFKA_TAG`, apart from it because the Renovate regex stops at a colon.
-const KAFKA_DIGEST: &str =
-    "sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837";
+/// This suite, for container names, labels and the `HYPERI_TEST_*` lookup.
+pub const SUITE: Suite = Suite {
+    repo: "dfe-transform-vector",
+    manifest_dir: env!("CARGO_MANIFEST_DIR"),
+    tmp_dir: option_env!("CARGO_TARGET_TMPDIR"),
+};
 
 /// A JVM broker takes 5-12 s to become ready, longer on a busy runner, so 60 s is too tight.
 const KAFKA_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Spawn an ephemeral Apache Kafka container (testcontainers).
-///
-/// The container runs in PLAINTEXT mode (no SASL/TLS) — sufficient for
-/// validating pipeline wiring. The returned fixture owns the container;
-/// it stops on drop.
-///
-/// `test` names the calling test and goes into the container name, so
-/// concurrent tests do not collide on it.
-async fn try_testcontainer(test: &str) -> Result<KafkaFixture, String> {
-    use testcontainers::ImageExt;
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::kafka::apache;
+/// Username the SCRAM broker bootstraps at format time. Distinct enough that a
+/// test can tell it apart from anything else in a generated config.
+const SCRAM_USERNAME: &str = "dfe-test-user";
 
-    let name = container_name(Some(test), "kafka");
-    reap_stale(&name);
-    let container = apache::Kafka::default()
-        .with_jvm_image()
-        .with_tag(format!("{KAFKA_TAG}@{KAFKA_DIGEST}"))
-        .with_container_name(&name)
-        .with_labels(test_labels("kafka"))
-        .with_startup_timeout(KAFKA_STARTUP_TIMEOUT)
-        .start()
-        .await
-        .map_err(|e| format!("start kafka container: {e}"))?;
-
-    let host = container
-        .get_host()
-        .await
-        .map_err(|e| format!("get host: {e}"))?;
-    let port = container
-        .get_host_port_ipv4(apache::KAFKA_PORT)
-        .await
-        .map_err(|e| format!("get mapped port: {e}"))?;
-
-    let bootstrap = format!("{host}:{port}");
-
+/// The run's shared PLAINTEXT broker, sufficient for validating pipeline wiring.
+async fn shared_broker() -> Result<KafkaFixture, String> {
+    if !docker_answers() {
+        return Err("no Docker daemon answers".into());
+    }
+    let container = shared_kafka(SUITE).await;
     let config = KafkaConfig {
         profile: KafkaProfile::DevTest,
-        brokers: vec![bootstrap],
+        brokers: vec![container.addr(KAFKA_PORT)],
         group: "dfe-transform-vector-tests".into(),
         security_protocol: "PLAINTEXT".into(),
         ..Default::default()
     };
-
     Ok(KafkaFixture {
         config,
-        mode: FixtureMode::Testcontainer,
-        container: Some(KafkaContainerHandle::Plaintext(container)),
+        mode: FixtureMode::Container,
+        broker: Some(Broker::Shared(container)),
     })
 }
-
-/// Username the SCRAM broker bootstraps at format time.
-const SCRAM_USERNAME: &str = "dfe-test-user";
-
-/// Password of [`SCRAM_USERNAME`]; a fixture's, never a deployment's.
-const SCRAM_PASSWORD: &str = "scram-test-password";
 
 /// One KRaft node that serves SASL_PLAINTEXT with SCRAM-SHA-512 only, its user
 /// written in at format time -- the shape of the DFE single tier's broker.
@@ -473,16 +329,15 @@ EOF
 exec /opt/kafka/bin/kafka-server-start.sh "$CONF"
 "#;
 
-/// Spawn an ephemeral Apache Kafka container that only accepts
+/// Start an Apache Kafka container this test holds alone, accepting only
 /// SASL/SCRAM-SHA-512, and a fixture config that authenticates to it.
 ///
 /// `test` names the calling test and goes into the container name, so
 /// concurrent tests do not collide on it.
-async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
-    use testcontainers::core::{IntoContainerPort, WaitFor};
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers::{GenericImage, ImageExt};
-
+async fn scram_broker(test: &str) -> Result<KafkaFixture, String> {
+    if !docker_answers() {
+        return Err("no Docker daemon answers".into());
+    }
     // The broker tells clients to reconnect to the address it advertises, so
     // the host port is chosen before it starts rather than read back after.
     let address = free_port().await;
@@ -492,24 +347,22 @@ async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
         .and_then(|p| p.parse().ok())
         .ok_or_else(|| format!("no port in {address}"))?;
 
-    let name = container_name(Some(test), "kafka-scram");
-    reap_stale(&name);
-    let image_tag = format!("{KAFKA_TAG}@{KAFKA_DIGEST}");
-    let container = GenericImage::new("apache/kafka", image_tag.as_str())
-        .with_entrypoint("/bin/sh")
-        .with_exposed_port(9092.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
-        .with_cmd(["-c", SCRAM_BROKER_SCRIPT])
-        .with_env_var("ADVERTISED_ADDRESS", address.clone())
-        .with_env_var("SCRAM_USERNAME", SCRAM_USERNAME)
-        .with_env_var("SCRAM_PASSWORD", SCRAM_PASSWORD)
-        .with_mapped_port(host_port, 9092.tcp())
-        .with_container_name(&name)
-        .with_labels(test_labels("kafka-scram"))
-        .with_startup_timeout(KAFKA_STARTUP_TIMEOUT)
-        .start()
+    let name = container_name(&SUITE, Some(test), "kafka-scram");
+    let spec = ServiceSpec {
+        pinned_ports: vec![(KAFKA_PORT, host_port)],
+        env: vec![
+            ("ADVERTISED_ADDRESS".into(), address.clone()),
+            ("SCRAM_USERNAME".into(), SCRAM_USERNAME.into()),
+            ("SCRAM_PASSWORD".into(), scram_password().into()),
+        ],
+        entrypoint: Some("/bin/sh".into()),
+        args: vec!["-c".into(), SCRAM_BROKER_SCRIPT.into()],
+        ready: Ready::Log("Kafka Server started"),
+        ..ServiceSpec::new("kafka-scram", KAFKA_IMAGE, KAFKA_STARTUP_TIMEOUT)
+    };
+    let owned = tokio::task::spawn_blocking(move || start_alone(&SUITE, &spec, &name))
         .await
-        .map_err(|e| format!("start SCRAM kafka container: {e}"))?;
+        .map_err(|e| format!("start the SCRAM broker: {e}"))?;
 
     let config = KafkaConfig {
         profile: KafkaProfile::DevTest,
@@ -518,19 +371,19 @@ async fn try_scram_testcontainer(test: &str) -> Result<KafkaFixture, String> {
         security_protocol: "SASL_PLAINTEXT".into(),
         sasl_mechanism: Some("SCRAM-SHA-512".into()),
         sasl_username: Some(SCRAM_USERNAME.into()),
-        sasl_password: Some(SensitiveString::new(SCRAM_PASSWORD)),
+        sasl_password: Some(SensitiveString::new(scram_password())),
         ..Default::default()
     };
 
     Ok(KafkaFixture {
         config,
-        mode: FixtureMode::Testcontainer,
-        container: Some(KafkaContainerHandle::Scram(container)),
+        mode: FixtureMode::Container,
+        broker: Some(Broker::Owned(owned)),
     })
 }
 
 // =============================================================================
-// Legacy sync helpers — kept for existing integration tests that only
+// Legacy sync helpers -- kept for existing integration tests that only
 // build configs (don't actually connect). New tests should use
 // `KafkaFixture::acquire()` instead.
 // =============================================================================

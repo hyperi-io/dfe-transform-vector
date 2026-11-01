@@ -571,3 +571,39 @@ fn vector_validate_full_chain_sasl_tls_skip_verify() {
         "vector validate failed with SASL+TLS+skip_verify:\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
+
+/// Vector accepts what the wiring check passes: a route's named outputs as
+/// inputs, the unconsumed ones and `_unmatched` on the sink, and `source`
+/// written back as `dfe_source`.
+#[test]
+#[ignore = "needs a Vector binary -- run: cargo nextest run --run-ignored all -E 'test(vector_validate)'"]
+fn vector_validate_routes_with_named_outputs() {
+    common::skip_if_no_vector!();
+
+    let (mut config, work_dir) = build_config(BufferConfig::default());
+    let transforms = work_dir.path().join("transforms");
+    fs::create_dir_all(&transforms).unwrap();
+    fs::write(
+        transforms.join("01_route.yaml"),
+        "transforms:\n  split:\n    type: route\n    inputs: [source]\n    route:\n      \
+         accepted: '.ok == true'\n      audit: '.audit == true'\n  tag:\n    type: remap\n    \
+         inputs: [split.accepted]\n    source: '.tagged = true'\n",
+    )
+    .unwrap();
+    config.transforms.dir = Some(transforms.to_string_lossy().into_owned());
+
+    let config_dir = work_dir.path().join("config");
+    assembler::assemble(&config, &config_dir).expect("assembly should succeed");
+    let vector_bin = common::vector_binary_path().expect("checked by skip_if_no_vector");
+    let output = Command::new(vector_bin)
+        .args(validate_args(&config_dir))
+        .env("VECTOR_DATA_DIR", &config.vector.data_dir)
+        .output()
+        .expect("failed to run vector validate");
+    assert!(
+        output.status.success(),
+        "vector validate refused the routed config:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

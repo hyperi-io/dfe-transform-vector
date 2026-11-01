@@ -186,6 +186,8 @@ pub fn contract() -> DeploymentContract {
         },
         ..DeploymentContract::default()
     }
+    // The bridge's file DLQ writes under the read-only root too.
+    .with_dlq(&crate::config::Config::default().dlq.0)
 }
 
 /// The Kafka Secret the chart mounts into each endpoint's SASL env vars.
@@ -477,6 +479,24 @@ mod tests {
                 c.writable_paths
             );
         }
+    }
+
+    /// The bridge's file DLQ writes under a read-only root filesystem, so its
+    /// directory needs an ungated writable path, or the DLQ starts with no
+    /// backend and holds every block that has a dead letter.
+    #[test]
+    fn the_file_dlq_has_somewhere_to_write() {
+        let c = contract();
+        let dir = crate::config::Config::default().dlq.0.file.path;
+        assert!(c.security.read_only_root_filesystem);
+        assert!(
+            c.writable_paths
+                .iter()
+                .any(|w| w.when.is_none() && dir.starts_with(&w.path)),
+            "no writable path covers {}: {:?}",
+            dir.display(),
+            c.writable_paths
+        );
     }
 
     /// The committed reflectable artefacts under docs/ must not drift from a

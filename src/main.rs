@@ -345,6 +345,10 @@ async fn run_transform_service(
     // scrape tells readiness whether the sink is still delivering.
     let sink_stalled = Arc::new(AtomicBool::new(false));
     health::register_sink_progress(sink_stalled.clone());
+
+    // Shared Vector PID: the reload loop signals it, and the scrape reads a
+    // change in it as a restarted Vector.
+    let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
     spawn_vector_scrape_task(
         metrics.clone(),
         config.metrics.vector_metrics_address.clone(),
@@ -352,6 +356,7 @@ async fn run_transform_service(
         config.metrics.vector_metrics_expiry_ticks,
         std::time::Duration::from_secs(config.metrics.sink_stall_secs),
         sink_stalled,
+        vector_pid.clone(),
     );
 
     // Keep uptime_seconds fresh between scrapes.
@@ -363,9 +368,6 @@ async fn run_transform_service(
 
     // Shutdown signal channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    // Shared Vector PID for reload loop → SIGHUP
-    let vector_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
 
     // Reload channel: SIGHUP handler and file watcher send triggers
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(4);
@@ -452,6 +454,21 @@ async fn run_transform_service(
     // startup rather than surfacing once the pod is already Ready.
     let inbound_stop = CancellationToken::new();
     let outbound_stop = CancellationToken::new();
+    // On its own token, so it outlives the bridge and takes the dead letters
+    // of what the legs drain at shutdown.
+    let dlq = if bridge::is_enabled(&config) {
+        Some(
+            scalo::dlq::Dlq::spawn(
+                &config.dlq.0,
+                "dfe-transform-vector",
+                None,
+                CancellationToken::new(),
+            )
+            .map_err(|e| anyhow::anyhow!("dlq: {e}"))?,
+        )
+    } else {
+        None
+    };
     let bridge_task = if bridge::is_enabled(&config) {
         let lent = BridgeRuntime {
             pool: runtime.worker_pool.clone(),
@@ -460,6 +477,7 @@ async fn run_transform_service(
                 .as_ref()
                 .map(scalo::SelfRegulationGovernor::pressure),
             memory_guard: Some(Arc::clone(&runtime.memory_guard)),
+            dlq: dlq.clone().map(Arc::new),
         };
         let bridge = bridge::Bridge::build(&config, lent).await?;
         // Intake stops with the shutdown signal; the leg back from Vector stays
@@ -529,6 +547,11 @@ async fn run_transform_service(
         },
         None => Ok(()),
     };
+    if let Some(dlq) = dlq
+        && let Err(e) = dlq.shutdown().await
+    {
+        error!(error = %e, "the DLQ drain did not stop cleanly");
+    }
 
     // Update final metrics
     let final_state = lifecycle.state();

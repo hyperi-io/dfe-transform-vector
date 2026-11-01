@@ -124,7 +124,7 @@ memory guard.
 **A failed bridge leg stops the process.** Its senders would otherwise retry for
 ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
-**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks, and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_*` variables.
+**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks and outside every credential path (the config directory, a mounted `sasl.secret_dir`, a TLS key), and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_*` variables.
 
 ## Health and metrics invariants
 

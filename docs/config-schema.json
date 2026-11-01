@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API switch and address,\n  log level set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA ScaledObject (CPU, plus any trigger a deployment adds),\n  gated by the subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's runtime reads its own `scaling.enabled` and\n  `scaling.memory_gate_threshold` from the cascade, not this key.",
+  "description": "Main configuration.\n\n## Hot-reload behaviour\n\n**Hot-reloaded (takes effect on next poll cycle / SIGHUP):**\n- Transform YAML file contents (modified/added/removed in watched directory)\n- `transforms.dir` -- watcher switches to new directory after successful reload\n- `transforms.files` -- watcher switches to new file list after successful reload\n\n**Requires pod restart:**\n- `source.*` — the consumer or the Push listener is established at startup\n- `sink.*` — the producer or the Push client is established at startup\n- `bridge.*` — the two supervisor-to-Vector legs bind at startup\n- `pipeline.name` — used in consumer group_id and metrics labels at startup\n- `vector.*` — binary path, data_dir, config_dir, API switch and address,\n  log level set at Vector spawn\n- `metrics.address` -- the HTTP server binds at startup\n- `logging.*` -- tracing subscriber configured at startup\n- `reload.poll_interval_secs` -- captured at reload loop start\n- `dlq.*` -- the bridge's dead-letter queue is spawned at startup\n\n**Read by nothing in this process:**\n- `scaling.pressure_threshold` -- no reader. Scale-out is driven by the\n  chart's KEDA ScaledObject (CPU, plus any trigger a deployment adds),\n  gated by the subprocess circuit in [`crate::metrics::spawn_circuit_gate_task`].\n  scalo's runtime reads its own `scaling.enabled` and\n  `scaling.memory_gate_threshold` from the cascade, not this key.",
   "type": "object",
   "properties": {
     "dfe_source": {
@@ -167,6 +167,25 @@
       "default": {
         "enabled": true,
         "poll_interval_secs": 30
+      }
+    },
+    "dlq": {
+      "description": "Where the direct transport's bridge sends a record the next stage would\nrefuse for good, rather than drop it. **Requires restart.**",
+      "$ref": "#/$defs/DeadLetterConfig",
+      "default": {
+        "enabled": true,
+        "mode": "cascade",
+        "queue_capacity": 10000,
+        "batch_size": 256,
+        "flush_interval_ms": 100,
+        "max_payload_bytes": 524288,
+        "file": {
+          "enabled": true,
+          "path": "/var/spool/scalo/dlq",
+          "rotation": "hourly",
+          "max_age_days": 30,
+          "compress_rotated": true
+        }
       }
     }
   },
@@ -566,7 +585,7 @@
       }
     },
     "BatchConfig": {
-      "description": "Vector-level batch configuration for sinks.",
+      "description": "Vector-level batch configuration for the sink, on either transport.",
       "type": "object",
       "properties": {
         "max_events": {
@@ -577,7 +596,7 @@
           "default": 10000
         },
         "max_bytes": {
-          "description": "Maximum uncompressed batch size (bytes) before flush.",
+          "description": "Maximum uncompressed batch size (bytes) before flush. On the direct\ntransport at most 16 MiB, and 8 MiB when unset.",
           "type": [
             "integer",
             "null"
@@ -587,7 +606,7 @@
           "default": null
         },
         "timeout_secs": {
-          "description": "Max batch age (seconds) before flush. Default: 1.",
+          "description": "Max batch age (seconds) before flush. Default: 1, and at most 1 on the\ndirect transport.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
@@ -774,6 +793,141 @@
           "default": 30
         }
       }
+    },
+    "DeadLetterConfig": {
+      "description": "The bridge's dead-letter queue: scalo's `DlqConfig` as written.\n\nThe default writes NDJSON files under `/var/spool/scalo/dlq`, which the\ndeployment contract declares writable. With `enabled: false` such a record\nis dropped and counted on `pipeline_dead_letters_dropped_total`. Only the\ndirect transport's bridge has one: on the bus Vector's own Kafka sink\ndelivers.",
+      "$ref": "#/$defs/DlqConfig"
+    },
+    "DlqConfig": {
+      "description": "Top-level DLQ configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether DLQ is enabled.",
+          "type": "boolean",
+          "default": true
+        },
+        "mode": {
+          "description": "Backend routing mode.",
+          "$ref": "#/$defs/DlqMode",
+          "default": "cascade"
+        },
+        "queue_capacity": {
+          "description": "Bounded mpsc capacity. When the queue is full, `try_send` returns\n`QueueFull` (overflow=Drop). Sized for failure-burst tolerance.\nDefault 10_000.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 10000
+        },
+        "batch_size": {
+          "description": "Drain coalesces up to this many entries into one backend write.\nDefault 256.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 256
+        },
+        "flush_interval_ms": {
+          "description": "Flush a partial batch after this duration, even if not full.\nDefault 100 ms.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 100
+        },
+        "max_payload_bytes": {
+          "description": "Payload bytes an entry keeps: a longer payload is cut to this and the\nentry marked `truncated` with its original length, so it lands where\nthe whole record could not. `None` keeps every payload whole. Default\n[`DEFAULT_MAX_PAYLOAD_BYTES`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "default": 524288
+        },
+        "file": {
+          "description": "File backend configuration.",
+          "$ref": "#/$defs/FileDlqConfig",
+          "default": {
+            "enabled": true,
+            "path": "/var/spool/scalo/dlq",
+            "rotation": "hourly",
+            "max_age_days": 30,
+            "compress_rotated": true
+          }
+        }
+      }
+    },
+    "DlqMode": {
+      "description": "How backends are used when multiple are enabled.",
+      "oneOf": [
+        {
+          "description": "Try backends in order; stop on first success.\nDefault order: Kafka first, file fallback.",
+          "type": "string",
+          "const": "cascade"
+        },
+        {
+          "description": "Write every batch to all enabled backends. The write succeeds when at\nleast one backend takes the whole batch, and fails only when none does.",
+          "type": "string",
+          "const": "fan_out"
+        },
+        {
+          "description": "File backend only (no Kafka dependency).",
+          "type": "string",
+          "const": "file_only"
+        },
+        {
+          "description": "Kafka backend only (matches a typical consumer's current behaviour).",
+          "type": "string",
+          "const": "kafka_only"
+        }
+      ]
+    },
+    "FileDlqConfig": {
+      "description": "File-based DLQ configuration.\n\nWrites NDJSON files with automatic rotation and cleanup.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable the file backend.",
+          "type": "boolean",
+          "default": true
+        },
+        "path": {
+          "description": "Base directory for DLQ files.\nService name is appended as a subdirectory. Default `/var/spool/scalo/dlq`.",
+          "type": "string",
+          "default": "/var/spool/scalo/dlq"
+        },
+        "rotation": {
+          "description": "File rotation period.",
+          "$ref": "#/$defs/RotationPeriod",
+          "default": "hourly"
+        },
+        "max_age_days": {
+          "description": "Auto-cleanup files older than this many days.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 30
+        },
+        "compress_rotated": {
+          "description": "Compress rotated files with flate2/gzip.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "RotationPeriod": {
+      "description": "File rotation period.",
+      "oneOf": [
+        {
+          "description": "Rotate files every hour.",
+          "type": "string",
+          "const": "hourly"
+        },
+        {
+          "description": "Rotate files every day.",
+          "type": "string",
+          "const": "daily"
+        }
+      ]
     }
   }
 }

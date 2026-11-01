@@ -176,6 +176,7 @@ impl Default for DecodingConfig {
 /// - `metrics.address` -- the HTTP server binds at startup
 /// - `logging.*` -- tracing subscriber configured at startup
 /// - `reload.poll_interval_secs` -- captured at reload loop start
+/// - `dlq.*` -- the bridge's dead-letter queue is spawned at startup
 ///
 /// **Read by nothing in this process:**
 /// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
@@ -216,6 +217,28 @@ pub struct Config {
     pub scaling: ScalingConfig,
     /// Hot-reload configuration. **Requires restart** (poll interval captured at start).
     pub reload: ReloadConfig,
+    /// Where the direct transport's bridge sends a record the next stage would
+    /// refuse for good, rather than drop it. **Requires restart.**
+    pub dlq: DeadLetterConfig,
+}
+
+/// The bridge's dead-letter queue: scalo's `DlqConfig` as written.
+///
+/// The default writes NDJSON files under `/var/spool/scalo/dlq`, which the
+/// deployment contract declares writable. With `enabled: false` such a record
+/// is dropped and counted on `pipeline_dead_letters_dropped_total`. Only the
+/// direct transport's bridge has one: on the bus Vector's own Kafka sink
+/// delivers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct DeadLetterConfig(pub scalo::dlq::DlqConfig);
+
+// scalo's `DlqConfig` derives no `PartialEq`, and `Config` needs one so a
+// reload can tell a `dlq` change, which needs a restart, from none.
+impl PartialEq for DeadLetterConfig {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_value(&self.0).ok() == serde_json::to_value(&other.0).ok()
+    }
 }
 
 /// Pipeline identity.
@@ -310,6 +333,26 @@ fn validate_bind(field: &str, value: &str) -> Result<()> {
     Err(crate::Error::Validation(format!(
         "{field} must be a host:port bind address on the direct transport (got '{value}')"
     )))
+}
+
+/// Reject a bridge leg bound anywhere but loopback: either leg takes
+/// unauthenticated pushes, so off loopback it is an intake that skips the
+/// pod's own.
+fn validate_loopback_bind(field: &str, value: &str) -> Result<()> {
+    validate_bind(field, value)?;
+    match value.parse::<std::net::SocketAddr>() {
+        Ok(addr) if addr.ip().is_loopback() => Ok(()),
+        _ => Err(crate::Error::Validation(format!(
+            "{field} must be a loopback address (got '{value}'): the bridge leg takes \
+             unauthenticated pushes from inside the pod only"
+        ))),
+    }
+}
+
+/// Whether librdkafka reads `value` as a true boolean: `true` or `t` in any
+/// case, or `1`.
+fn librdkafka_true(value: &str) -> bool {
+    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("t") || value == "1"
 }
 
 /// Parse a transport name from the environment, keeping `current` on anything
@@ -453,15 +496,17 @@ impl Default for SinkConfig {
     }
 }
 
-/// Vector-level batch configuration for sinks.
+/// Vector-level batch configuration for the sink, on either transport.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct BatchConfig {
     /// Maximum events per batch before flush. Default: 10000.
     pub max_events: u32,
-    /// Maximum uncompressed batch size (bytes) before flush.
+    /// Maximum uncompressed batch size (bytes) before flush. On the direct
+    /// transport at most 16 MiB, and 8 MiB when unset.
     pub max_bytes: Option<u64>,
-    /// Max batch age (seconds) before flush. Default: 1.
+    /// Max batch age (seconds) before flush. Default: 1, and at most 1 on the
+    /// direct transport.
     pub timeout_secs: u32,
 }
 
@@ -1122,23 +1167,19 @@ impl Config {
             )?;
         }
 
-        // Vector stores an offset only once the sink has acknowledged the
-        // event, which is what makes the commit timer safe to run. Hand that
-        // job back to librdkafka and offsets are stored at fetch time and
-        // committed seconds later, so a pod that dies mid-flight skips every
-        // record it had read but not yet produced.
-        if self
-            .source
-            .librdkafka_options
+        // Offsets stored at fetch rather than after the sink acknowledges are
+        // committed for records a crashed pod never produced. Every layer of
+        // the consumer options counts, the shared profile included.
+        if let Some(value) = super::generate::source_librdkafka_layers(&self.source)
             .get("enable.auto.offset.store")
-            .is_some_and(|v| v == "true")
+            .filter(|v| librdkafka_true(v))
         {
-            return Err(crate::Error::Validation(
-                "source.librdkafka_options.enable.auto.offset.store must not be true: Vector \
-                 stores offsets after the sink acknowledges, and letting librdkafka store them \
-                 on fetch silently drops records on an unclean shutdown"
-                    .into(),
-            ));
+            return Err(crate::Error::Validation(format!(
+                "the source consumer's enable.auto.offset.store is '{value}', from \
+                 source.librdkafka_options or the shared librdkafka profile: Vector stores \
+                 offsets after the sink acknowledges, and letting librdkafka store them on \
+                 fetch silently drops records on an unclean shutdown"
+            )));
         }
 
         // Source codec
@@ -1176,6 +1217,7 @@ impl Config {
                     "sink.endpoint must not be empty on the direct transport".into(),
                 ));
             }
+            Self::validate_direct_batch(&self.sink.batch)?;
         } else {
             if self.sink.brokers.is_empty() {
                 return Err(crate::Error::Validation(
@@ -1375,10 +1417,10 @@ impl Config {
             return Ok(());
         }
         if direct_in {
-            validate_bind("bridge.to_vector", &self.bridge.to_vector)?;
+            validate_loopback_bind("bridge.to_vector", &self.bridge.to_vector)?;
         }
         if direct_out {
-            validate_bind("bridge.from_vector", &self.bridge.from_vector)?;
+            validate_loopback_bind("bridge.from_vector", &self.bridge.from_vector)?;
         }
         if direct_in && direct_out && self.bridge.to_vector == self.bridge.from_vector {
             return Err(crate::Error::Validation(
@@ -1471,6 +1513,31 @@ impl Config {
                 "vector.api_address must be a host:port bind address (got '{address}')"
             ))),
         }
+    }
+
+    /// Hold the direct sink's batching inside what the bridge allows it.
+    ///
+    /// The bridge's hold deadlines leave Vector's sink one second of batching
+    /// (see [`crate::bridge::RETURN_HOLD`]), and the return listener decodes
+    /// at most its gRPC message size per push.
+    fn validate_direct_batch(batch: &BatchConfig) -> Result<()> {
+        if batch.timeout_secs > 1 {
+            return Err(crate::Error::Validation(format!(
+                "sink.batch.timeout_secs must be at most 1 on the direct transport, got {}: \
+                 the bridge's hold deadlines leave Vector's sink one second to batch in",
+                batch.timeout_secs
+            )));
+        }
+        let ceiling = scalo::transport::grpc::GrpcConfig::default().max_message_size;
+        if let Some(max_bytes) = batch.max_bytes
+            && usize::try_from(max_bytes).map_or(true, |bytes| bytes > ceiling)
+        {
+            return Err(crate::Error::Validation(format!(
+                "sink.batch.max_bytes must be at most {ceiling} on the direct transport, got \
+                 {max_bytes}: the return listener decodes no larger push"
+            )));
+        }
+        Ok(())
     }
 
     fn validate_buffer(buffer: &BufferConfig) -> Result<()> {

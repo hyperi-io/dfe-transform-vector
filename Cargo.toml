@@ -68,11 +68,13 @@ tokio-util = { version = ">=0.7.20, <0.8", features = ["rt"] }
 #
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = "2.14.22", features = [
+scalo = { version = ">=2.14.25, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
     "deployment",
+    # A record the next stage would refuse for good goes to the file DLQ.
+    "dlq",
     "expression",
     "health",
     "lifecycle",
@@ -117,8 +119,9 @@ metrics = ">=0.24.6, <0.25"
 # Note: Vector metrics proxy uses raw TcpStream (no HTTP client crate needed).
 # /metrics, /livez and /readyz are served by scalo's MetricsManager listener.
 
-# Unix signals (sending SIGTERM/SIGHUP to child process)
-nix = { version = ">=0.31.3, <0.32", features = ["signal", "process"] }
+# Unix signals (sending SIGTERM/SIGHUP to child process), and renameat2 to
+# swap a reload's staged config in whole
+nix = { version = ">=0.31.3, <0.32", features = ["signal", "process", "fs"] }
 
 # Allocator (Tier 1 release-track optimisation; CI opts in per channel)
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
@@ -142,10 +145,11 @@ tokio-test = ">=0.4.6, <0.5"
 flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
-testcontainers = ">=0.27.3, <0.28"
-testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
-scalo = { version = "2.14.22", features = [
+# transport-kafka-test-support is the run's shared broker container the Kafka
+# tests use.
+scalo = { version = ">=2.14.25, <3", features = [
     "transport-kafka",
+    "transport-kafka-test-support",
 ] }
 # The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
 dotenvy = ">=0.15.7, <0.16"

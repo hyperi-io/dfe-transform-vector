@@ -76,6 +76,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
         logging: LoggingConfig::default(),
         scaling: ScalingConfig::default(),
         reload: ReloadConfig::default(),
+        dlq: DeadLetterConfig::default(),
     }
 }
 
@@ -318,31 +319,159 @@ fn config_validation_catches_missing_sink_topic() {
 
 /// With the commit timer armed, handing offset-storing back to librdkafka
 /// turns an unclean pod death into skipped records rather than replayed ones.
+///
+/// librdkafka reads `true` and `t` in any case, and `1`, as true. `false` is
+/// what Vector sets anyway, so pinning it stays legal.
 #[test]
 fn config_validation_catches_offset_store_handed_back_to_librdkafka() {
-    let mut config = full_config(None);
-    config
-        .source
-        .librdkafka_options
-        .insert("enable.auto.offset.store".into(), "true".into());
-    let err = config.validate().unwrap_err();
+    for (value, refused) in [
+        ("true", true),
+        ("TRUE", true),
+        ("t", true),
+        ("1", true),
+        ("false", false),
+        ("0", false),
+    ] {
+        let mut config = full_config(None);
+        config
+            .source
+            .librdkafka_options
+            .insert("enable.auto.offset.store".into(), value.into());
+        match (config.validate(), refused) {
+            (Err(e), true) => assert!(
+                e.to_string().contains("enable.auto.offset.store"),
+                "{value}: refused for the wrong reason: {e}"
+            ),
+            (Ok(()), false) => {}
+            (Ok(()), true) => panic!("{value}: librdkafka reads it as true, and it passed"),
+            (Err(e), false) => {
+                panic!("{value}: librdkafka reads it as false, and it was refused: {e}")
+            }
+        }
+    }
+}
+
+/// The shared librdkafka profile under `DFE_CONFIG_DIR` is a layer of the
+/// consumer options as much as `source.librdkafka_options` is.
+#[test]
+fn config_validation_catches_offset_store_in_the_shared_profile() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("shared")).unwrap();
+    fs::write(
+        dir.path().join("shared/librdkafka.yaml"),
+        "consumer:\n  production:\n    enable.auto.offset.store: true\n",
+    )
+    .unwrap();
+
+    let validated = with_vars(&[("DFE_CONFIG_DIR", dir.path().to_str())], || {
+        full_config(None).validate()
+    });
+    let err = validated.expect_err("the shared profile hands offset-storing to librdkafka");
     assert!(
         err.to_string().contains("enable.auto.offset.store"),
-        "validation rejected for the wrong reason: {err}"
+        "refused for the wrong reason: {err}"
     );
 }
 
-/// Setting it to `false` is what Vector does anyway, so it must stay legal.
+/// Each bridge leg takes unauthenticated pushes, so only loopback may bind it,
+/// and only on a direct end of the pipeline.
 #[test]
-fn config_validation_allows_offset_store_pinned_off() {
-    let mut config = full_config(None);
-    config
-        .source
-        .librdkafka_options
-        .insert("enable.auto.offset.store".into(), "false".into());
-    config
-        .validate()
-        .expect("pinning offset-store off matches what Vector already sets");
+fn config_validation_keeps_the_bridge_legs_on_loopback() {
+    for (direct_in, direct_out, to_vector, from_vector, refused) in [
+        (true, true, "127.0.0.1:6100", "127.0.0.1:6101", None),
+        (true, true, "[::1]:6100", "[::1]:6101", None),
+        (
+            true,
+            true,
+            "0.0.0.0:6100",
+            "127.0.0.1:6101",
+            Some("bridge.to_vector"),
+        ),
+        (
+            true,
+            true,
+            "127.0.0.1:6100",
+            "10.0.0.5:6101",
+            Some("bridge.from_vector"),
+        ),
+        (
+            true,
+            false,
+            "[::]:6100",
+            "127.0.0.1:6101",
+            Some("bridge.to_vector"),
+        ),
+        (
+            false,
+            true,
+            "127.0.0.1:6100",
+            "0.0.0.0:6101",
+            Some("bridge.from_vector"),
+        ),
+        (false, true, "0.0.0.0:6100", "127.0.0.1:6101", None),
+        (false, false, "0.0.0.0:6100", "0.0.0.0:6101", None),
+    ] {
+        let mut config = full_config(None);
+        if direct_in {
+            config.source.transport = Transport::Direct;
+            config.source.listen = "0.0.0.0:6000".into();
+        }
+        if direct_out {
+            config.sink.transport = Transport::Direct;
+            config.sink.endpoint = "http://dfe-loader:6000".into();
+        }
+        config.bridge.to_vector = to_vector.into();
+        config.bridge.from_vector = from_vector.into();
+        let case = format!("in={direct_in} out={direct_out} {to_vector} {from_vector}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => assert!(
+                e.to_string().contains(field) && e.to_string().contains("loopback"),
+                "{case}: refused for the wrong reason: {e}"
+            ),
+            (Ok(()), Some(field)) => panic!("{case}: {field} binds off loopback, and it passed"),
+            (Err(e), None) => panic!("{case}: refused: {e}"),
+        }
+    }
+}
+
+/// On the direct transport Vector's sink batching sits inside the bridge's
+/// nested hold deadlines, which leave it one second, and each push must fit
+/// what the return listener decodes.
+#[test]
+fn config_validation_bounds_the_direct_sink_batch() {
+    for (direct_out, timeout_secs, max_bytes, refused) in [
+        (true, 1, None, None),
+        (true, 1, Some(16 * 1024 * 1024), None),
+        (true, 2, None, Some("sink.batch.timeout_secs")),
+        (
+            true,
+            1,
+            Some(16 * 1024 * 1024 + 1),
+            Some("sink.batch.max_bytes"),
+        ),
+        (false, 5, Some(64 * 1024 * 1024), None),
+    ] {
+        let mut config = full_config(None);
+        if direct_out {
+            config.sink.transport = Transport::Direct;
+            config.sink.endpoint = "http://dfe-loader:6000".into();
+        }
+        config.sink.batch.timeout_secs = timeout_secs;
+        config.sink.batch.max_bytes = max_bytes;
+        let case = format!("direct={direct_out} timeout={timeout_secs} max_bytes={max_bytes:?}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => {
+                assert!(
+                    e.to_string().contains(field),
+                    "{case}: refused for the wrong reason: {e}"
+                );
+            }
+            (Ok(()), Some(field)) => panic!("{case}: {field} passed"),
+            (Err(e), None) => panic!("{case}: refused: {e}"),
+        }
+    }
 }
 
 #[test]
@@ -1272,6 +1401,7 @@ fn config_with_all_fields_populated_validates() {
             enabled: true,
             poll_interval_secs: 15,
         },
+        dlq: DeadLetterConfig::default(),
     };
     config
         .validate()

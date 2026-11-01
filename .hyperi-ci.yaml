@@ -34,6 +34,10 @@ test:
     # installs once per process, so under cargo test only the first test to
     # run gets a live registry. Fail rather than silently degrade to it.
     nextest: true
+  # A release runs the full tier: the Vector validator cases and the opt-in
+  # Kafka pipelines. tests/TESTING.md says which tests are which.
+  full:
+    required_for_release: true
 
 # Building
 build:
@@ -42,6 +46,9 @@ build:
     - native
   rust:
     glibc_max: "2.41"
+    # Any C library a release links comes from hyperi-ci's static prefix, so
+    # the image installs no C library packages.
+    static_libs: true
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu

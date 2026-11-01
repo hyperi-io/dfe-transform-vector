@@ -21,7 +21,7 @@ use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
 use crate::metrics_fixture::metrics_manager;
 
 // Only the metrics helper, not the whole of `tests/common` — the smoke
-// binary is meant to link no Kafka or testcontainers machinery.
+// binary is meant to link no Kafka or broker-container machinery.
 #[path = "common/metrics_fixture.rs"]
 mod metrics_fixture;
 

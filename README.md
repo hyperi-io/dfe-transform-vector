@@ -137,7 +137,9 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 **Hot-reloaded (takes effect via SIGHUP to Vector):**
 
 - Transform YAML file contents (modified/added/removed in watched directory)
-- `transforms.dir` / `transforms.files` path changes
+- `transforms.dir` / `transforms.files` path changes, picked up from an edit to the main config file
+
+The watcher polls the main config file as well as the transform files, so a change listed below is logged as needing a restart when the file changes.
 
 **Requires pod restart:**
 
@@ -149,7 +151,7 @@ Key environment variable overrides (prefix `DFE_TRANSFORM_`):
 - `metrics.*` -- the ops HTTP server is bound at startup
 - `logging.*` -- tracing subscriber configured at startup
 
-A transform change is re-assembled and validated first, including that every enrichment table file it names can be read: `vector validate --no-environment` never opens those files. Vector then applies the change, or refuses it and keeps the config it was running, and the SIGHUP succeeds either way. So the supervisor reads the outcome from Vector's `vector_reloaded_total` and `vector_component_errors_total{error_code="reload"}`, counts it in `transform_vector_config_reloads_total` as `success`, `error` or `unconfirmed`, and on a refusal puts the assembled config back to what Vector runs.
+A transform change is re-assembled and validated first, including that every enrichment table file it names can be read: `vector validate --no-environment` never opens those files. Vector then applies the change, or refuses it and keeps the config it was running, and the SIGHUP succeeds either way. So the supervisor reads the outcome from Vector's `vector_reloaded_total` and `vector_component_errors_total{error_code="reload"}`, counts it in `transform_vector_config_reloads_total` as `success`, `error` or `unconfirmed`, and on a refusal puts the assembled config back to what Vector runs. A failed reload is tried again on the same files one poll interval later, the wait doubling to five minutes, until it succeeds or the files change.
 
 ## Endpoints
 
@@ -234,8 +236,8 @@ for five minutes on each arch. That covers the supervisor binary and nothing
 else -- Vector's own per-record work happens in the binary the image downloads,
 which this repo does not compile.
 
-The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
-its own broker container. It grades the filebeat corpus against elastic's
+The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it runs
+on the test run's own broker container. It grades the filebeat corpus against elastic's
 golden events, and both live in dfe-transform-vrl, so it skips with a message
 unless that repo is checked out beside this one or `DFE_TRANSFORM_VRL_DIR`
 points at it.

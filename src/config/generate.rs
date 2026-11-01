@@ -34,7 +34,8 @@ type Mapping = Map<String, Value>;
 
 use super::kafka_defaults;
 use super::loader::{
-    BridgeConfig, BufferConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig, VectorConfig,
+    BatchConfig, BridgeConfig, BufferConfig, SaslConfig, SinkConfig, SourceConfig, TlsConfig,
+    VectorConfig,
 };
 use super::secrets::{SecretBackend, SecretNames, Side};
 
@@ -59,6 +60,11 @@ const MESSAGE_MAX_BYTES_KEY: &str = "message.max.bytes";
 
 /// Room left under `message.max.bytes` for the key, headers and record framing.
 const RECORD_FRAMING_BYTES: u64 = 128;
+
+/// The direct sink's batch byte ceiling where `sink.batch.max_bytes` sets none:
+/// half the 16 MiB the return listener decodes, so a push of many records still
+/// fits once encoded.
+pub const DIRECT_BATCH_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Generate Vector global config YAML (timezone, data_dir, API, secret backends).
 ///
@@ -312,6 +318,13 @@ fn direct_sink_component(
     // validate` runs, and its health is the supervisor's readiness.
     component.insert(key("healthcheck"), enabled_block(false));
     component.insert(key("buffer"), build_buffer_block(&sink.buffer));
+    component.insert(
+        key("batch"),
+        build_batch_block(
+            &sink.batch,
+            Some(sink.batch.max_bytes.unwrap_or(DIRECT_BATCH_MAX_BYTES)),
+        ),
+    );
 
     component
 }
@@ -355,19 +368,10 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
     );
 
     // Vector-level batch
-    let mut batch = Mapping::new();
-    batch.insert(
-        key("max_events"),
-        Value::Number(sink.batch.max_events.into()),
+    component.insert(
+        key("batch"),
+        build_batch_block(&sink.batch, sink.batch.max_bytes),
     );
-    batch.insert(
-        key("timeout_secs"),
-        Value::Number(sink.batch.timeout_secs.into()),
-    );
-    if let Some(max_bytes) = sink.batch.max_bytes {
-        batch.insert(key("max_bytes"), Value::Number(max_bytes.into()));
-    }
-    component.insert(key("batch"), Value::Object(batch));
 
     // SASL
     if sink.sasl.enabled {
@@ -387,6 +391,20 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
     component.insert(key("librdkafka_options"), Value::Object(rdkafka));
 
     component
+}
+
+/// A sink's Vector-level `batch` block, with `max_bytes` written when given.
+fn build_batch_block(batch: &BatchConfig, max_bytes: Option<u64>) -> Value {
+    let mut block = Mapping::new();
+    block.insert(key("max_events"), Value::Number(batch.max_events.into()));
+    block.insert(
+        key("timeout_secs"),
+        Value::Number(batch.timeout_secs.into()),
+    );
+    if let Some(max_bytes) = max_bytes {
+        block.insert(key("max_bytes"), Value::Number(max_bytes.into()));
+    }
+    Value::Object(block)
 }
 
 /// A component's wired `inputs` list.
@@ -501,17 +519,26 @@ const SERVICE_PRODUCER_OVERRIDES: &[(&str, &str)] = &[
     ("enable.idempotence", "true"),
 ];
 
-fn build_source_librdkafka(source: &SourceConfig) -> Mapping {
+/// The Kafka source's librdkafka options from every layer: the baseline
+/// profile, the service overrides, then the source's `librdkafka_options`.
+///
+/// The security options written after these are derived from `source.sasl`
+/// and `source.tls`, which [`crate::config::Config::validate`] keeps out of
+/// `librdkafka_options`.
+#[must_use]
+pub fn source_librdkafka_layers(source: &SourceConfig) -> HashMap<String, String> {
     let base = kafka_defaults::consumer_profile("production");
     let user_overrides: HashMap<String, String> = source
         .librdkafka_options
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let merged = kafka_defaults::merge_layers(&base, SERVICE_CONSUMER_OVERRIDES, &user_overrides);
+    kafka_defaults::merge_layers(&base, SERVICE_CONSUMER_OVERRIDES, &user_overrides)
+}
 
+fn build_source_librdkafka(source: &SourceConfig) -> Mapping {
     let mut m = Mapping::new();
-    for (k, v) in &merged {
+    for (k, v) in &source_librdkafka_layers(source) {
         m.insert(key(k), val(v));
     }
     insert_security_options(&mut m, &source.sasl, &source.tls);
@@ -1122,6 +1149,41 @@ mod tests {
         };
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
         assert!(yaml.get("transforms").is_none());
+    }
+
+    /// `sink.batch` tunes the direct sink as it tunes the Kafka one, and an
+    /// unset byte ceiling still keeps each push well under what the return
+    /// listener decodes.
+    #[test]
+    fn the_direct_sink_batches_as_sink_batch_says() {
+        let batch_of = |batch: BatchConfig| {
+            let sink = SinkConfig {
+                transport: crate::config::Transport::Direct,
+                batch,
+                ..Default::default()
+            };
+            generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true)
+                .get("sinks")
+                .and_then(|s| s.get(SINK_LABEL))
+                .and_then(|s| s.get("batch"))
+                .cloned()
+        };
+        assert_eq!(
+            batch_of(BatchConfig {
+                max_events: 250,
+                max_bytes: Some(1_048_576),
+                timeout_secs: 1,
+            }),
+            Some(serde_json::json!({"max_events": 250, "max_bytes": 1_048_576, "timeout_secs": 1}))
+        );
+        assert_eq!(
+            batch_of(BatchConfig::default()),
+            Some(serde_json::json!({
+                "max_events": 10_000,
+                "max_bytes": DIRECT_BATCH_MAX_BYTES,
+                "timeout_secs": 1
+            }))
+        );
     }
 
     /// The direct sink dials the supervisor's own bridge, which is bound only

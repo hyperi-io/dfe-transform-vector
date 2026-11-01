@@ -8,20 +8,23 @@
 
 //! Hot-reload support for transform config changes.
 //!
-//! Polls transform files and big-dial config at a configurable interval.
+//! Polls the main config file and every transform file at a configurable
+//! interval.
 //! When changes are detected, classifies them as safe (transforms only)
 //! or unsafe (source/sink changes), then triggers the appropriate reload.
 //!
 //! Uses polling instead of inotify because S3-backed mounts (s3fs, goofys,
 //! Mountpoint for S3) do not generate filesystem notification events.
 //!
+//! A change is assembled and validated beside the directory Vector reads, and
+//! swapped in only once it passes. See [`super::staging`].
+//!
 //! Vector refuses a reload it cannot apply and carries on with the config it
 //! was running, so the SIGHUP succeeding says nothing about the outcome. The
 //! outcome is read from Vector's own reload counters, and a refused reload
-//! puts the assembled directory back to what Vector is running.
+//! swaps back the directory Vector is running.
 
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -30,10 +33,11 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use scalo::logger::security;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use super::assembler;
-use super::loader::Config;
+use super::loader::{Config, TransformConfig};
+use super::staging::{Published, Staged};
 use super::validate::vector_validate;
 use crate::metrics::scrape::{ReloadCounts, fetch_exposition};
 use crate::vector::lifecycle::{Lifecycle, State};
@@ -90,12 +94,19 @@ struct FileSnapshot {
 }
 
 impl FileSnapshot {
-    /// Take a snapshot of modification times for all relevant files.
-    fn capture(config: &Config) -> Self {
+    /// Take a snapshot of modification times for the main config files and
+    /// every transform file.
+    fn capture(transforms: &TransformConfig, main: &[PathBuf]) -> Self {
         let mut mtimes = HashMap::new();
 
+        for path in main {
+            if let Ok(mtime) = path.metadata().and_then(|meta| meta.modified()) {
+                mtimes.insert(path.clone(), mtime);
+            }
+        }
+
         // Snapshot transform files
-        if let Some(dir) = &config.transforms.dir {
+        if let Some(dir) = &transforms.dir {
             let dir_path = Path::new(dir);
             if dir_path.is_dir()
                 && let Ok(entries) = std::fs::read_dir(dir_path)
@@ -112,7 +123,7 @@ impl FileSnapshot {
             }
         }
 
-        if let Some(files) = &config.transforms.files {
+        if let Some(files) = &transforms.files {
             for file in files {
                 let path = PathBuf::from(file);
                 if let Ok(meta) = path.metadata()
@@ -132,6 +143,15 @@ impl FileSnapshot {
     }
 }
 
+/// The main config files a reload re-reads: `config_path`, or the
+/// `config.yaml` and `config.yml` [`Config::load`] looks for without one.
+fn main_config_files(config_path: Option<&str>) -> Vec<PathBuf> {
+    config_path.map_or_else(
+        || vec![PathBuf::from("config.yaml"), PathBuf::from("config.yml")],
+        |path| vec![PathBuf::from(path)],
+    )
+}
+
 /// Reload trigger — either from the file watcher or a manual SIGHUP.
 #[derive(Debug)]
 pub enum ReloadTrigger {
@@ -139,6 +159,8 @@ pub enum ReloadTrigger {
     FileChange,
     /// Manual SIGHUP received.
     Manual,
+    /// Files a reload failed on are due to be tried again.
+    Retry,
 }
 
 /// Send SIGHUP to Vector by PID for config reload.
@@ -224,73 +246,13 @@ pub async fn await_vector_reload(
     }
 }
 
-/// The assembled config directory as Vector last loaded it, file by file.
-///
-/// Re-assembling the previous config cannot put it back: that reads the
-/// transform files as they are now, which is the change being undone.
-#[derive(Debug)]
-struct Assembled {
-    /// Relative path, contents (`None` for a directory) and mode, parents first.
-    entries: Vec<(PathBuf, Option<Vec<u8>>, u32)>,
-}
-
-impl Assembled {
-    /// Read every file and directory under `dir`.
-    fn capture(dir: &Path) -> std::io::Result<Self> {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut entries = Vec::new();
-        let mut pending = vec![PathBuf::new()];
-        while let Some(rel) = pending.pop() {
-            for entry in std::fs::read_dir(dir.join(&rel))? {
-                let entry = entry?;
-                let path = rel.join(entry.file_name());
-                let meta = entry.metadata()?;
-                let mode = meta.permissions().mode();
-                if meta.is_dir() {
-                    entries.push((path.clone(), None, mode));
-                    pending.push(path);
-                } else {
-                    entries.push((path, Some(std::fs::read(entry.path())?), mode));
-                }
-            }
-        }
-        Ok(Self { entries })
-    }
-
-    /// Replace `dir` with the captured files, modes included -- the credentials
-    /// under `.secrets` are owner-only.
-    fn restore(&self, dir: &Path) -> std::io::Result<()> {
-        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-
-        if dir.exists() {
-            std::fs::remove_dir_all(dir)?;
-        }
-        std::fs::create_dir_all(dir)?;
-        for (rel, contents, mode) in &self.entries {
-            let path = dir.join(rel);
-            match contents {
-                None => std::fs::DirBuilder::new().mode(*mode).create(&path)?,
-                Some(bytes) => std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(*mode)
-                    .open(&path)?
-                    .write_all(bytes)?,
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Put the config directory back to what Vector is running: the capture when
-/// there is one, else `config` assembled afresh.
-fn restore_running(running: Option<&Assembled>, config: &Config, config_dir: &Path) {
-    let restored = match running {
-        Some(assembled) => assembled.restore(config_dir).map_err(crate::Error::from),
-        None => assembler::assemble(config, config_dir).map(|_| ()),
-    };
-    if let Err(e) = restored {
+/// Swap back the config directory Vector is running.
+async fn roll_back(published: Published, config_dir: &Path) {
+    if let Err(e) = off_runtime("putting back the running config", move || {
+        published.roll_back()
+    })
+    .await
+    {
         error!(
             error = %e,
             dir = %config_dir.display(),
@@ -299,91 +261,197 @@ fn restore_running(running: Option<&Assembled>, config: &Config, config_dir: &Pa
     }
 }
 
-/// Run the config reload loop.
+/// Drop a staged change on the blocking pool.
+async fn discard(staged: Staged) {
+    if let Err(e) = off_runtime("dropping the staged change", move || {
+        staged.discard();
+        Ok(())
+    })
+    .await
+    {
+        error!(error = %e, "could not drop the staged change");
+    }
+}
+
+/// Keep a published change, dropping the config it replaced, on the blocking
+/// pool.
+async fn commit(published: Published) {
+    if let Err(e) = off_runtime("dropping the replaced config", move || {
+        published.commit();
+        Ok(())
+    })
+    .await
+    {
+        error!(error = %e, "could not drop the replaced config");
+    }
+}
+
+/// Run filesystem work on the blocking pool: on an S3-backed mount one read,
+/// walk or rename can take seconds, which on a runtime worker stalls the
+/// bridge, the supervisor and shutdown with it.
+async fn off_runtime<T: Send + 'static>(
+    what: &'static str,
+    work: impl FnOnce() -> crate::Result<T> + Send + 'static,
+) -> crate::Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| crate::Error::Config(format!("{what} did not finish: {e}")))?
+}
+
+/// [`FileSnapshot::capture`] on the blocking pool, or `None` when it did not
+/// finish.
+async fn snapshot(transforms: &TransformConfig, main: &[PathBuf]) -> Option<FileSnapshot> {
+    let (transforms, main) = (transforms.clone(), main.to_vec());
+    match off_runtime("the file snapshot", move || {
+        Ok(FileSnapshot::capture(&transforms, &main))
+    })
+    .await
+    {
+        Ok(files) => Some(files),
+        Err(e) => {
+            error!(error = %e, "could not read the watched files");
+            None
+        }
+    }
+}
+
+/// The longest the watcher waits before retrying files a reload failed on.
+const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(300);
+
+/// What one reload attempt came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    /// The directory Vector reads holds the change.
+    Done,
+    /// The change needs a pod restart, which no retry gives it.
+    NeedsRestart,
+    /// The attempt failed, and the same files may reload once the cause clears.
+    Failed,
+}
+
+/// A retry pending for files a reload failed on.
+#[derive(Debug, Clone, Copy)]
+struct Retry {
+    /// Attempts on these files that failed in a row.
+    failures: u32,
+    /// When the next one is due.
+    at: Instant,
+}
+
+/// Change detection for the reload loop: the files last seen, and a retry for
+/// an attempt that failed on them.
 ///
-/// Polls for file changes at the configured interval and listens for
-/// manual reload triggers via the channel. When changes are detected:
-///
-/// 1. Re-load config (if big-dial config changed)
-/// 2. Classify the change (safe vs unsafe)
-/// 3. If safe: re-assemble, re-validate, write config dir, SIGHUP Vector, and
-///    read Vector's reload counters for whether it applied the change
-/// 4. If unsafe: log warning (full restart requires pod recreation)
-///
-/// A reload that fails validation, or that Vector refuses, puts the config
-/// directory back to what Vector is running.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_reload_loop(
-    config: Config,
+/// Seeing a change and applying it are kept apart, so a failure that clears
+/// -- a file not yet mounted, a Vector restarting -- is retried rather than
+/// waiting for the next edit.
+#[derive(Debug)]
+struct Watch {
+    seen: FileSnapshot,
+    retry: Option<Retry>,
+    base: Duration,
+}
+
+impl Watch {
+    /// Watch from `seen`, retrying a failure after `base`, doubling to
+    /// [`MAX_RETRY_BACKOFF`].
+    fn new(seen: FileSnapshot, base: Duration) -> Self {
+        Self {
+            seen,
+            retry: None,
+            base,
+        }
+    }
+
+    /// The trigger a poll that found `files` at `now` fires, if any.
+    fn poll(&mut self, files: FileSnapshot, now: Instant) -> Option<ReloadTrigger> {
+        if self.seen.has_changed(&files) {
+            self.seen = files;
+            return Some(ReloadTrigger::FileChange);
+        }
+        self.retry
+            .filter(|retry| now >= retry.at)
+            .map(|_| ReloadTrigger::Retry)
+    }
+
+    /// Record how an attempt that ended at `now` came out.
+    fn record(&mut self, attempt: Attempt, now: Instant) {
+        self.retry = match attempt {
+            Attempt::Done | Attempt::NeedsRestart => None,
+            Attempt::Failed => {
+                let failures = self.retry.map_or(1, |r| r.failures.saturating_add(1));
+                let doubled = self
+                    .base
+                    .saturating_mul(2_u32.saturating_pow(failures.saturating_sub(1)));
+                Some(Retry {
+                    failures,
+                    at: now + doubled.min(MAX_RETRY_BACKOFF.max(self.base)),
+                })
+            }
+        };
+    }
+
+    /// Take `files`, captured under the config just applied, as seen.
+    fn rebase(&mut self, files: FileSnapshot) {
+        self.seen = files;
+    }
+}
+
+/// What a reload attempt needs from the process around it.
+struct Reloader {
     config_path: Option<String>,
     config_dir: PathBuf,
     lifecycle: Lifecycle,
     metrics: Arc<crate::metrics::WrapperMetrics>,
     vector_pid: Arc<Mutex<Option<u32>>>,
-    mut reload_rx: mpsc::Receiver<ReloadTrigger>,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
-) {
-    let poll_interval = Duration::from_secs(config.reload.poll_interval_secs);
-    let mut current_config = config;
-    let mut snapshot = FileSnapshot::capture(&current_config);
-    let mut running = Assembled::capture(&config_dir).ok();
+}
 
-    info!(
-        poll_interval_secs = current_config.reload.poll_interval_secs,
-        "config reload loop started"
-    );
+impl Reloader {
+    /// Re-load the config and, for a transform change, assemble, validate,
+    /// publish and signal it, from `current`, the config Vector runs.
+    ///
+    /// Returns the config the directory now holds when the attempt is
+    /// [`Attempt::Done`].
+    async fn attempt(&self, current: &Config) -> (Attempt, Option<Config>) {
+        let metrics = &self.metrics;
 
-    loop {
-        // Wait for either: poll interval, manual trigger, or shutdown
-        let trigger = tokio::select! {
-            () = tokio::time::sleep(poll_interval) => {
-                // Check for file changes
-                let new_snapshot = FileSnapshot::capture(&current_config);
-                if !snapshot.has_changed(&new_snapshot) {
-                    continue;
-                }
-                snapshot = new_snapshot;
-                ReloadTrigger::FileChange
-            }
-            Some(trigger) = reload_rx.recv() => trigger,
-            _ = shutdown.changed() => {
-                info!("reload loop shutting down");
-                return;
-            }
-        };
-
-        info!(trigger = ?trigger, "reload triggered");
-
-        // Re-load config from file
-        let new_config = match Config::load(config_path.as_deref()) {
-            Ok(c) => c,
+        // Re-load config from file, and validate it: both read files.
+        let path = self.config_path.clone();
+        let loaded = off_runtime("re-loading the config", move || {
+            Config::load(path.as_deref()).map(|config| {
+                let valid = config.validate();
+                (config, valid)
+            })
+        })
+        .await;
+        let (new_config, valid) = match loaded {
+            Ok(loaded) => loaded,
             Err(e) => {
                 error!(error = %e, "failed to re-load config during reload");
                 metrics.record_config_reload("error");
                 metrics.record_config_validation_error();
-                continue;
+                return (Attempt::Failed, None);
             }
         };
 
         // Validate new config
-        if let Err(e) = new_config.validate() {
+        if let Err(e) = valid {
             error!(error = %e, "new config validation failed during reload");
             metrics.record_config_reload("error");
             metrics.record_config_validation_error();
             security::input_validation_failure("config_reload", &e.to_string(), None);
-            continue;
+            return (Attempt::Failed, None);
         }
 
         // Transform files are read at assembly, not held in `Config`, so an
         // unchanged config still re-assembles: the file edit is the change.
-        match classify_change(&current_config, &new_config) {
+        match classify_change(current, &new_config) {
             ChangeKind::Unsafe => {
                 warn!(
-                    "non-transform config changed — requires pod restart. \
+                    "non-transform config changed -- requires pod restart. \
                      Only transform YAML file changes can be hot-reloaded."
                 );
                 metrics.record_config_reload("rejected");
-                continue;
+                return (Attempt::NeedsRestart, None);
             }
             change @ (ChangeKind::None | ChangeKind::TransformsOnly) => {
                 info!(
@@ -397,29 +465,56 @@ pub async fn run_reload_loop(
         // `Running`. A config change landing mid crash-backoff must not flip
         // /readyz to 200 for a subprocess that is not there. Every exit path
         // below hands the state back through `end_reload`.
-        let owns_reloading = lifecycle.set_if(State::Running, State::Reloading);
-
-        // Re-assemble config directory
-        if let Err(e) = assembler::assemble(&new_config, &config_dir) {
-            error!(error = %e, "failed to re-assemble config during reload");
-            metrics.record_config_reload("error");
-            restore_running(running.as_ref(), &current_config, &config_dir);
-            end_reload(&lifecycle, owns_reloading);
-            continue;
+        let owns_reloading = self.lifecycle.set_if(State::Running, State::Reloading);
+        let attempt = self.publish(current, &new_config).await;
+        end_reload(&self.lifecycle, owns_reloading);
+        match attempt {
+            Attempt::Done => (Attempt::Done, Some(new_config)),
+            Attempt::NeedsRestart | Attempt::Failed => (attempt, None),
         }
+    }
 
-        // Re-validate with vector validate
-        if let Err(e) = vector_validate(&new_config.vector, &config_dir).await {
+    /// Assemble, validate and publish `new_config`, then signal Vector and
+    /// read how it answered.
+    async fn publish(&self, current: &Config, new_config: &Config) -> Attempt {
+        let metrics = &self.metrics;
+        let config_dir = &self.config_dir;
+
+        let (assembling, into) = (new_config.clone(), config_dir.clone());
+        let assembled = off_runtime("assembling the change", move || {
+            Staged::assemble(&assembling, &into)
+        })
+        .await;
+        let staged = match assembled {
+            Ok(staged) => staged,
+            Err(e) => {
+                error!(error = %e, "failed to re-assemble config during reload");
+                metrics.record_config_reload("error");
+                return Attempt::Failed;
+            }
+        };
+
+        if let Err(e) = vector_validate(&new_config.vector, staged.dir()).await {
             error!(error = %e, "vector validate failed during reload");
             metrics.record_config_reload("error");
             metrics.record_config_validation_error();
-            restore_running(running.as_ref(), &current_config, &config_dir);
-            end_reload(&lifecycle, owns_reloading);
-            continue;
+            discard(staged).await;
+            return Attempt::Failed;
         }
 
-        // Send SIGHUP to Vector to pick up the new config
-        let pid = vector_pid
+        let published = match off_runtime("publishing the change", move || staged.publish()).await {
+            Ok(published) => published,
+            Err(e) => {
+                error!(error = %e, "failed to publish the validated config during reload");
+                metrics.record_config_reload("error");
+                return Attempt::Failed;
+            }
+        };
+
+        // A Vector started from here on reads the new config, so it stays
+        // published whether or not this one can be signalled.
+        let pid = self
+            .vector_pid
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
@@ -427,16 +522,18 @@ pub async fn run_reload_loop(
         let Some(pid) = pid else {
             warn!("Vector process not running, skipping SIGHUP");
             metrics.record_config_reload("error");
-            end_reload(&lifecycle, owns_reloading);
-            continue;
+            commit(published).await;
+            return Attempt::Done;
         };
-        let exporter = &current_config.metrics.vector_metrics_address;
+        let exporter = &current.metrics.vector_metrics_address;
         let before = read_reload_counts(exporter).await;
         if let Err(e) = send_sighup(pid) {
+            // Published, so a restarted Vector reads it, but this one has not
+            // been told: the retry signals it again.
             error!(error = %e, "failed to send SIGHUP to Vector");
             metrics.record_config_reload("error");
-            end_reload(&lifecycle, owns_reloading);
-            continue;
+            commit(published).await;
+            return Attempt::Failed;
         }
         let outcome = match before {
             Ok(before) => {
@@ -468,9 +565,8 @@ pub async fn run_reload_loop(
                      putting that config back"
                 );
                 metrics.record_config_reload("error");
-                restore_running(running.as_ref(), &current_config, &config_dir);
-                end_reload(&lifecycle, owns_reloading);
-                continue;
+                roll_back(published, config_dir).await;
+                return Attempt::Failed;
             }
             VectorReload::Unconfirmed(reason) => {
                 warn!(
@@ -483,10 +579,87 @@ pub async fn run_reload_loop(
         }
 
         // Vector runs the new config, or may: the directory now holds it.
-        current_config = new_config;
-        snapshot = FileSnapshot::capture(&current_config);
-        running = Assembled::capture(&config_dir).ok();
-        end_reload(&lifecycle, owns_reloading);
+        commit(published).await;
+        Attempt::Done
+    }
+}
+
+/// Run the config reload loop.
+///
+/// Polls for file changes at the configured interval and listens for
+/// manual reload triggers via the channel. When changes are detected:
+///
+/// 1. Re-load config (if big-dial config changed)
+/// 2. Classify the change (safe vs unsafe)
+/// 3. If safe: assemble and validate beside the config dir, swap it in, SIGHUP
+///    Vector, and read Vector's reload counters for whether it applied the
+///    change
+/// 4. If unsafe: log warning (full restart requires pod recreation)
+///
+/// A change that fails assembly or validation never reaches the config
+/// directory, and one Vector refuses is swapped back out. A failed attempt is
+/// retried on the same files after one poll interval, doubling to five
+/// minutes, until it succeeds or the files change again.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_reload_loop(
+    config: Config,
+    config_path: Option<String>,
+    config_dir: PathBuf,
+    lifecycle: Lifecycle,
+    metrics: Arc<crate::metrics::WrapperMetrics>,
+    vector_pid: Arc<Mutex<Option<u32>>>,
+    mut reload_rx: mpsc::Receiver<ReloadTrigger>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let poll_interval = Duration::from_secs(config.reload.poll_interval_secs);
+    let main = main_config_files(config_path.as_deref());
+    let mut current_config = config;
+    let seen = snapshot(&current_config.transforms, &main)
+        .await
+        .unwrap_or_else(|| FileSnapshot::capture(&TransformConfig::default(), &[]));
+    let mut watch = Watch::new(seen, poll_interval);
+    let reloader = Reloader {
+        config_path,
+        config_dir,
+        lifecycle,
+        metrics,
+        vector_pid,
+    };
+
+    info!(
+        poll_interval_secs = current_config.reload.poll_interval_secs,
+        "config reload loop started"
+    );
+
+    loop {
+        // Wait for either: poll interval, manual trigger, or shutdown
+        let trigger = tokio::select! {
+            () = tokio::time::sleep(poll_interval) => {
+                let Some(files) = snapshot(&current_config.transforms, &main).await else {
+                    continue;
+                };
+                match watch.poll(files, Instant::now()) {
+                    Some(trigger) => trigger,
+                    None => continue,
+                }
+            }
+            Some(trigger) = reload_rx.recv() => trigger,
+            _ = shutdown.changed() => {
+                info!("reload loop shutting down");
+                return;
+            }
+        };
+
+        info!(trigger = ?trigger, "reload triggered");
+
+        let (attempt, applied) = reloader.attempt(&current_config).await;
+        if let Some(applied) = applied {
+            current_config = applied;
+            if let Some(files) = snapshot(&current_config.transforms, &main).await {
+                watch.rebase(files);
+            }
+        }
+        watch.record(attempt, Instant::now());
     }
 }
 
@@ -607,8 +780,8 @@ mod tests {
     #[test]
     fn file_snapshot_detects_no_change() {
         let config = base_config();
-        let s1 = FileSnapshot::capture(&config);
-        let s2 = FileSnapshot::capture(&config);
+        let s1 = FileSnapshot::capture(&config.transforms, &[]);
+        let s2 = FileSnapshot::capture(&config.transforms, &[]);
         assert!(!s1.has_changed(&s2));
     }
 
@@ -618,13 +791,103 @@ mod tests {
         let mut config = base_config();
         config.transforms.dir = Some(dir.path().to_string_lossy().into_owned());
 
-        let s1 = FileSnapshot::capture(&config);
+        let s1 = FileSnapshot::capture(&config.transforms, &[]);
 
         // Add a file
         std::fs::write(dir.path().join("new.yaml"), "test").unwrap();
-        let s2 = FileSnapshot::capture(&config);
+        let s2 = FileSnapshot::capture(&config.transforms, &[]);
 
         assert!(s1.has_changed(&s2));
+    }
+
+    /// `transforms.dir` and `transforms.files` live in the main config file,
+    /// so an edit to it alone is a change to reload.
+    #[test]
+    fn file_snapshot_detects_a_main_config_edit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let main = dir.path().join("config.yaml");
+        std::fs::write(&main, "pipeline:\n  name: a\n").unwrap();
+        let config = base_config();
+
+        let before = FileSnapshot::capture(&config.transforms, std::slice::from_ref(&main));
+        let mtime = std::fs::metadata(&main).unwrap().modified().unwrap();
+        std::fs::write(&main, "pipeline:\n  name: b\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&main)
+            .unwrap()
+            .set_modified(mtime + Duration::from_secs(1))
+            .unwrap();
+        let after = FileSnapshot::capture(&config.transforms, std::slice::from_ref(&main));
+
+        assert!(before.has_changed(&after), "a main config edit went unseen");
+    }
+
+    fn snapshot_of(dir: &Path) -> FileSnapshot {
+        let mut config = base_config();
+        config.transforms.dir = Some(dir.to_string_lossy().into_owned());
+        FileSnapshot::capture(&config.transforms, &[])
+    }
+
+    /// A failure on unchanged files is retried after the poll interval, then
+    /// at double the wait each time to the cap; a change goes at once, and a
+    /// success or a change needing a restart stops the retries.
+    #[test]
+    fn a_failed_reload_is_retried_with_backoff_until_it_succeeds() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.yaml"), "a").unwrap();
+        let base = Duration::from_secs(30);
+        let start = Instant::now();
+        let mut watch = Watch::new(snapshot_of(dir.path()), base);
+        let at = |secs: u64| start + Duration::from_secs(secs);
+
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(30)).is_none(),
+            "nothing to do"
+        );
+
+        std::fs::write(dir.path().join("b.yaml"), "b").unwrap();
+        assert!(matches!(
+            watch.poll(snapshot_of(dir.path()), at(30)),
+            Some(ReloadTrigger::FileChange)
+        ));
+        watch.record(Attempt::Failed, at(30));
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(59)).is_none(),
+            "before the backoff"
+        );
+        assert!(matches!(
+            watch.poll(snapshot_of(dir.path()), at(60)),
+            Some(ReloadTrigger::Retry)
+        ));
+        watch.record(Attempt::Failed, at(60));
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(119)).is_none(),
+            "the wait doubles"
+        );
+        assert!(watch.poll(snapshot_of(dir.path()), at(120)).is_some());
+        for _ in 0..10 {
+            watch.record(Attempt::Failed, at(120));
+        }
+        assert!(watch.poll(snapshot_of(dir.path()), at(419)).is_none());
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(420)).is_some(),
+            "capped at five minutes"
+        );
+
+        watch.record(Attempt::Done, at(420));
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(10_000)).is_none(),
+            "a success stops it"
+        );
+
+        std::fs::write(dir.path().join("c.yaml"), "c").unwrap();
+        assert!(watch.poll(snapshot_of(dir.path()), at(10_000)).is_some());
+        watch.record(Attempt::NeedsRestart, at(10_000));
+        assert!(
+            watch.poll(snapshot_of(dir.path()), at(20_000)).is_none(),
+            "no retry gives a change the restart it needs"
+        );
     }
 
     /// Serve `bodies` in turn as Vector's exporter, one per connection, the
@@ -724,48 +987,6 @@ mod tests {
         assert!(
             matches!(&outcome, VectorReload::Unconfirmed(why) if why.contains(&dead)),
             "{outcome:?}"
-        );
-    }
-
-    #[test]
-    fn a_captured_directory_is_put_back_byte_for_byte_with_its_modes() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let root = dir.path().join("config");
-        let secrets = root.join(".secrets");
-        std::fs::create_dir_all(&secrets).unwrap();
-        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::write(root.join("50_000_parse.yaml"), "transforms: {}\n").unwrap();
-        std::fs::write(secrets.join("sink_sasl_password"), "p").unwrap();
-        std::fs::set_permissions(
-            secrets.join("sink_sasl_password"),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-
-        let captured = Assembled::capture(&root).unwrap();
-
-        std::fs::remove_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("50_000_edited.yaml"), "transforms: {x: 1}\n").unwrap();
-
-        captured.restore(&root).unwrap();
-
-        assert!(
-            !root.join("50_000_edited.yaml").exists(),
-            "the edit survived"
-        );
-        assert_eq!(
-            std::fs::read_to_string(root.join("50_000_parse.yaml")).unwrap(),
-            "transforms: {}\n"
-        );
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&secrets), 0o700);
-        assert_eq!(mode(&secrets.join("sink_sasl_password")), 0o600);
-        assert_eq!(
-            std::fs::read_to_string(secrets.join("sink_sasl_password")).unwrap(),
-            "p"
         );
     }
 }

@@ -21,12 +21,14 @@
 //! applies to every other metric.
 //!
 //! A component Vector drops stops being scraped, so its gauges are zeroed once
-//! they have gone unseen for `metrics.vector_metrics_expiry_ticks` ticks.
+//! they have gone unseen for `metrics.vector_metrics_expiry_ticks` ticks, and
+//! its counters forgotten after an hour. The merger tracks at most 50,000
+//! series.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use metrics::Label;
@@ -81,6 +83,15 @@ const MAX_EXPOSITION_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Ticks a merged gauge may go unseen before it is zeroed.
 pub const DEFAULT_EXPIRY_TICKS: u32 = 4;
+
+/// Ticks a merged counter may go unseen before the merger forgets it: on the
+/// default 15 s metrics interval an hour, far past any Vector restart, whose
+/// carried total the counter must keep.
+const COUNTER_EXPIRY_TICKS: u32 = 240;
+
+/// The most series the merger tracks at once. Vector's own exposition is a few
+/// thousand, so this bounds label churn rather than a working pipeline.
+const MAX_SERIES: usize = 50_000;
 
 /// Minimum gap between unreachable-exporter WARN lines.
 ///
@@ -205,6 +216,13 @@ impl Rebased {
         self.last = total;
         self.base + total
     }
+
+    /// The process counting this total was replaced: everything it counted
+    /// joins the base, and the next total starts from zero.
+    fn restart(&mut self) {
+        self.base += self.last;
+        self.last = 0.0;
+    }
 }
 
 /// [`Derived`] carried across Vector restarts, for the counters the app
@@ -223,6 +241,20 @@ pub struct LifetimeTotals {
 }
 
 impl LifetimeTotals {
+    /// Vector was restarted: the next totals are a new process's.
+    pub fn restarted(&mut self) {
+        for total in [
+            &mut self.received,
+            &mut self.sent,
+            &mut self.sink_received,
+            &mut self.sink_discarded,
+            &mut self.sink_errors,
+            &mut self.oversize,
+        ] {
+            total.restart();
+        }
+    }
+
     /// `derived`'s totals as counted since the pod started.
     pub fn carry(&mut self, derived: &Derived) -> Derived {
         Derived {
@@ -279,6 +311,11 @@ pub struct ExpositionMerger {
     /// Merged series by hash of name plus sorted labels.
     series: HashMap<u64, Tracked>,
     expiry_ticks: u32,
+    /// The ceiling on `series`; a series past it is not merged.
+    max_series: usize,
+    /// Whether the ceiling has turned a series away since the last time it
+    /// had room, so the warning logs once per episode.
+    at_ceiling: bool,
 }
 
 impl Default for ExpositionMerger {
@@ -295,6 +332,8 @@ impl ExpositionMerger {
             lines: Vec::new(),
             series: HashMap::new(),
             expiry_ticks,
+            max_series: MAX_SERIES,
+            at_ceiling: false,
         }
     }
 
@@ -380,6 +419,14 @@ impl ExpositionMerger {
         derived
     }
 
+    /// Vector was restarted: every counter's next total is a new process's,
+    /// even one that has already passed the old total.
+    pub fn restarted(&mut self) {
+        for tracked in self.series.values_mut() {
+            tracked.total.restart();
+        }
+    }
+
     /// Age every series by one tick with no exposition to match it, so a scrape
     /// that never lands expires its gauges the same way a dropped component does.
     pub fn age(&mut self) {
@@ -415,6 +462,9 @@ impl ExpositionMerger {
             return;
         }
 
+        if !self.has_room(name) {
+            return;
+        }
         let labels = to_labels(pairs);
         let handle = metrics::counter!(name.to_string(), labels.clone());
         let mut carried = Rebased::default();
@@ -434,6 +484,9 @@ impl ExpositionMerger {
             return;
         }
 
+        if !self.has_room(name) {
+            return;
+        }
         let labels = to_labels(pairs);
         let handle = metrics::gauge!(name.to_string(), labels.clone());
         handle.set(value);
@@ -444,6 +497,24 @@ impl ExpositionMerger {
             Handle::Gauge(handle),
             Rebased::default(),
         );
+    }
+
+    /// Whether a new series fits under the ceiling, warning once when the
+    /// ceiling first turns one away.
+    fn has_room(&mut self, name: &str) -> bool {
+        if self.series.len() < self.max_series {
+            self.at_ceiling = false;
+            return true;
+        }
+        if !self.at_ceiling {
+            self.at_ceiling = true;
+            warn!(
+                series = self.series.len(),
+                metric = name,
+                "Vector reports more series than the merger tracks; new ones are not merged"
+            );
+        }
+        false
     }
 
     fn track(
@@ -466,17 +537,19 @@ impl ExpositionMerger {
         );
     }
 
-    /// Drop every gauge unseen for `expiry_ticks`, zeroing it.
+    /// Drop every gauge unseen for `expiry_ticks`, zeroing it, and every
+    /// counter unseen for [`COUNTER_EXPIRY_TICKS`].
     ///
     /// Zeroed rather than unregistered: the facade hands out handles, not a
     /// registry, and a utilisation gauge frozen at its last value reads as a
-    /// component that is still busy. A counter is kept, flat, because a flat
-    /// counter already rates to zero and its carried total must outlast a
-    /// Vector restart longer than the expiry.
+    /// component that is still busy. A counter is kept far longer, flat,
+    /// because a flat counter already rates to zero and its carried total must
+    /// outlast a Vector restart. The exporter keeps both series either way.
     fn expire(&mut self) {
         let limit = self.expiry_ticks;
+        let counter_limit = COUNTER_EXPIRY_TICKS.max(limit);
         self.series.retain(|_, tracked| match &tracked.handle {
-            Handle::Counter(_) => true,
+            Handle::Counter(_) => tracked.unseen < counter_limit,
             Handle::Gauge(g) => {
                 if tracked.unseen < limit {
                     return true;
@@ -559,6 +632,11 @@ impl DeadLetterDrops {
             total: |d| d.sink_discarded,
             seen: 0.0,
         }
+    }
+
+    /// Vector was restarted: its next total is all new drops.
+    pub fn restarted(&mut self) {
+        self.seen = 0.0;
     }
 
     /// Count the drops since the last exposition, and return how many.
@@ -649,6 +727,10 @@ impl SinkProgress {
 ///
 /// `stalled` is set while the sink has records waiting and has delivered none
 /// for `stall_after`, and cleared when it delivers again -- see [`SinkProgress`].
+///
+/// `vector_pid` is the supervisor's record of the running Vector. A PID other
+/// than the last one scraped is a restarted Vector, whose totals start again
+/// from zero whether or not they have passed the old ones.
 pub fn spawn_vector_scrape_task(
     metrics: Arc<WrapperMetrics>,
     address: String,
@@ -656,6 +738,7 @@ pub fn spawn_vector_scrape_task(
     expiry_ticks: u32,
     stall_after: Duration,
     stalled: Arc<AtomicBool>,
+    vector_pid: Arc<Mutex<Option<u32>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
@@ -665,11 +748,35 @@ pub fn spawn_vector_scrape_task(
         let mut progress = SinkProgress::new(stall_after, Instant::now());
         let mut dead_letters = [DeadLetterDrops::too_large(), DeadLetterDrops::rejected()];
         let mut lifetime = LifetimeTotals::default();
+        let mut scraped_pid: Option<u32> = None;
+        let current_pid = || {
+            *vector_pid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
 
         loop {
             ticker.tick().await;
-            match fetch_exposition(&address).await {
+            let pid = current_pid();
+            let fetched = fetch_exposition(&address).await;
+            // A restart during the fetch leaves it unclear which process
+            // answered, so that exposition is skipped.
+            let fetched = match fetched {
+                Ok(_) if current_pid() != pid => {
+                    Err("Vector restarted during the scrape".to_string())
+                }
+                other => other,
+            };
+            if fetched.is_ok() && pid.is_some() && scraped_pid.is_some() && pid != scraped_pid {
+                merger.restarted();
+                lifetime.restarted();
+                for drops in &mut dead_letters {
+                    drops.restarted();
+                }
+            }
+            match fetched {
                 Ok(body) => {
+                    scraped_pid = pid.or(scraped_pid);
                     let derived = merger.merge(&body);
                     apply_derived(&metrics, &lifetime.carry(&derived));
                     for drops in &mut dead_letters {
@@ -1139,6 +1246,52 @@ vector_rtt_seconds_count 9
         );
     }
 
+    /// A counter Vector stops reporting, after a transform is renamed or a
+    /// topic retired, leaves the merger once it has outlasted any restart.
+    #[test]
+    fn a_counter_that_stops_being_reported_is_dropped_after_the_counter_expiry() {
+        let tracks = |m: &ExpositionMerger| {
+            m.series
+                .values()
+                .any(|t| t.name == "vector_component_sent_events_total")
+        };
+        let mut merger = ExpositionMerger::new(2);
+        merger.merge(
+            "# TYPE vector_component_sent_events_total counter\n\
+             vector_component_sent_events_total{component_id=\"old\"} 5\n",
+        );
+        for _ in 0..COUNTER_EXPIRY_TICKS - 1 {
+            merger.age();
+        }
+        assert!(
+            tracks(&merger),
+            "a counter must outlast a long Vector restart"
+        );
+        merger.age();
+        assert!(!tracks(&merger), "a counter unseen for good was kept");
+    }
+
+    /// Label churn cannot grow the merger past its series ceiling.
+    #[test]
+    fn the_merger_tracks_no_more_series_than_its_ceiling() {
+        use std::fmt::Write as _;
+
+        let mut merger = ExpositionMerger::new(2);
+        merger.max_series = 10;
+        let mut text = String::from("# TYPE vector_util gauge\n");
+        for i in 0..25 {
+            writeln!(text, "vector_util{{component_id=\"c{i}\"}} 1").unwrap();
+        }
+        merger.merge(&text);
+        assert_eq!(merger.series.len(), 10);
+        merger.merge(&text);
+        assert_eq!(
+            merger.series.len(),
+            10,
+            "the ceiling held on the next merge"
+        );
+    }
+
     #[test]
     fn a_series_seen_again_is_not_re_registered() {
         let mut merger = ExpositionMerger::default();
@@ -1206,6 +1359,49 @@ vector_rtt_seconds_count 9
             merged,
             Some(metrics_util::debugging::DebugValue::Counter(160)),
             "the merged counter held flat after the restart"
+        );
+    }
+
+    /// A restarted Vector can pass the old total before the next scrape, so no
+    /// decrease shows. The supervisor's restart signal rebases every count.
+    #[test]
+    fn a_restart_signal_rebases_a_count_that_never_fell() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let exposition = |n: u64| {
+            format!(
+                "# TYPE vector_component_sent_events_total counter\n\
+                 vector_component_sent_events_total{{component_id=\"dfe_sink\"}} {n}\n\
+                 # TYPE vector_component_discarded_events_total counter\n\
+                 vector_component_discarded_events_total{{component_id=\"dfe_sink\"}} {n}\n"
+            )
+        };
+        let mut merger = ExpositionMerger::new(4);
+        let mut lifetime = LifetimeTotals::default();
+        let mut drops = DeadLetterDrops::rejected();
+
+        let (published, dropped) = metrics::with_local_recorder(&recorder, || {
+            let before = merger.merge(&exposition(100));
+            let first = (lifetime.carry(&before).sent, drops.record(&before));
+            merger.restarted();
+            lifetime.restarted();
+            drops.restarted();
+            let after = merger.merge(&exposition(150));
+            let second = (lifetime.carry(&after).sent, drops.record(&after));
+            ([first.0, second.0], [first.1, second.1])
+        });
+        assert_eq!(published, [100.0, 250.0], "the app's own total");
+        assert_eq!(dropped, [100, 150], "each drop of the new Vector counted");
+        let merged = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(key, ..)| key.key().name() == "vector_component_sent_events_total")
+            .map(|(.., value)| value);
+        assert_eq!(
+            merged,
+            Some(metrics_util::debugging::DebugValue::Counter(250)),
+            "the merged counter"
         );
     }
 

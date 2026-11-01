@@ -48,9 +48,10 @@
 //!
 //! A record leaves without being delivered only when no resend could deliver
 //! it: one over the next stage's message-size ceiling, or one Vector refused for
-//! good (a sink it feeds rejected it, or it could not use the request). Its push
-//! is released dropped and counted in `pipeline_dead_letters_dropped_total`, so
-//! it is not resent forever.
+//! good (a sink it feeds rejected it, or it could not use the request). The
+//! first goes to the DLQ, and its push is answered once the DLQ holds it. The
+//! second, refused only once it is sent, is released dropped and counted in
+//! `pipeline_dead_letters_dropped_total`, so it is not resent forever.
 //!
 //! A leg whose pipeline fails stops the service, so the pod restarts rather
 //! than run on with a listener nobody reads.
@@ -80,6 +81,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use scalo::dlq::Dlq;
 use scalo::governor::UnifiedPressure;
 use scalo::memory::MemoryGuard;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
@@ -129,6 +131,9 @@ pub struct BridgeRuntime {
     /// The guard both listeners lease held bytes on, which also sizes their
     /// held-byte ceilings.
     pub memory_guard: Option<Arc<MemoryGuard>>,
+    /// Where both legs send a record the hop after them would refuse for
+    /// good. Without one such a record is dropped and counted.
+    pub dlq: Option<Arc<Dlq>>,
 }
 
 /// The half that carries records INTO Vector.
@@ -257,6 +262,10 @@ impl Bridge {
         let engine = match runtime.pool {
             Some(pool) => BatchEngine::with_pool(pool, engine_config),
             None => BatchEngine::new(engine_config),
+        };
+        let engine = match runtime.dlq {
+            Some(dlq) => engine.with_dlq(dlq),
+            None => engine,
         };
 
         Ok(Self {

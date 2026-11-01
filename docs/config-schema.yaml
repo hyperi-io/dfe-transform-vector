@@ -20,6 +20,7 @@ description: |-
   - `metrics.address` -- the HTTP server binds at startup
   - `logging.*` -- tracing subscriber configured at startup
   - `reload.poll_interval_secs` -- captured at reload loop start
+  - `dlq.*` -- the bridge's dead-letter queue is spawned at startup
 
   **Read by nothing in this process:**
   - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
@@ -172,6 +173,24 @@ properties:
     default:
       enabled: true
       poll_interval_secs: 30
+  dlq:
+    description: |-
+      Where the direct transport's bridge sends a record the next stage would
+      refuse for good, rather than drop it. **Requires restart.**
+    $ref: "#/$defs/DeadLetterConfig"
+    default:
+      enabled: true
+      mode: cascade
+      queue_capacity: 10000
+      batch_size: 256
+      flush_interval_ms: 100
+      max_payload_bytes: 524288
+      file:
+        enabled: true
+        path: /var/spool/scalo/dlq
+        rotation: hourly
+        max_age_days: 30
+        compress_rotated: true
 $defs:
   PipelineConfig:
     description: Pipeline identity.
@@ -541,7 +560,7 @@ $defs:
         type: string
         default: block
   BatchConfig:
-    description: Vector-level batch configuration for sinks.
+    description: Vector-level batch configuration for the sink, on either transport.
     type: object
     properties:
       max_events:
@@ -551,7 +570,9 @@ $defs:
         minimum: 0
         default: 10000
       max_bytes:
-        description: Maximum uncompressed batch size (bytes) before flush.
+        description: |-
+          Maximum uncompressed batch size (bytes) before flush. On the direct
+          transport at most 16 MiB, and 8 MiB when unset.
         type:
         - integer
         - "null"
@@ -559,7 +580,9 @@ $defs:
         minimum: 0
         default: null
       timeout_secs:
-        description: "Max batch age (seconds) before flush. Default: 1."
+        description: |-
+          Max batch age (seconds) before flush. Default: 1, and at most 1 on the
+          direct transport.
         type: integer
         format: uint32
         minimum: 0
@@ -779,3 +802,130 @@ $defs:
         format: uint64
         minimum: 0
         default: 30
+  DeadLetterConfig:
+    description: |-
+      The bridge's dead-letter queue: scalo's `DlqConfig` as written.
+
+      The default writes NDJSON files under `/var/spool/scalo/dlq`, which the
+      deployment contract declares writable. With `enabled: false` such a record
+      is dropped and counted on `pipeline_dead_letters_dropped_total`. Only the
+      direct transport's bridge has one: on the bus Vector's own Kafka sink
+      delivers.
+    $ref: "#/$defs/DlqConfig"
+  DlqConfig:
+    description: Top-level DLQ configuration.
+    type: object
+    properties:
+      enabled:
+        description: Whether DLQ is enabled.
+        type: boolean
+        default: true
+      mode:
+        description: Backend routing mode.
+        $ref: "#/$defs/DlqMode"
+        default: cascade
+      queue_capacity:
+        description: |-
+          Bounded mpsc capacity. When the queue is full, `try_send` returns
+          `QueueFull` (overflow=Drop). Sized for failure-burst tolerance.
+          Default 10_000.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 10000
+      batch_size:
+        description: |-
+          Drain coalesces up to this many entries into one backend write.
+          Default 256.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 256
+      flush_interval_ms:
+        description: |-
+          Flush a partial batch after this duration, even if not full.
+          Default 100 ms.
+        type: integer
+        format: uint64
+        minimum: 0
+        default: 100
+      max_payload_bytes:
+        description: |-
+          Payload bytes an entry keeps: a longer payload is cut to this and the
+          entry marked `truncated` with its original length, so it lands where
+          the whole record could not. `None` keeps every payload whole. Default
+          [`DEFAULT_MAX_PAYLOAD_BYTES`].
+        type:
+        - integer
+        - "null"
+        format: uint
+        minimum: 0
+        default: 524288
+      file:
+        description: File backend configuration.
+        $ref: "#/$defs/FileDlqConfig"
+        default:
+          enabled: true
+          path: /var/spool/scalo/dlq
+          rotation: hourly
+          max_age_days: 30
+          compress_rotated: true
+  DlqMode:
+    description: How backends are used when multiple are enabled.
+    oneOf:
+    - description: |-
+        Try backends in order; stop on first success.
+        Default order: Kafka first, file fallback.
+      type: string
+      const: cascade
+    - description: |-
+        Write every batch to all enabled backends. The write succeeds when at
+        least one backend takes the whole batch, and fails only when none does.
+      type: string
+      const: fan_out
+    - description: File backend only (no Kafka dependency).
+      type: string
+      const: file_only
+    - description: Kafka backend only (matches a typical consumer's current behaviour).
+      type: string
+      const: kafka_only
+  FileDlqConfig:
+    description: |-
+      File-based DLQ configuration.
+
+      Writes NDJSON files with automatic rotation and cleanup.
+    type: object
+    properties:
+      enabled:
+        description: Enable the file backend.
+        type: boolean
+        default: true
+      path:
+        description: |-
+          Base directory for DLQ files.
+          Service name is appended as a subdirectory. Default `/var/spool/scalo/dlq`.
+        type: string
+        default: /var/spool/scalo/dlq
+      rotation:
+        description: File rotation period.
+        $ref: "#/$defs/RotationPeriod"
+        default: hourly
+      max_age_days:
+        description: Auto-cleanup files older than this many days.
+        type: integer
+        format: uint32
+        minimum: 0
+        default: 30
+      compress_rotated:
+        description: Compress rotated files with flate2/gzip.
+        type: boolean
+        default: true
+  RotationPeriod:
+    description: File rotation period.
+    oneOf:
+    - description: Rotate files every hour.
+      type: string
+      const: hourly
+    - description: Rotate files every day.
+      type: string
+      const: daily

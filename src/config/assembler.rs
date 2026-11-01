@@ -47,6 +47,20 @@ pub const DEFAULT_CONFIG_DIR: &str = "/var/run/vector/config";
 ///
 /// Returns an error when the output directory cannot be cleaned or written, the secret files cannot be materialised, a transform file fails to load, or the wired topology is invalid.
 pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
+    assemble_for(config, output_dir, output_dir)?;
+    Ok(output_dir.to_path_buf())
+}
+
+/// Assemble into `output_dir` a config that Vector will read from `published`.
+///
+/// The secret backends name `published`'s credential directory, so a
+/// directory assembled aside and then moved to `published` reads its own
+/// credentials there.
+///
+/// # Errors
+///
+/// As [`assemble`].
+pub fn assemble_for(config: &Config, output_dir: &Path, published: &Path) -> Result<()> {
     // Clean and create output directory. The credential directory stays: a
     // process that restarts Vector mid-reload reads it, and a directory removed
     // and rebuilt is missing for a moment. `secrets::materialise` replaces its
@@ -65,7 +79,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     secrets::materialise(config, output_dir)?;
 
     // Generate global config (data_dir, API, secret backends)
-    let global_yaml = generate_global_yaml(&config.vector, &secrets::backends(config, output_dir));
+    let global_yaml = generate_global_yaml(&config.vector, &secrets::backends(config, published));
     write_yaml(output_dir, "00_global.yaml", &global_yaml)?;
 
     // Generate source YAML
@@ -74,8 +88,10 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
 
     // Load user transform files
     let transforms = load_transforms(&config.transforms)?;
+    let data_dir = Path::new(&config.transforms.data_dir);
+    let credentials = credential_paths(config, published, output_dir);
     for lt in &transforms {
-        refuse_out_of_scope_keys(lt, Path::new(&config.transforms.data_dir), output_dir)?;
+        refuse_out_of_scope_keys(lt, data_dir, &credentials)?;
     }
 
     // Extract components for DAG wiring
@@ -103,7 +119,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_yaml(output_dir, "99_observability.yaml", &obs_yaml)?;
 
     info!(dir = %output_dir.display(), "assembled Vector config directory");
-    Ok(output_dir.to_path_buf())
+    Ok(())
 }
 
 /// Remove everything in `dir` except the credential directory.
@@ -137,8 +153,8 @@ fn write_yaml(dir: &Path, filename: &str, value: &serde_json::Value) -> Result<(
 /// `--config-dir` does not recurse into subdirectories. Each file is
 /// prefixed with `50_` to sort after source (00_) and before sink (90_).
 ///
-/// Injects auto-wired `inputs` into transform components that don't have
-/// explicit inputs. Vector requires every transform to declare its inputs.
+/// Writes every transform's wired `inputs` into it. Vector requires every
+/// transform to declare its inputs.
 fn write_transforms(
     dir: &Path,
     transforms: &[LoadedTransform],
@@ -196,16 +212,34 @@ fn refuse_reserved_secret_refs(source: &Path, written: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every path holding a Kafka credential Vector can read: both config
+/// directories, each secret backend's directory and each TLS key.
+fn credential_paths(config: &Config, published: &Path, output_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![published.to_path_buf(), output_dir.to_path_buf()];
+    paths.extend(
+        secrets::backends(config, published)
+            .into_iter()
+            .map(|backend| backend.dir),
+    );
+    paths.extend(
+        [&config.source.tls, &config.sink.tls]
+            .into_iter()
+            .filter(|tls| tls.enabled)
+            .filter_map(|tls| tls.key_file.as_ref().map(PathBuf::from)),
+    );
+    paths
+}
+
 /// Refuse a transform file that declares more than transforms and enrichment
 /// tables loading from `data_dir`.
 ///
 /// Vector runs whatever the file declares with its own reach, so a source,
-/// sink, secret backend or out-of-dir table could read the Kafka credentials in
-/// `config_dir`.
+/// sink, secret backend or out-of-dir table could read the Kafka credentials
+/// under any of `credentials`, which may sit inside `data_dir` too.
 fn refuse_out_of_scope_keys(
     lt: &LoadedTransform,
     data_dir: &Path,
-    config_dir: &Path,
+    credentials: &[PathBuf],
 ) -> Result<()> {
     let refuse = |what: String| {
         Err(crate::Error::Validation(format!(
@@ -246,7 +280,7 @@ fn refuse_out_of_scope_keys(
                     ));
                 }
                 let allowed = resolve(data_dir);
-                let secrets = resolve(config_dir);
+                let secrets: Vec<PathBuf> = credentials.iter().map(|d| resolve(d)).collect();
                 for (name, table) in tables {
                     if table.get("type").and_then(serde_json::Value::as_str) == Some("memory") {
                         continue;
@@ -259,10 +293,14 @@ fn refuse_out_of_scope_keys(
                     };
                     let file = Path::new(file);
                     let resolved = resolve(file);
-                    if !file.is_absolute()
-                        || !resolved.starts_with(&allowed)
-                        || resolved.starts_with(&secrets)
-                    {
+                    if file.is_absolute() && secrets.iter().any(|s| resolved.starts_with(s)) {
+                        return refuse(format!(
+                            "declares enrichment table '{name}' loading {}, which holds a Kafka \
+                             credential",
+                            file.display()
+                        ));
+                    }
+                    if !file.is_absolute() || !resolved.starts_with(&allowed) {
                         return refuse(format!(
                             "declares enrichment table '{name}' loading {}, which is outside \
                              transforms.data_dir {}",
@@ -302,7 +340,9 @@ fn resolve(path: &Path) -> PathBuf {
     folded
 }
 
-/// Inject auto-wired `inputs` into transform components that lack them.
+/// Write each transform's wired `inputs` over whatever the file declared, so
+/// Vector reads the topology the DAG check passed: `source` as `dfe_source`,
+/// and an empty or missing list wired from the source.
 fn inject_wired_inputs(
     yaml: &mut serde_json::Value,
     wired_inputs: &std::collections::HashMap<&str, &[String]>,
@@ -315,12 +355,10 @@ fn inject_wired_inputs(
         for (label, component_val) in entries.iter_mut() {
             if let Some(inputs) = wired_inputs.get(label.as_str())
                 && let Value::Object(component_map) = component_val
-                && !component_map.contains_key(INPUTS_KEY)
             {
                 let inputs_val =
                     Value::Array(inputs.iter().map(|s| Value::String(s.clone())).collect());
                 component_map.insert(INPUTS_KEY.to_string(), inputs_val);
-                debug!(label = %label, "injected auto-wired inputs into transform");
             }
         }
     }
@@ -477,7 +515,7 @@ mod tests {
             ),
             (
                 table("{data}/../config/.secrets/sink_sasl_password"),
-                Some("outside transforms.data_dir"),
+                Some("holds a Kafka credential"),
             ),
             (
                 table("{data}/link.csv"),
@@ -515,6 +553,104 @@ mod tests {
                 (Ok(_), Some(why)) => panic!("{document}: assembled, expected a {why} refusal"),
                 (Err(e), None) => panic!("{document}: refused: {e}"),
             }
+        }
+    }
+
+    /// A mounted SASL directory or a TLS key inside `transforms.data_dir` is a
+    /// credential, not a table, wherever it sits.
+    #[test]
+    fn a_table_loading_a_credential_inside_the_data_dir_is_refused() {
+        let work = TempDir::new().unwrap();
+        let data = work.path().join("data");
+        let kafka = data.join("kafka");
+        let transforms = work.path().join("transforms");
+        for dir in [&kafka, &transforms] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        for file in ["username", "password"] {
+            fs::write(kafka.join(file), "x\n").unwrap();
+        }
+        fs::write(data.join("client.key"), "key\n").unwrap();
+        fs::write(data.join("zones.csv"), "abbreviation\nAEST\n").unwrap();
+
+        for (table, side, refused) in [
+            ("kafka/password", "source", true),
+            ("kafka/username", "sink", true),
+            ("client.key", "source", true),
+            ("client.key", "sink", true),
+            ("zones.csv", "source", false),
+        ] {
+            fs::write(
+                transforms.join("t.yaml"),
+                format!(
+                    "enrichment_tables:\n  t:\n    type: file\n    file:\n      path: {}\n      \
+                     encoding:\n        type: csv\n",
+                    data.join(table).display()
+                ),
+            )
+            .unwrap();
+            let mut config = test_config(Some(transforms.to_string_lossy().into_owned()));
+            config.transforms.data_dir = data.to_string_lossy().into_owned();
+            let (sasl, tls) = if side == "source" {
+                (&mut config.source.sasl, &mut config.source.tls)
+            } else {
+                (&mut config.sink.sasl, &mut config.sink.tls)
+            };
+            sasl.enabled = true;
+            sasl.secret_dir = Some(kafka.to_string_lossy().into_owned());
+            tls.enabled = true;
+            tls.key_file = Some(data.join("client.key").to_string_lossy().into_owned());
+
+            let out = work.path().join("out");
+            match (assemble(&config, &out), refused) {
+                (Err(e), true) => assert!(
+                    e.to_string().contains("credential"),
+                    "{side} {table}: refused for the wrong reason: {e}"
+                ),
+                (Ok(_), false) => {}
+                (Ok(_), true) => {
+                    panic!("{side} {table}: a table reads a credential, and it passed")
+                }
+                (Err(e), false) => panic!("{side} {table}: refused: {e}"),
+            }
+        }
+    }
+
+    /// Vector reads the file the assembler writes, so the wiring the DAG check
+    /// passed is what that file carries: `source` as `dfe_source`, and an empty
+    /// or missing list wired from the source.
+    #[test]
+    fn the_written_transform_carries_the_wired_inputs() {
+        for (inputs, want) in [
+            ("inputs: [source]\n    ", vec!["dfe_source"]),
+            (
+                "inputs: [source, dfe_source]\n    ",
+                vec!["dfe_source", "dfe_source"],
+            ),
+            ("inputs: []\n    ", vec!["dfe_source"]),
+            ("", vec!["dfe_source"]),
+            ("inputs: dfe_source\n    ", vec!["dfe_source"]),
+        ] {
+            let transforms_dir = TempDir::new().unwrap();
+            fs::write(
+                transforms_dir.path().join("01_parse.yaml"),
+                format!("transforms:\n  parse:\n    type: remap\n    {inputs}source: '.x = 1'\n"),
+            )
+            .unwrap();
+            let output = TempDir::new().unwrap();
+            let config = test_config(Some(transforms_dir.path().to_string_lossy().into_owned()));
+            assemble(&config, output.path()).unwrap();
+
+            let written = fs::read_to_string(output.path().join("50_000_01_parse.yaml")).unwrap();
+            let yaml: serde_json::Value =
+                scalo::yaml::from_str(&written, "t.yaml", scalo::yaml::Profile::Config).unwrap();
+            let got: Vec<&str> = yaml["transforms"]["parse"]["inputs"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{inputs:?}: no inputs list in {written}"))
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            assert_eq!(got, want, "{inputs:?}: {written}");
         }
     }
 
