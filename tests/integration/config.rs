@@ -318,31 +318,58 @@ fn config_validation_catches_missing_sink_topic() {
 
 /// With the commit timer armed, handing offset-storing back to librdkafka
 /// turns an unclean pod death into skipped records rather than replayed ones.
+///
+/// librdkafka reads `true` and `t` in any case, and `1`, as true. `false` is
+/// what Vector sets anyway, so pinning it stays legal.
 #[test]
 fn config_validation_catches_offset_store_handed_back_to_librdkafka() {
-    let mut config = full_config(None);
-    config
-        .source
-        .librdkafka_options
-        .insert("enable.auto.offset.store".into(), "true".into());
-    let err = config.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("enable.auto.offset.store"),
-        "validation rejected for the wrong reason: {err}"
-    );
+    for (value, refused) in [
+        ("true", true),
+        ("TRUE", true),
+        ("t", true),
+        ("1", true),
+        ("false", false),
+        ("0", false),
+    ] {
+        let mut config = full_config(None);
+        config
+            .source
+            .librdkafka_options
+            .insert("enable.auto.offset.store".into(), value.into());
+        match (config.validate(), refused) {
+            (Err(e), true) => assert!(
+                e.to_string().contains("enable.auto.offset.store"),
+                "{value}: refused for the wrong reason: {e}"
+            ),
+            (Ok(()), false) => {}
+            (Ok(()), true) => panic!("{value}: librdkafka reads it as true, and it passed"),
+            (Err(e), false) => {
+                panic!("{value}: librdkafka reads it as false, and it was refused: {e}")
+            }
+        }
+    }
 }
 
-/// Setting it to `false` is what Vector does anyway, so it must stay legal.
+/// The shared librdkafka profile under `DFE_CONFIG_DIR` is a layer of the
+/// consumer options as much as `source.librdkafka_options` is.
 #[test]
-fn config_validation_allows_offset_store_pinned_off() {
-    let mut config = full_config(None);
-    config
-        .source
-        .librdkafka_options
-        .insert("enable.auto.offset.store".into(), "false".into());
-    config
-        .validate()
-        .expect("pinning offset-store off matches what Vector already sets");
+fn config_validation_catches_offset_store_in_the_shared_profile() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("shared")).unwrap();
+    fs::write(
+        dir.path().join("shared/librdkafka.yaml"),
+        "consumer:\n  production:\n    enable.auto.offset.store: true\n",
+    )
+    .unwrap();
+
+    let validated = with_vars(&[("DFE_CONFIG_DIR", dir.path().to_str())], || {
+        full_config(None).validate()
+    });
+    let err = validated.expect_err("the shared profile hands offset-storing to librdkafka");
+    assert!(
+        err.to_string().contains("enable.auto.offset.store"),
+        "refused for the wrong reason: {err}"
+    );
 }
 
 #[test]

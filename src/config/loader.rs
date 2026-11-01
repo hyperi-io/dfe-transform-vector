@@ -312,6 +312,12 @@ fn validate_bind(field: &str, value: &str) -> Result<()> {
     )))
 }
 
+/// Whether librdkafka reads `value` as a true boolean: `true` or `t` in any
+/// case, or `1`.
+fn librdkafka_true(value: &str) -> bool {
+    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("t") || value == "1"
+}
+
 /// Parse a transport name from the environment, keeping `current` on anything
 /// unrecognised so a typo cannot silently move a deployment off its transport.
 fn parse_transport(value: &str, current: Transport) -> Transport {
@@ -1122,23 +1128,19 @@ impl Config {
             )?;
         }
 
-        // Vector stores an offset only once the sink has acknowledged the
-        // event, which is what makes the commit timer safe to run. Hand that
-        // job back to librdkafka and offsets are stored at fetch time and
-        // committed seconds later, so a pod that dies mid-flight skips every
-        // record it had read but not yet produced.
-        if self
-            .source
-            .librdkafka_options
+        // Offsets stored at fetch rather than after the sink acknowledges are
+        // committed for records a crashed pod never produced. Every layer of
+        // the consumer options counts, the shared profile included.
+        if let Some(value) = super::generate::source_librdkafka_layers(&self.source)
             .get("enable.auto.offset.store")
-            .is_some_and(|v| v == "true")
+            .filter(|v| librdkafka_true(v))
         {
-            return Err(crate::Error::Validation(
-                "source.librdkafka_options.enable.auto.offset.store must not be true: Vector \
-                 stores offsets after the sink acknowledges, and letting librdkafka store them \
-                 on fetch silently drops records on an unclean shutdown"
-                    .into(),
-            ));
+            return Err(crate::Error::Validation(format!(
+                "the source consumer's enable.auto.offset.store is '{value}', from \
+                 source.librdkafka_options or the shared librdkafka profile: Vector stores \
+                 offsets after the sink acknowledges, and letting librdkafka store them on \
+                 fetch silently drops records on an unclean shutdown"
+            )));
         }
 
         // Source codec

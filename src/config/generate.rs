@@ -501,17 +501,26 @@ const SERVICE_PRODUCER_OVERRIDES: &[(&str, &str)] = &[
     ("enable.idempotence", "true"),
 ];
 
-fn build_source_librdkafka(source: &SourceConfig) -> Mapping {
+/// The Kafka source's librdkafka options from every layer: the baseline
+/// profile, the service overrides, then the source's `librdkafka_options`.
+///
+/// The security options written after these are derived from `source.sasl`
+/// and `source.tls`, which [`crate::config::Config::validate`] keeps out of
+/// `librdkafka_options`.
+#[must_use]
+pub fn source_librdkafka_layers(source: &SourceConfig) -> HashMap<String, String> {
     let base = kafka_defaults::consumer_profile("production");
     let user_overrides: HashMap<String, String> = source
         .librdkafka_options
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let merged = kafka_defaults::merge_layers(&base, SERVICE_CONSUMER_OVERRIDES, &user_overrides);
+    kafka_defaults::merge_layers(&base, SERVICE_CONSUMER_OVERRIDES, &user_overrides)
+}
 
+fn build_source_librdkafka(source: &SourceConfig) -> Mapping {
     let mut m = Mapping::new();
-    for (k, v) in &merged {
+    for (k, v) in &source_librdkafka_layers(source) {
         m.insert(key(k), val(v));
     }
     insert_security_options(&mut m, &source.sasl, &source.tls);
