@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use super::loader::Config;
+use super::loader::{Config, TransformConfig};
 use super::staging::{Published, Staged};
 use super::validate::vector_validate;
 use crate::metrics::scrape::{ReloadCounts, fetch_exposition};
@@ -96,7 +96,7 @@ struct FileSnapshot {
 impl FileSnapshot {
     /// Take a snapshot of modification times for the main config files and
     /// every transform file.
-    fn capture(config: &Config, main: &[PathBuf]) -> Self {
+    fn capture(transforms: &TransformConfig, main: &[PathBuf]) -> Self {
         let mut mtimes = HashMap::new();
 
         for path in main {
@@ -106,7 +106,7 @@ impl FileSnapshot {
         }
 
         // Snapshot transform files
-        if let Some(dir) = &config.transforms.dir {
+        if let Some(dir) = &transforms.dir {
             let dir_path = Path::new(dir);
             if dir_path.is_dir()
                 && let Ok(entries) = std::fs::read_dir(dir_path)
@@ -123,7 +123,7 @@ impl FileSnapshot {
             }
         }
 
-        if let Some(files) = &config.transforms.files {
+        if let Some(files) = &transforms.files {
             for file in files {
                 let path = PathBuf::from(file);
                 if let Ok(meta) = path.metadata()
@@ -247,13 +247,71 @@ pub async fn await_vector_reload(
 }
 
 /// Swap back the config directory Vector is running.
-fn roll_back(published: Published, config_dir: &Path) {
-    if let Err(e) = published.roll_back() {
+async fn roll_back(published: Published, config_dir: &Path) {
+    if let Err(e) = off_runtime("putting back the running config", move || {
+        published.roll_back()
+    })
+    .await
+    {
         error!(
             error = %e,
             dir = %config_dir.display(),
             "could not put back the config directory Vector is running"
         );
+    }
+}
+
+/// Drop a staged change on the blocking pool.
+async fn discard(staged: Staged) {
+    if let Err(e) = off_runtime("dropping the staged change", move || {
+        staged.discard();
+        Ok(())
+    })
+    .await
+    {
+        error!(error = %e, "could not drop the staged change");
+    }
+}
+
+/// Keep a published change, dropping the config it replaced, on the blocking
+/// pool.
+async fn commit(published: Published) {
+    if let Err(e) = off_runtime("dropping the replaced config", move || {
+        published.commit();
+        Ok(())
+    })
+    .await
+    {
+        error!(error = %e, "could not drop the replaced config");
+    }
+}
+
+/// Run filesystem work on the blocking pool: on an S3-backed mount one read,
+/// walk or rename can take seconds, which on a runtime worker stalls the
+/// bridge, the supervisor and shutdown with it.
+async fn off_runtime<T: Send + 'static>(
+    what: &'static str,
+    work: impl FnOnce() -> crate::Result<T> + Send + 'static,
+) -> crate::Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| crate::Error::Config(format!("{what} did not finish: {e}")))?
+}
+
+/// [`FileSnapshot::capture`] on the blocking pool, or `None` when it did not
+/// finish.
+async fn snapshot(transforms: &TransformConfig, main: &[PathBuf]) -> Option<FileSnapshot> {
+    let (transforms, main) = (transforms.clone(), main.to_vec());
+    match off_runtime("the file snapshot", move || {
+        Ok(FileSnapshot::capture(&transforms, &main))
+    })
+    .await
+    {
+        Ok(files) => Some(files),
+        Err(e) => {
+            error!(error = %e, "could not read the watched files");
+            None
+        }
     }
 }
 
@@ -356,9 +414,17 @@ impl Reloader {
     async fn attempt(&self, current: &Config) -> (Attempt, Option<Config>) {
         let metrics = &self.metrics;
 
-        // Re-load config from file
-        let new_config = match Config::load(self.config_path.as_deref()) {
-            Ok(c) => c,
+        // Re-load config from file, and validate it: both read files.
+        let path = self.config_path.clone();
+        let loaded = off_runtime("re-loading the config", move || {
+            Config::load(path.as_deref()).map(|config| {
+                let valid = config.validate();
+                (config, valid)
+            })
+        })
+        .await;
+        let (new_config, valid) = match loaded {
+            Ok(loaded) => loaded,
             Err(e) => {
                 error!(error = %e, "failed to re-load config during reload");
                 metrics.record_config_reload("error");
@@ -368,7 +434,7 @@ impl Reloader {
         };
 
         // Validate new config
-        if let Err(e) = new_config.validate() {
+        if let Err(e) = valid {
             error!(error = %e, "new config validation failed during reload");
             metrics.record_config_reload("error");
             metrics.record_config_validation_error();
@@ -414,7 +480,12 @@ impl Reloader {
         let metrics = &self.metrics;
         let config_dir = &self.config_dir;
 
-        let staged = match Staged::assemble(new_config, config_dir) {
+        let (assembling, into) = (new_config.clone(), config_dir.clone());
+        let assembled = off_runtime("assembling the change", move || {
+            Staged::assemble(&assembling, &into)
+        })
+        .await;
+        let staged = match assembled {
             Ok(staged) => staged,
             Err(e) => {
                 error!(error = %e, "failed to re-assemble config during reload");
@@ -427,11 +498,11 @@ impl Reloader {
             error!(error = %e, "vector validate failed during reload");
             metrics.record_config_reload("error");
             metrics.record_config_validation_error();
-            staged.discard();
+            discard(staged).await;
             return Attempt::Failed;
         }
 
-        let published = match staged.publish() {
+        let published = match off_runtime("publishing the change", move || staged.publish()).await {
             Ok(published) => published,
             Err(e) => {
                 error!(error = %e, "failed to publish the validated config during reload");
@@ -451,7 +522,7 @@ impl Reloader {
         let Some(pid) = pid else {
             warn!("Vector process not running, skipping SIGHUP");
             metrics.record_config_reload("error");
-            published.commit();
+            commit(published).await;
             return Attempt::Done;
         };
         let exporter = &current.metrics.vector_metrics_address;
@@ -461,7 +532,7 @@ impl Reloader {
             // been told: the retry signals it again.
             error!(error = %e, "failed to send SIGHUP to Vector");
             metrics.record_config_reload("error");
-            published.commit();
+            commit(published).await;
             return Attempt::Failed;
         }
         let outcome = match before {
@@ -494,7 +565,7 @@ impl Reloader {
                      putting that config back"
                 );
                 metrics.record_config_reload("error");
-                roll_back(published, config_dir);
+                roll_back(published, config_dir).await;
                 return Attempt::Failed;
             }
             VectorReload::Unconfirmed(reason) => {
@@ -508,7 +579,7 @@ impl Reloader {
         }
 
         // Vector runs the new config, or may: the directory now holds it.
-        published.commit();
+        commit(published).await;
         Attempt::Done
     }
 }
@@ -543,7 +614,10 @@ pub async fn run_reload_loop(
     let poll_interval = Duration::from_secs(config.reload.poll_interval_secs);
     let main = main_config_files(config_path.as_deref());
     let mut current_config = config;
-    let mut watch = Watch::new(FileSnapshot::capture(&current_config, &main), poll_interval);
+    let seen = snapshot(&current_config.transforms, &main)
+        .await
+        .unwrap_or_else(|| FileSnapshot::capture(&TransformConfig::default(), &[]));
+    let mut watch = Watch::new(seen, poll_interval);
     let reloader = Reloader {
         config_path,
         config_dir,
@@ -561,7 +635,9 @@ pub async fn run_reload_loop(
         // Wait for either: poll interval, manual trigger, or shutdown
         let trigger = tokio::select! {
             () = tokio::time::sleep(poll_interval) => {
-                let files = FileSnapshot::capture(&current_config, &main);
+                let Some(files) = snapshot(&current_config.transforms, &main).await else {
+                    continue;
+                };
                 match watch.poll(files, Instant::now()) {
                     Some(trigger) => trigger,
                     None => continue,
@@ -579,7 +655,9 @@ pub async fn run_reload_loop(
         let (attempt, applied) = reloader.attempt(&current_config).await;
         if let Some(applied) = applied {
             current_config = applied;
-            watch.rebase(FileSnapshot::capture(&current_config, &main));
+            if let Some(files) = snapshot(&current_config.transforms, &main).await {
+                watch.rebase(files);
+            }
         }
         watch.record(attempt, Instant::now());
     }
@@ -702,8 +780,8 @@ mod tests {
     #[test]
     fn file_snapshot_detects_no_change() {
         let config = base_config();
-        let s1 = FileSnapshot::capture(&config, &[]);
-        let s2 = FileSnapshot::capture(&config, &[]);
+        let s1 = FileSnapshot::capture(&config.transforms, &[]);
+        let s2 = FileSnapshot::capture(&config.transforms, &[]);
         assert!(!s1.has_changed(&s2));
     }
 
@@ -713,11 +791,11 @@ mod tests {
         let mut config = base_config();
         config.transforms.dir = Some(dir.path().to_string_lossy().into_owned());
 
-        let s1 = FileSnapshot::capture(&config, &[]);
+        let s1 = FileSnapshot::capture(&config.transforms, &[]);
 
         // Add a file
         std::fs::write(dir.path().join("new.yaml"), "test").unwrap();
-        let s2 = FileSnapshot::capture(&config, &[]);
+        let s2 = FileSnapshot::capture(&config.transforms, &[]);
 
         assert!(s1.has_changed(&s2));
     }
@@ -731,7 +809,7 @@ mod tests {
         std::fs::write(&main, "pipeline:\n  name: a\n").unwrap();
         let config = base_config();
 
-        let before = FileSnapshot::capture(&config, std::slice::from_ref(&main));
+        let before = FileSnapshot::capture(&config.transforms, std::slice::from_ref(&main));
         let mtime = std::fs::metadata(&main).unwrap().modified().unwrap();
         std::fs::write(&main, "pipeline:\n  name: b\n").unwrap();
         std::fs::File::options()
@@ -740,7 +818,7 @@ mod tests {
             .unwrap()
             .set_modified(mtime + Duration::from_secs(1))
             .unwrap();
-        let after = FileSnapshot::capture(&config, std::slice::from_ref(&main));
+        let after = FileSnapshot::capture(&config.transforms, std::slice::from_ref(&main));
 
         assert!(before.has_changed(&after), "a main config edit went unseen");
     }
@@ -748,7 +826,7 @@ mod tests {
     fn snapshot_of(dir: &Path) -> FileSnapshot {
         let mut config = base_config();
         config.transforms.dir = Some(dir.to_string_lossy().into_owned());
-        FileSnapshot::capture(&config, &[])
+        FileSnapshot::capture(&config.transforms, &[])
     }
 
     /// A failure on unchanged files is retried after the poll interval, then

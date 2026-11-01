@@ -637,6 +637,79 @@ async fn a_reload_that_failed_once_is_retried_without_another_edit() {
     );
 }
 
+/// A reload's file reads run off the runtime. The config file here is a FIFO,
+/// so reading it waits for a writer the way a slow S3-backed mount does, and
+/// the one runtime thread must keep running other tasks meanwhile.
+#[tokio::test(flavor = "current_thread")]
+async fn a_slow_config_read_does_not_hold_the_runtime() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let transforms_dir = dir.path().join("transforms");
+    std::fs::create_dir_all(&transforms_dir).unwrap();
+    std::fs::write(transforms_dir.join("01_parse.yaml"), remap_transform("x")).unwrap();
+    let config_text = format!(
+        "pipeline:\n  name: \"slow-read\"\nsource:\n  brokers: [\"localhost:9092\"]\n  \
+         topics: [\"raw_input\"]\n  group_id: \"slow-read-group\"\nsink:\n  \
+         brokers: [\"localhost:9092\"]\n  topic: \"out\"\ntransforms:\n  dir: \"{}\"\n\
+         vector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  version_check: \"disabled\"\n\
+         reload:\n  poll_interval_secs: 3600\n",
+        transforms_dir.display(),
+        write_always_ok_binary(dir.path()).display(),
+        dir.path().join("data").display(),
+    );
+    let plain = dir.path().join("config.yaml");
+    std::fs::write(&plain, &config_text).unwrap();
+    let starting = load_config(Some(plain.to_str().unwrap())).unwrap();
+
+    let fifo = dir.path().join("config-fifo.yaml");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+
+    let beats = Arc::new(AtomicU64::new(0));
+    let ticking = Arc::clone(&beats);
+    let heartbeat = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            ticking.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+
+    let rig = ReloadRig::start(starting, &fifo, dir.path().join("vector-config"));
+    rig.reload_tx
+        .send(dfe_transform_vector::config::reload::ReloadTrigger::Manual)
+        .await
+        .unwrap();
+
+    // While the reload waits on the FIFO, count heartbeats from another
+    // thread, then hand it the config so the read completes either way.
+    let watched = Arc::clone(&beats);
+    let writer_fifo = fifo.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let early = watched.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(500));
+        let late = watched.load(Ordering::Relaxed);
+        std::fs::write(&writer_fifo, config_text).expect("feed the FIFO");
+        (early, late)
+    });
+    let (early, late) = tokio::task::spawn_blocking(move || writer.join().unwrap())
+        .await
+        .unwrap();
+    heartbeat.abort();
+    rig.finish().await;
+
+    assert!(
+        late > early,
+        "the runtime ran nothing while a reload read its config ({early} -> {late} heartbeats)"
+    );
+}
+
 /// Vector refuses a reload it cannot apply and keeps the config it was
 /// running, with the SIGHUP itself succeeding. The refusal is on Vector's own
 /// counters, and the assembled directory has to go back to what Vector runs.
