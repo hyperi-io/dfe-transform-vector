@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.58](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.57...v1.0.58) (2026-11-01)
+
+### Bug Fixes
+
+* keep secrets from Vector, refuse transform files that reach past their tables ([#136](https://github.com/hyperi-io/dfe-transform-vector/issues/136)) ([d7b3ea5](https://github.com/hyperi-io/dfe-transform-vector/commit/d7b3ea59be5fd5c60ba9321165956d461757e876))
+* **vector:** repair reloads, update scalo 2.14.25 and add bridge DLQ ([#138](https://github.com/hyperi-io/dfe-transform-vector/issues/138)) ([cfeae6b](https://github.com/hyperi-io/dfe-transform-vector/commit/cfeae6b38fa15d3a01780cd495437ac86cd0ff2d))
+
 ## [1.0.57](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.56...v1.0.57) (2026-10-29)
 
 ### Bug Fixes
