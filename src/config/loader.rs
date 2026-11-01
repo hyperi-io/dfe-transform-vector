@@ -473,15 +473,17 @@ impl Default for SinkConfig {
     }
 }
 
-/// Vector-level batch configuration for sinks.
+/// Vector-level batch configuration for the sink, on either transport.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct BatchConfig {
     /// Maximum events per batch before flush. Default: 10000.
     pub max_events: u32,
-    /// Maximum uncompressed batch size (bytes) before flush.
+    /// Maximum uncompressed batch size (bytes) before flush. On the direct
+    /// transport at most 16 MiB, and 8 MiB when unset.
     pub max_bytes: Option<u64>,
-    /// Max batch age (seconds) before flush. Default: 1.
+    /// Max batch age (seconds) before flush. Default: 1, and at most 1 on the
+    /// direct transport.
     pub timeout_secs: u32,
 }
 
@@ -1192,6 +1194,7 @@ impl Config {
                     "sink.endpoint must not be empty on the direct transport".into(),
                 ));
             }
+            Self::validate_direct_batch(&self.sink.batch)?;
         } else {
             if self.sink.brokers.is_empty() {
                 return Err(crate::Error::Validation(
@@ -1487,6 +1490,31 @@ impl Config {
                 "vector.api_address must be a host:port bind address (got '{address}')"
             ))),
         }
+    }
+
+    /// Hold the direct sink's batching inside what the bridge allows it.
+    ///
+    /// The bridge's hold deadlines leave Vector's sink one second of batching
+    /// (see [`crate::bridge::RETURN_HOLD`]), and the return listener decodes
+    /// at most its gRPC message size per push.
+    fn validate_direct_batch(batch: &BatchConfig) -> Result<()> {
+        if batch.timeout_secs > 1 {
+            return Err(crate::Error::Validation(format!(
+                "sink.batch.timeout_secs must be at most 1 on the direct transport, got {}: \
+                 the bridge's hold deadlines leave Vector's sink one second to batch in",
+                batch.timeout_secs
+            )));
+        }
+        let ceiling = scalo::transport::grpc::GrpcConfig::default().max_message_size;
+        if let Some(max_bytes) = batch.max_bytes
+            && usize::try_from(max_bytes).map_or(true, |bytes| bytes > ceiling)
+        {
+            return Err(crate::Error::Validation(format!(
+                "sink.batch.max_bytes must be at most {ceiling} on the direct transport, got \
+                 {max_bytes}: the return listener decodes no larger push"
+            )));
+        }
+        Ok(())
     }
 
     fn validate_buffer(buffer: &BufferConfig) -> Result<()> {

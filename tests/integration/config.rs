@@ -434,6 +434,45 @@ fn config_validation_keeps_the_bridge_legs_on_loopback() {
     }
 }
 
+/// On the direct transport Vector's sink batching sits inside the bridge's
+/// nested hold deadlines, which leave it one second, and each push must fit
+/// what the return listener decodes.
+#[test]
+fn config_validation_bounds_the_direct_sink_batch() {
+    for (direct_out, timeout_secs, max_bytes, refused) in [
+        (true, 1, None, None),
+        (true, 1, Some(16 * 1024 * 1024), None),
+        (true, 2, None, Some("sink.batch.timeout_secs")),
+        (
+            true,
+            1,
+            Some(16 * 1024 * 1024 + 1),
+            Some("sink.batch.max_bytes"),
+        ),
+        (false, 5, Some(64 * 1024 * 1024), None),
+    ] {
+        let mut config = full_config(None);
+        if direct_out {
+            config.sink.transport = Transport::Direct;
+            config.sink.endpoint = "http://dfe-loader:6000".into();
+        }
+        config.sink.batch.timeout_secs = timeout_secs;
+        config.sink.batch.max_bytes = max_bytes;
+        let case = format!("direct={direct_out} timeout={timeout_secs} max_bytes={max_bytes:?}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => {
+                assert!(
+                    e.to_string().contains(field),
+                    "{case}: refused for the wrong reason: {e}"
+                );
+            }
+            (Ok(()), Some(field)) => panic!("{case}: {field} passed"),
+            (Err(e), None) => panic!("{case}: refused: {e}"),
+        }
+    }
+}
+
 #[test]
 fn config_validation_catches_invalid_sasl_mechanism() {
     let mut config = full_config(None);

@@ -92,8 +92,8 @@ dfe_source: "my_source"
 #   socket_timeout_ms: 60000           # broker socket timeout
 #   batch:
 #     max_events: 10000                # Vector-level batch size (default 10K)
-#     # max_bytes: 8388608             # optional byte limit
-#     timeout_secs: 1                  # flush timeout
+#     # max_bytes: 8388608             # optional byte limit; on direct at most 16 MiB, 8 MiB unset
+#     timeout_secs: 1                  # flush timeout; at most 1 on direct
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"

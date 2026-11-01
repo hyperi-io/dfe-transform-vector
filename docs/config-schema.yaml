@@ -541,7 +541,7 @@ $defs:
         type: string
         default: block
   BatchConfig:
-    description: Vector-level batch configuration for sinks.
+    description: Vector-level batch configuration for the sink, on either transport.
     type: object
     properties:
       max_events:
@@ -551,7 +551,9 @@ $defs:
         minimum: 0
         default: 10000
       max_bytes:
-        description: Maximum uncompressed batch size (bytes) before flush.
+        description: |-
+          Maximum uncompressed batch size (bytes) before flush. On the direct
+          transport at most 16 MiB, and 8 MiB when unset.
         type:
         - integer
         - "null"
@@ -559,7 +561,9 @@ $defs:
         minimum: 0
         default: null
       timeout_secs:
-        description: "Max batch age (seconds) before flush. Default: 1."
+        description: |-
+          Max batch age (seconds) before flush. Default: 1, and at most 1 on the
+          direct transport.
         type: integer
         format: uint32
         minimum: 0
