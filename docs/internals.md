@@ -448,14 +448,14 @@ The wrapper understands the pipeline topology and wires components automatically
 
 1. **Source label is always `dfe_source`** — canonical, predictable
 2. **Sink label is always `dfe_sink`** — canonical, predictable
-3. **First transform**: if `inputs` contains `"source"` or `"dfe_source"`, keep it; otherwise inject `inputs: ["dfe_source"]`
-4. **Intermediate transforms**: left as authored (user controls the chain)
-5. **Last transform**: its label is discovered and injected as `dfe_sink.inputs`
-6. **Extra sources/sinks** (the 2% case): detected and passed through unchanged, references validated
+3. **First transform**: a transform with no or empty `inputs` reads `dfe_source`, and an input written `source` is rewritten to `dfe_source` in the file Vector reads
+4. **Intermediate transforms**: left as authored (user controls the chain). An input names a component (`parse`) or one of its named outputs (`split.accepted`)
+5. **Last transforms**: every output nothing reads is injected as `dfe_sink.inputs`. A `route` or `exclusive_route` has named outputs only, so each unread route and its `_unmatched` reach the sink
+6. **Extra sources/sinks**: refused, with every other top-level key bar `transforms` and `enrichment_tables`
 
 **Validation rules:**
 
-- All `inputs` references must resolve to a defined component
+- All `inputs` references must resolve to a defined component, and to an output that component has
 - No orphaned components (every component must be reachable from a source)
 - No cycles in the DAG
 - At least one path from `dfe_source` to `dfe_sink`
