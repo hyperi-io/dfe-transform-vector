@@ -550,13 +550,104 @@ async fn a_reload_vector_refuses_is_reported_and_the_running_config_put_back() {
     );
 }
 
-/// The same refusal from a real Vector, which is what pins the counter names
-/// and labels the supervisor reads.
-///
-/// A transform file that sets a global option validates, and a running Vector
-/// refuses to reload it: global options change only on a restart.
+/// A Vector that restarts, or reloads, while a change is being validated reads
+/// the directory it was started on. That directory must hold the config Vector
+/// runs until the change has passed, and keep holding it when the change fails.
 #[tokio::test]
-async fn a_reload_a_real_vector_refuses_is_reported_and_put_back() {
+async fn a_change_is_validated_away_from_the_directory_vector_reads() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let running_dir = dir.path().join("transforms-running");
+    let invalid_dir = dir.path().join("transforms-invalid");
+    for (at, field) in [(&running_dir, "running"), (&invalid_dir, "invalid")] {
+        std::fs::create_dir_all(at).unwrap();
+        std::fs::write(at.join("01_parse.yaml"), remap_transform(field)).unwrap();
+    }
+
+    // A `vector validate` that copies out what Vector's directory holds while
+    // it runs, then fails the change as a VRL error would.
+    let config_dir = dir.path().join("vector-config");
+    let seen = dir.path().join("seen-during-validate");
+    let binary = dir.path().join("vector-that-refuses");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = validate ]; then\n  cat '{}'/50_*.yaml > '{}'\n  exit 78\nfi\nexit 0\n",
+            config_dir.display(),
+            seen.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let config_path = dir.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "pipeline:\n  name: \"staged-reload\"\nsource:\n  brokers: [\"localhost:9092\"]\n  \
+             topics: [\"raw_input\"]\n  group_id: \"staged-reload-group\"\nsink:\n  \
+             brokers: [\"localhost:9092\"]\n  topic: \"out\"\ntransforms:\n  dir: \"{}\"\n\
+             vector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  version_check: \"disabled\"\n\
+             reload:\n  poll_interval_secs: 3600\n",
+            invalid_dir.display(),
+            binary.display(),
+            dir.path().join("data").display(),
+        ),
+    )
+    .unwrap();
+
+    let mut starting = load_config(Some(config_path.to_str().unwrap())).unwrap();
+    starting.transforms.dir = Some(running_dir.to_string_lossy().into_owned());
+    let rig = ReloadRig::start(starting, &config_path, config_dir.clone());
+    let validations_before = validation_failures_counted();
+    rig.reload_tx
+        .send(dfe_transform_vector::config::reload::ReloadTrigger::Manual)
+        .await
+        .unwrap();
+
+    let refused = eventually(Duration::from_secs(10), || {
+        validation_failures_counted() > validations_before
+    })
+    .await;
+    rig.finish().await;
+
+    assert!(
+        refused,
+        "the change never reached validation, so this proves nothing"
+    );
+    let during = std::fs::read_to_string(&seen).unwrap_or_default();
+    assert!(
+        during.contains(".running = true") && !during.contains(".invalid = true"),
+        "Vector's directory held the change while it was validated:\n{during}"
+    );
+    let after = assembled_parse(&config_dir);
+    assert!(
+        after.contains(".running = true") && !after.contains(".invalid = true"),
+        "Vector's directory holds a change that failed validation:\n{after}"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("vector-config") && name != "vector-config")
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a refused change left {leftovers:?} beside the config"
+    );
+}
+
+/// A real Vector reads a change swapped in under it on SIGHUP and counts it
+/// applied, which pins `vector_reloaded_total` as the success the supervisor
+/// reads.
+///
+/// The second change, a transform file setting a global option, is refused by
+/// the assembler before Vector sees it, and the applied config stays in place
+/// with Vector running.
+#[tokio::test]
+async fn a_real_vector_applies_a_swapped_in_change_and_keeps_it_past_a_refused_one() {
     use std::time::Duration;
 
     use dfe_transform_vector::config::assembler;
@@ -573,10 +664,15 @@ async fn a_reload_a_real_vector_refuses_is_reported_and_put_back() {
 
     let dir = tempfile::tempdir().unwrap();
     let running_dir = dir.path().join("transforms-running");
+    let applied_dir = dir.path().join("transforms-applied");
     let refused_dir = dir.path().join("transforms-refused");
-    for at in [&running_dir, &refused_dir] {
+    for (at, field) in [
+        (&running_dir, "parsed"),
+        (&applied_dir, "applied"),
+        (&refused_dir, "applied"),
+    ] {
         std::fs::create_dir_all(at).unwrap();
-        std::fs::write(at.join("01_parse.yaml"), remap_transform("parsed")).unwrap();
+        std::fs::write(at.join("01_parse.yaml"), remap_transform(field)).unwrap();
     }
     std::fs::write(
         refused_dir.join("02_global.yaml"),
@@ -594,22 +690,25 @@ async fn a_reload_a_real_vector_refuses_is_reported_and_put_back() {
 
     // Direct at both ends, so no broker is involved.
     let config_path = dir.path().join("config.yaml");
-    std::fs::write(
-        &config_path,
-        format!(
-            "pipeline:\n  name: \"real-refused-reload\"\nsource:\n  transport: direct\n  \
-             listen: \"127.0.0.1:{listen}\"\nsink:\n  transport: direct\n  \
-             endpoint: \"http://127.0.0.1:{from_vector}\"\n  topic: \"out\"\nbridge:\n  \
-             to_vector: \"127.0.0.1:{to_vector}\"\n  from_vector: \"127.0.0.1:{from_vector}\"\n\
-             transforms:\n  dir: \"{}\"\nvector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  \
-             version_check: \"disabled\"\nmetrics:\n  vector_metrics_address: \"{exporter}\"\n\
-             reload:\n  poll_interval_secs: 3600\n",
-            refused_dir.display(),
-            vector_bin.display(),
-            data_dir.display(),
-        ),
-    )
-    .unwrap();
+    let point_at = |transforms: &std::path::Path| {
+        std::fs::write(
+            &config_path,
+            format!(
+                "pipeline:\n  name: \"real-refused-reload\"\nsource:\n  transport: direct\n  \
+                 listen: \"127.0.0.1:{listen}\"\nsink:\n  transport: direct\n  \
+                 endpoint: \"http://127.0.0.1:{from_vector}\"\n  topic: \"out\"\nbridge:\n  \
+                 to_vector: \"127.0.0.1:{to_vector}\"\n  from_vector: \"127.0.0.1:{from_vector}\"\n\
+                 transforms:\n  dir: \"{}\"\nvector:\n  binary: \"{}\"\n  data_dir: \"{}\"\n  \
+                 version_check: \"disabled\"\nmetrics:\n  vector_metrics_address: \"{exporter}\"\n\
+                 reload:\n  poll_interval_secs: 3600\n",
+                transforms.display(),
+                vector_bin.display(),
+                data_dir.display(),
+            ),
+        )
+        .unwrap();
+    };
+    point_at(&applied_dir);
 
     let mut starting = load_config(Some(config_path.to_str().unwrap())).unwrap();
     starting.validate().expect("the test config validates");
@@ -649,37 +748,50 @@ async fn a_reload_a_real_vector_refuses_is_reported_and_put_back() {
         vector.id().expect("Vector has a pid"),
         None,
     );
+
+    // A change Vector can apply, swapped in under it.
     rig.reload_tx
         .send(dfe_transform_vector::config::reload::ReloadTrigger::Manual)
         .await
         .unwrap();
+    let applied = eventually(Duration::from_secs(30), || {
+        reloads_counted("success") >= 1.0
+    })
+    .await;
+    let applied_in_place = assembled_parse(&config_dir).contains(".applied = true");
 
+    // Then one the assembler refuses.
+    point_at(&refused_dir);
+    rig.reload_tx
+        .send(dfe_transform_vector::config::reload::ReloadTrigger::Manual)
+        .await
+        .unwrap();
     let refused = eventually(Duration::from_secs(30), || reloads_counted("error") >= 1.0).await;
     let succeeded = reloads_counted("success");
-    let invalid = validation_failures_counted();
     let still_running = matches!(vector.try_wait(), Ok(None));
     rig.finish().await;
     let _ = vector.start_kill();
     let _ = vector.wait().await;
 
     assert!(
-        refused,
-        "Vector refused the reload, and it was not counted as failed"
+        applied,
+        "Vector never counted the swapped-in change as applied"
     );
-    assert_eq!(succeeded, 0.0, "a refused reload was counted as a success");
-    assert_eq!(
-        invalid, 0.0,
-        "the change failed validation, so this proves nothing about Vector's refusal"
+    assert!(
+        applied_in_place,
+        "the applied change is not in the directory Vector reads"
     );
-    assert!(still_running, "a refused reload must leave Vector running");
+    assert!(refused, "the refused change was not counted as failed");
+    assert_eq!(succeeded, 1.0, "a refused change was counted as a success");
+    assert!(still_running, "a refused change must leave Vector running");
     let put_back = std::fs::read_dir(&config_dir).unwrap().flatten().all(|e| {
         !std::fs::read_to_string(e.path())
             .unwrap_or_default()
             .contains("expire_metrics_secs")
     });
     assert!(
-        put_back,
-        "the assembled config still carries the change Vector refused"
+        put_back && assembled_parse(&config_dir).contains(".applied = true"),
+        "the assembled config is not the one Vector kept running after the refusal"
     );
 }
 

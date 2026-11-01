@@ -53,7 +53,7 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 │  │  ┌────────────────────────────────────────────────────┐    │  │
 │  │  │  vector (subprocess)                                │    │  │
 │  │  │  --config-dir /var/run/vector/config/               │    │  │
-│  │  │  --watch-config --watch-config-method poll          │    │  │
+│  │  │  (no watcher of its own: reloads arrive as SIGHUP)  │    │  │
 │  │  │                                                     │    │  │
 │  │  │  Kafka source ──► transforms ──► Kafka sink         │    │  │
 │  │  │            ──► internal_metrics ──► prometheus_exp   │    │  │
@@ -467,12 +467,12 @@ The wrapper understands the pipeline topology and wires components automatically
 Config change detected (file watcher or SIGHUP)
   │
   ├─ Transform file change (safe)
-  │   ├─ Re-read transform YAMLs
-  │   ├─ Re-run DAG wiring + validation
-  │   ├─ Check every enrichment table file can be read, then `vector validate`
-  │   ├─ If valid: write new config dir → SIGHUP to Vector child
+  │   ├─ Re-read transform YAMLs, re-run DAG wiring + validation into <config_dir>.next
+  │   ├─ Check every enrichment table file can be read, then `vector validate` <config_dir>.next
+  │   ├─ If invalid: log error, increment metric, drop <config_dir>.next (Vector's dir untouched)
+  │   ├─ If valid: swap <config_dir>.next and <config_dir> in one rename → SIGHUP to Vector child
   │   ├─ Read vector_reloaded_total / component_errors_total{error_code} for the outcome
-  │   ├─ If invalid or refused: log error, increment metric, put back the running config dir
+  │   ├─ If refused: log error, increment metric, swap the running config dir back
   │   └─ Emit config_reloads_total{result=success|error|unconfirmed}
   │
   └─ Any other config change (unsafe — requires pod restart)
@@ -480,6 +480,8 @@ Config change detected (file watcher or SIGHUP)
       ├─ Emit config_reloads_total{result="rejected"}
       └─ Keep old config running — operator must restart the pod
 ```
+
+The swap is one `renameat2(RENAME_EXCHANGE)`, so a Vector restarted mid-reload reads the old directory or the new one, never a mix. A filesystem that cannot swap directories, such as an overlay image layer with no volume mounted at `/var/run/vector`, gets the validated files copied in place instead, which is not atomic.
 
 ---
 

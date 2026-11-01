@@ -47,6 +47,20 @@ pub const DEFAULT_CONFIG_DIR: &str = "/var/run/vector/config";
 ///
 /// Returns an error when the output directory cannot be cleaned or written, the secret files cannot be materialised, a transform file fails to load, or the wired topology is invalid.
 pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
+    assemble_for(config, output_dir, output_dir)?;
+    Ok(output_dir.to_path_buf())
+}
+
+/// Assemble into `output_dir` a config that Vector will read from `published`.
+///
+/// The secret backends name `published`'s credential directory, so a
+/// directory assembled aside and then moved to `published` reads its own
+/// credentials there.
+///
+/// # Errors
+///
+/// As [`assemble`].
+pub fn assemble_for(config: &Config, output_dir: &Path, published: &Path) -> Result<()> {
     // Clean and create output directory. The credential directory stays: a
     // process that restarts Vector mid-reload reads it, and a directory removed
     // and rebuilt is missing for a moment. `secrets::materialise` replaces its
@@ -65,7 +79,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     secrets::materialise(config, output_dir)?;
 
     // Generate global config (data_dir, API, secret backends)
-    let global_yaml = generate_global_yaml(&config.vector, &secrets::backends(config, output_dir));
+    let global_yaml = generate_global_yaml(&config.vector, &secrets::backends(config, published));
     write_yaml(output_dir, "00_global.yaml", &global_yaml)?;
 
     // Generate source YAML
@@ -74,8 +88,9 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
 
     // Load user transform files
     let transforms = load_transforms(&config.transforms)?;
+    let data_dir = Path::new(&config.transforms.data_dir);
     for lt in &transforms {
-        refuse_out_of_scope_keys(lt, Path::new(&config.transforms.data_dir), output_dir)?;
+        refuse_out_of_scope_keys(lt, data_dir, &[published, output_dir])?;
     }
 
     // Extract components for DAG wiring
@@ -103,7 +118,7 @@ pub fn assemble(config: &Config, output_dir: &Path) -> Result<PathBuf> {
     write_yaml(output_dir, "99_observability.yaml", &obs_yaml)?;
 
     info!(dir = %output_dir.display(), "assembled Vector config directory");
-    Ok(output_dir.to_path_buf())
+    Ok(())
 }
 
 /// Remove everything in `dir` except the credential directory.
@@ -201,11 +216,11 @@ fn refuse_reserved_secret_refs(source: &Path, written: &str) -> Result<()> {
 ///
 /// Vector runs whatever the file declares with its own reach, so a source,
 /// sink, secret backend or out-of-dir table could read the Kafka credentials in
-/// `config_dir`.
+/// any of `config_dirs`.
 fn refuse_out_of_scope_keys(
     lt: &LoadedTransform,
     data_dir: &Path,
-    config_dir: &Path,
+    config_dirs: &[&Path],
 ) -> Result<()> {
     let refuse = |what: String| {
         Err(crate::Error::Validation(format!(
@@ -246,7 +261,7 @@ fn refuse_out_of_scope_keys(
                     ));
                 }
                 let allowed = resolve(data_dir);
-                let secrets = resolve(config_dir);
+                let secrets: Vec<PathBuf> = config_dirs.iter().map(|d| resolve(d)).collect();
                 for (name, table) in tables {
                     if table.get("type").and_then(serde_json::Value::as_str) == Some("memory") {
                         continue;
@@ -261,7 +276,7 @@ fn refuse_out_of_scope_keys(
                     let resolved = resolve(file);
                     if !file.is_absolute()
                         || !resolved.starts_with(&allowed)
-                        || resolved.starts_with(&secrets)
+                        || secrets.iter().any(|s| resolved.starts_with(s))
                     {
                         return refuse(format!(
                             "declares enrichment table '{name}' loading {}, which is outside \

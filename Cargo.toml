@@ -117,8 +117,9 @@ metrics = ">=0.24.6, <0.25"
 # Note: Vector metrics proxy uses raw TcpStream (no HTTP client crate needed).
 # /metrics, /livez and /readyz are served by scalo's MetricsManager listener.
 
-# Unix signals (sending SIGTERM/SIGHUP to child process)
-nix = { version = ">=0.31.3, <0.32", features = ["signal", "process"] }
+# Unix signals (sending SIGTERM/SIGHUP to child process), and renameat2 to
+# swap a reload's staged config in whole
+nix = { version = ">=0.31.3, <0.32", features = ["signal", "process", "fs"] }
 
 # Allocator (Tier 1 release-track optimisation; CI opts in per channel)
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }

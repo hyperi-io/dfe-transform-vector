@@ -69,24 +69,16 @@ impl Default for BackoffConfig {
 
 /// The argv Vector is started with.
 ///
-/// `--watch-config` is a boolean flag; the watcher is chosen by the separate
-/// `--watch-config-method`. Passing the method as its value makes Vector read
-/// `poll` as a subcommand and exit 2 before it starts.
-///
-/// Polling rather than the recommended inotify watcher: a ConfigMap volume is
-/// a symlink swap, which inotify on the file does not see.
+/// No `--watch-config`: the reload loop is the only thing that changes what
+/// Vector runs. It validates a staged directory, swaps it in whole and sends
+/// SIGHUP, and a watcher of Vector's own would load the directory on its own
+/// schedule, ahead of that validation.
 ///
 /// Never `--dangerously-allow-env-var-interpolation`: it would expand `${VAR}`
 /// in operator transforms from the pod environment, credentials included.
 #[must_use]
 pub fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
-    vec![
-        "--config-dir".into(),
-        config_dir.as_os_str().to_owned(),
-        "--watch-config".into(),
-        "--watch-config-method".into(),
-        "poll".into(),
-    ]
+    vec!["--config-dir".into(), config_dir.as_os_str().to_owned()]
 }
 
 /// A command for the Vector binary at `binary`, without this process's own
@@ -396,28 +388,15 @@ fn next_backoff(current: Duration, config: &BackoffConfig) -> Duration {
 mod tests {
     use super::*;
 
+    /// A watcher in Vector reloads the directory whenever it changes, ahead of
+    /// the reload loop's validation and without a SIGHUP the loop can answer for.
     #[test]
-    fn the_watch_method_is_its_own_flag() {
-        // `--watch-config poll` reads `poll` as a subcommand: Vector prints its
-        // usage and exits 2 before starting, and the wrapper crash-loops.
+    fn vector_watches_no_config_of_its_own() {
         let args: Vec<String> = vector_args(Path::new("/tmp/assembled"))
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let method = args
-            .iter()
-            .position(|a| a == "--watch-config-method")
-            .expect("the watcher method must be passed as its own flag");
-        assert_eq!(args.get(method + 1).map(String::as_str), Some("poll"));
-        let watch = args
-            .iter()
-            .position(|a| a == "--watch-config")
-            .expect("watching must be enabled");
-        assert_eq!(
-            args.get(watch + 1).map(String::as_str),
-            Some("--watch-config-method"),
-            "--watch-config takes no value"
-        );
+        assert_eq!(args, ["--config-dir", "/tmp/assembled"], "{args:?}");
     }
 
     /// VRL's `get_env_var` reads Vector's environment, so the supervisor's own
