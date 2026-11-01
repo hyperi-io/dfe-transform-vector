@@ -26,7 +26,7 @@ RUN chmod +x /usr/local/bin/dfe-transform-vector
 
 # A base image may ship its own user at UID 1000 (Ubuntu's `ubuntu`), so remove it first.
 RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create-home --uid 1000 appuser
-RUN mkdir -p '/var/lib/vector' '/var/run/vector' && chown 1000:1000 '/var/lib/vector' '/var/run/vector'
+RUN mkdir -p '/var/lib/vector' '/var/run/vector' '/var/spool/scalo/dlq' && chown 1000:1000 '/var/lib/vector' '/var/run/vector' '/var/spool/scalo/dlq'
 WORKDIR /home/appuser
 # Vector binary -- downloaded inside the build for portability. Multi-arch via
 # $TARGETARCH. Bump the version deliberately: Vector's CLI flags and config

@@ -42,6 +42,9 @@ build:
     - native
   rust:
     glibc_max: "2.41"
+    # Any C library a release links comes from hyperi-ci's static prefix, so
+    # the image installs no C library packages.
+    static_libs: true
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu

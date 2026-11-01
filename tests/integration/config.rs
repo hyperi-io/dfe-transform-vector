@@ -76,6 +76,7 @@ fn full_config(transforms_dir: Option<String>) -> Config {
         logging: LoggingConfig::default(),
         scaling: ScalingConfig::default(),
         reload: ReloadConfig::default(),
+        dlq: DeadLetterConfig::default(),
     }
 }
 
@@ -1400,6 +1401,7 @@ fn config_with_all_fields_populated_validates() {
             enabled: true,
             poll_interval_secs: 15,
         },
+        dlq: DeadLetterConfig::default(),
     };
     config
         .validate()

@@ -176,6 +176,7 @@ impl Default for DecodingConfig {
 /// - `metrics.address` -- the HTTP server binds at startup
 /// - `logging.*` -- tracing subscriber configured at startup
 /// - `reload.poll_interval_secs` -- captured at reload loop start
+/// - `dlq.*` -- the bridge's dead-letter queue is spawned at startup
 ///
 /// **Read by nothing in this process:**
 /// - `scaling.pressure_threshold` -- no reader. Scale-out is driven by the
@@ -216,6 +217,28 @@ pub struct Config {
     pub scaling: ScalingConfig,
     /// Hot-reload configuration. **Requires restart** (poll interval captured at start).
     pub reload: ReloadConfig,
+    /// Where the direct transport's bridge sends a record the next stage would
+    /// refuse for good, rather than drop it. **Requires restart.**
+    pub dlq: DeadLetterConfig,
+}
+
+/// The bridge's dead-letter queue: scalo's `DlqConfig` as written.
+///
+/// The default writes NDJSON files under `/var/spool/scalo/dlq`, which the
+/// deployment contract declares writable. With `enabled: false` such a record
+/// is dropped and counted on `pipeline_dead_letters_dropped_total`. Only the
+/// direct transport's bridge has one: on the bus Vector's own Kafka sink
+/// delivers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct DeadLetterConfig(pub scalo::dlq::DlqConfig);
+
+// scalo's `DlqConfig` derives no `PartialEq`, and `Config` needs one so a
+// reload can tell a `dlq` change, which needs a restart, from none.
+impl PartialEq for DeadLetterConfig {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_value(&self.0).ok() == serde_json::to_value(&other.0).ok()
+    }
 }
 
 /// Pipeline identity.
