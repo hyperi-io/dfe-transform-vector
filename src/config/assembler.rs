@@ -89,8 +89,9 @@ pub fn assemble_for(config: &Config, output_dir: &Path, published: &Path) -> Res
     // Load user transform files
     let transforms = load_transforms(&config.transforms)?;
     let data_dir = Path::new(&config.transforms.data_dir);
+    let credentials = credential_paths(config, published, output_dir);
     for lt in &transforms {
-        refuse_out_of_scope_keys(lt, data_dir, &[published, output_dir])?;
+        refuse_out_of_scope_keys(lt, data_dir, &credentials)?;
     }
 
     // Extract components for DAG wiring
@@ -211,16 +212,34 @@ fn refuse_reserved_secret_refs(source: &Path, written: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every path holding a Kafka credential Vector can read: both config
+/// directories, each secret backend's directory and each TLS key.
+fn credential_paths(config: &Config, published: &Path, output_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![published.to_path_buf(), output_dir.to_path_buf()];
+    paths.extend(
+        secrets::backends(config, published)
+            .into_iter()
+            .map(|backend| backend.dir),
+    );
+    paths.extend(
+        [&config.source.tls, &config.sink.tls]
+            .into_iter()
+            .filter(|tls| tls.enabled)
+            .filter_map(|tls| tls.key_file.as_ref().map(PathBuf::from)),
+    );
+    paths
+}
+
 /// Refuse a transform file that declares more than transforms and enrichment
 /// tables loading from `data_dir`.
 ///
 /// Vector runs whatever the file declares with its own reach, so a source,
-/// sink, secret backend or out-of-dir table could read the Kafka credentials in
-/// any of `config_dirs`.
+/// sink, secret backend or out-of-dir table could read the Kafka credentials
+/// under any of `credentials`, which may sit inside `data_dir` too.
 fn refuse_out_of_scope_keys(
     lt: &LoadedTransform,
     data_dir: &Path,
-    config_dirs: &[&Path],
+    credentials: &[PathBuf],
 ) -> Result<()> {
     let refuse = |what: String| {
         Err(crate::Error::Validation(format!(
@@ -261,7 +280,7 @@ fn refuse_out_of_scope_keys(
                     ));
                 }
                 let allowed = resolve(data_dir);
-                let secrets: Vec<PathBuf> = config_dirs.iter().map(|d| resolve(d)).collect();
+                let secrets: Vec<PathBuf> = credentials.iter().map(|d| resolve(d)).collect();
                 for (name, table) in tables {
                     if table.get("type").and_then(serde_json::Value::as_str) == Some("memory") {
                         continue;
@@ -274,10 +293,14 @@ fn refuse_out_of_scope_keys(
                     };
                     let file = Path::new(file);
                     let resolved = resolve(file);
-                    if !file.is_absolute()
-                        || !resolved.starts_with(&allowed)
-                        || secrets.iter().any(|s| resolved.starts_with(s))
-                    {
+                    if file.is_absolute() && secrets.iter().any(|s| resolved.starts_with(s)) {
+                        return refuse(format!(
+                            "declares enrichment table '{name}' loading {}, which holds a Kafka \
+                             credential",
+                            file.display()
+                        ));
+                    }
+                    if !file.is_absolute() || !resolved.starts_with(&allowed) {
                         return refuse(format!(
                             "declares enrichment table '{name}' loading {}, which is outside \
                              transforms.data_dir {}",
@@ -492,7 +515,7 @@ mod tests {
             ),
             (
                 table("{data}/../config/.secrets/sink_sasl_password"),
-                Some("outside transforms.data_dir"),
+                Some("holds a Kafka credential"),
             ),
             (
                 table("{data}/link.csv"),
@@ -529,6 +552,64 @@ mod tests {
                 // Names the outcome only: the assembled config carries credentials.
                 (Ok(_), Some(why)) => panic!("{document}: assembled, expected a {why} refusal"),
                 (Err(e), None) => panic!("{document}: refused: {e}"),
+            }
+        }
+    }
+
+    /// A mounted SASL directory or a TLS key inside `transforms.data_dir` is a
+    /// credential, not a table, wherever it sits.
+    #[test]
+    fn a_table_loading_a_credential_inside_the_data_dir_is_refused() {
+        let work = TempDir::new().unwrap();
+        let data = work.path().join("data");
+        let kafka = data.join("kafka");
+        let transforms = work.path().join("transforms");
+        for dir in [&kafka, &transforms] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        for file in ["username", "password"] {
+            fs::write(kafka.join(file), "x\n").unwrap();
+        }
+        fs::write(data.join("client.key"), "key\n").unwrap();
+        fs::write(data.join("zones.csv"), "abbreviation\nAEST\n").unwrap();
+
+        for (table, side, refused) in [
+            ("kafka/password", "source", true),
+            ("kafka/username", "sink", true),
+            ("client.key", "source", true),
+            ("client.key", "sink", true),
+            ("zones.csv", "source", false),
+        ] {
+            fs::write(
+                transforms.join("t.yaml"),
+                format!(
+                    "enrichment_tables:\n  t:\n    type: file\n    file:\n      path: {}\n      \
+                     encoding:\n        type: csv\n",
+                    data.join(table).display()
+                ),
+            )
+            .unwrap();
+            let mut config = test_config(Some(transforms.to_string_lossy().into_owned()));
+            config.transforms.data_dir = data.to_string_lossy().into_owned();
+            let (sasl, tls) = if side == "source" {
+                (&mut config.source.sasl, &mut config.source.tls)
+            } else {
+                (&mut config.sink.sasl, &mut config.sink.tls)
+            };
+            sasl.enabled = true;
+            sasl.secret_dir = Some(kafka.to_string_lossy().into_owned());
+            tls.enabled = true;
+            tls.key_file = Some(data.join("client.key").to_string_lossy().into_owned());
+
+            let out = work.path().join("out");
+            match (assemble(&config, &out), refused) {
+                (Err(e), true) => assert!(
+                    e.to_string().contains("credential"),
+                    "{side} {table}: refused for the wrong reason: {e}"
+                ),
+                (Ok(_), false) => {}
+                (Ok(_), true) => panic!("{side} {table}: a table reads a credential, and it passed"),
+                (Err(e), false) => panic!("{side} {table}: refused: {e}"),
             }
         }
     }
