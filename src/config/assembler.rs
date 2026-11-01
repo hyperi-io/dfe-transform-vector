@@ -153,8 +153,8 @@ fn write_yaml(dir: &Path, filename: &str, value: &serde_json::Value) -> Result<(
 /// `--config-dir` does not recurse into subdirectories. Each file is
 /// prefixed with `50_` to sort after source (00_) and before sink (90_).
 ///
-/// Injects auto-wired `inputs` into transform components that don't have
-/// explicit inputs. Vector requires every transform to declare its inputs.
+/// Writes every transform's wired `inputs` into it. Vector requires every
+/// transform to declare its inputs.
 fn write_transforms(
     dir: &Path,
     transforms: &[LoadedTransform],
@@ -340,7 +340,9 @@ fn resolve(path: &Path) -> PathBuf {
     folded
 }
 
-/// Inject auto-wired `inputs` into transform components that lack them.
+/// Write each transform's wired `inputs` over whatever the file declared, so
+/// Vector reads the topology the DAG check passed: `source` as `dfe_source`,
+/// and an empty or missing list wired from the source.
 fn inject_wired_inputs(
     yaml: &mut serde_json::Value,
     wired_inputs: &std::collections::HashMap<&str, &[String]>,
@@ -353,12 +355,10 @@ fn inject_wired_inputs(
         for (label, component_val) in entries.iter_mut() {
             if let Some(inputs) = wired_inputs.get(label.as_str())
                 && let Value::Object(component_map) = component_val
-                && !component_map.contains_key(INPUTS_KEY)
             {
                 let inputs_val =
                     Value::Array(inputs.iter().map(|s| Value::String(s.clone())).collect());
                 component_map.insert(INPUTS_KEY.to_string(), inputs_val);
-                debug!(label = %label, "injected auto-wired inputs into transform");
             }
         }
     }
@@ -611,6 +611,41 @@ mod tests {
                 (Ok(_), true) => panic!("{side} {table}: a table reads a credential, and it passed"),
                 (Err(e), false) => panic!("{side} {table}: refused: {e}"),
             }
+        }
+    }
+
+    /// Vector reads the file the assembler writes, so the wiring the DAG check
+    /// passed is what that file carries: `source` as `dfe_source`, and an empty
+    /// or missing list wired from the source.
+    #[test]
+    fn the_written_transform_carries_the_wired_inputs() {
+        for (inputs, want) in [
+            ("inputs: [source]\n    ", vec!["dfe_source"]),
+            ("inputs: [source, dfe_source]\n    ", vec!["dfe_source", "dfe_source"]),
+            ("inputs: []\n    ", vec!["dfe_source"]),
+            ("", vec!["dfe_source"]),
+            ("inputs: dfe_source\n    ", vec!["dfe_source"]),
+        ] {
+            let transforms_dir = TempDir::new().unwrap();
+            fs::write(
+                transforms_dir.path().join("01_parse.yaml"),
+                format!("transforms:\n  parse:\n    type: remap\n    {inputs}source: '.x = 1'\n"),
+            )
+            .unwrap();
+            let output = TempDir::new().unwrap();
+            let config = test_config(Some(transforms_dir.path().to_string_lossy().into_owned()));
+            assemble(&config, output.path()).unwrap();
+
+            let written = fs::read_to_string(output.path().join("50_000_01_parse.yaml")).unwrap();
+            let yaml: serde_json::Value =
+                scalo::yaml::from_str(&written, "t.yaml", scalo::yaml::Profile::Config).unwrap();
+            let got: Vec<&str> = yaml["transforms"]["parse"]["inputs"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{inputs:?}: no inputs list in {written}"))
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            assert_eq!(got, want, "{inputs:?}: {written}");
         }
     }
 
