@@ -608,7 +608,9 @@ mod tests {
                     "{side} {table}: refused for the wrong reason: {e}"
                 ),
                 (Ok(_), false) => {}
-                (Ok(_), true) => panic!("{side} {table}: a table reads a credential, and it passed"),
+                (Ok(_), true) => {
+                    panic!("{side} {table}: a table reads a credential, and it passed")
+                }
                 (Err(e), false) => panic!("{side} {table}: refused: {e}"),
             }
         }
@@ -621,7 +623,10 @@ mod tests {
     fn the_written_transform_carries_the_wired_inputs() {
         for (inputs, want) in [
             ("inputs: [source]\n    ", vec!["dfe_source"]),
-            ("inputs: [source, dfe_source]\n    ", vec!["dfe_source", "dfe_source"]),
+            (
+                "inputs: [source, dfe_source]\n    ",
+                vec!["dfe_source", "dfe_source"],
+            ),
             ("inputs: []\n    ", vec!["dfe_source"]),
             ("", vec!["dfe_source"]),
             ("inputs: dfe_source\n    ", vec!["dfe_source"]),

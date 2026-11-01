@@ -379,10 +379,34 @@ fn config_validation_keeps_the_bridge_legs_on_loopback() {
     for (direct_in, direct_out, to_vector, from_vector, refused) in [
         (true, true, "127.0.0.1:6100", "127.0.0.1:6101", None),
         (true, true, "[::1]:6100", "[::1]:6101", None),
-        (true, true, "0.0.0.0:6100", "127.0.0.1:6101", Some("bridge.to_vector")),
-        (true, true, "127.0.0.1:6100", "10.0.0.5:6101", Some("bridge.from_vector")),
-        (true, false, "[::]:6100", "127.0.0.1:6101", Some("bridge.to_vector")),
-        (false, true, "127.0.0.1:6100", "0.0.0.0:6101", Some("bridge.from_vector")),
+        (
+            true,
+            true,
+            "0.0.0.0:6100",
+            "127.0.0.1:6101",
+            Some("bridge.to_vector"),
+        ),
+        (
+            true,
+            true,
+            "127.0.0.1:6100",
+            "10.0.0.5:6101",
+            Some("bridge.from_vector"),
+        ),
+        (
+            true,
+            false,
+            "[::]:6100",
+            "127.0.0.1:6101",
+            Some("bridge.to_vector"),
+        ),
+        (
+            false,
+            true,
+            "127.0.0.1:6100",
+            "0.0.0.0:6101",
+            Some("bridge.from_vector"),
+        ),
         (false, true, "0.0.0.0:6100", "127.0.0.1:6101", None),
         (false, false, "0.0.0.0:6100", "0.0.0.0:6101", None),
     ] {
