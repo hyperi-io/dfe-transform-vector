@@ -16,13 +16,14 @@
 //!
 //! **Backend selection** (automatic — see `tests/common/mod.rs`):
 //! 1. Live cluster from `.env` (preferred — realistic multi-broker setup, faster).
-//! 2. Testcontainers Apache Kafka (fallback when live is unavailable).
+//! 2. The run's shared Apache Kafka broker (fallback when live is unavailable).
 //! 3. Skipped entirely if neither is available.
 //!
 //! Requires Vector binary. Skips gracefully if not found.
 //!
 //! **Cleanup:** Vector subprocess uses `kill_on_drop(true)` — guaranteed
-//! termination on any exit path. Kafka containers stop on fixture drop.
+//! termination on any exit path. scalo removes the broker containers when the
+//! run ends.
 //! Topics have unique nanosecond suffixes so residuals do not affect repeat
 //! runs; explicit delete runs on the happy path.
 //!

@@ -145,10 +145,11 @@ tokio-test = ">=0.4.6, <0.5"
 flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
-testcontainers = ">=0.27.3, <0.28"
-testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
+# transport-kafka-test-support is the run's shared broker container the Kafka
+# tests use.
 scalo = { version = ">=2.14.24, <3", features = [
     "transport-kafka",
+    "transport-kafka-test-support",
 ] }
 # The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
 dotenvy = ">=0.15.7, <0.16"

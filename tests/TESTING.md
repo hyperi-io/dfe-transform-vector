@@ -6,17 +6,20 @@ There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
 
 1. **A live cluster**, if `KAFKA_BROKERS` (and any SASL settings) in `.env`
    authenticate against it. Faster, and a real multi-broker cluster.
-2. **Testcontainers**, otherwise -- an ephemeral single-node Apache Kafka the
-   fixture starts and stops.
+2. **The run's shared broker**, otherwise -- one single-node Apache Kafka that
+   scalo's `shared_service` starts for the whole run and every test process
+   joins.
 3. **Skip**, when neither is available. In CI that is an assertion failure
    instead: a test that skips when its environment disappears is not a gate.
 
-`KafkaFixture::hermetic` skips step 1 outright and always starts its own
-container. Anything using the real DFE topic names takes that path, because
-`filebeat_land` on a shared broker is somebody else's data.
+`KafkaFixture::hermetic` skips step 1 outright and takes the shared broker.
+Anything using the real DFE topic names takes that path, because
+`filebeat_land` on a shared live broker is somebody else's data.
+`KafkaFixture::scram` starts a SCRAM-only broker the test holds alone.
 
-Every container carries the repo, the suite, the service and the owning pid as
-labels, and a name derived from the test. Sweep leftovers with:
+scalo names every container under the suite prefix, labels it with the repo,
+the suite, the service and the owner, and removes it when the run ends. Sweep
+leftovers from a killed run with:
 
 ```bash
 docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vector-integration)

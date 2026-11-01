@@ -236,8 +236,8 @@ for five minutes on each arch. That covers the supervisor binary and nothing
 else -- Vector's own per-record work happens in the binary the image downloads,
 which this repo does not compile.
 
-The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it starts
-its own broker container. It grades the filebeat corpus against elastic's
+The filebeat acceptance case (`e2e::filebeat_kafka`) runs by default -- it runs
+on the test run's own broker container. It grades the filebeat corpus against elastic's
 golden events, and both live in dfe-transform-vrl, so it skips with a message
 unless that repo is checked out beside this one or `DFE_TRANSFORM_VRL_DIR`
 points at it.
