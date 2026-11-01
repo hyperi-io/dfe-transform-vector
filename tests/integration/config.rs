@@ -372,6 +372,44 @@ fn config_validation_catches_offset_store_in_the_shared_profile() {
     );
 }
 
+/// Each bridge leg takes unauthenticated pushes, so only loopback may bind it,
+/// and only on a direct end of the pipeline.
+#[test]
+fn config_validation_keeps_the_bridge_legs_on_loopback() {
+    for (direct_in, direct_out, to_vector, from_vector, refused) in [
+        (true, true, "127.0.0.1:6100", "127.0.0.1:6101", None),
+        (true, true, "[::1]:6100", "[::1]:6101", None),
+        (true, true, "0.0.0.0:6100", "127.0.0.1:6101", Some("bridge.to_vector")),
+        (true, true, "127.0.0.1:6100", "10.0.0.5:6101", Some("bridge.from_vector")),
+        (true, false, "[::]:6100", "127.0.0.1:6101", Some("bridge.to_vector")),
+        (false, true, "127.0.0.1:6100", "0.0.0.0:6101", Some("bridge.from_vector")),
+        (false, true, "0.0.0.0:6100", "127.0.0.1:6101", None),
+        (false, false, "0.0.0.0:6100", "0.0.0.0:6101", None),
+    ] {
+        let mut config = full_config(None);
+        if direct_in {
+            config.source.transport = Transport::Direct;
+            config.source.listen = "0.0.0.0:6000".into();
+        }
+        if direct_out {
+            config.sink.transport = Transport::Direct;
+            config.sink.endpoint = "http://dfe-loader:6000".into();
+        }
+        config.bridge.to_vector = to_vector.into();
+        config.bridge.from_vector = from_vector.into();
+        let case = format!("in={direct_in} out={direct_out} {to_vector} {from_vector}");
+        match (config.validate(), refused) {
+            (Ok(()), None) => {}
+            (Err(e), Some(field)) => assert!(
+                e.to_string().contains(field) && e.to_string().contains("loopback"),
+                "{case}: refused for the wrong reason: {e}"
+            ),
+            (Ok(()), Some(field)) => panic!("{case}: {field} binds off loopback, and it passed"),
+            (Err(e), None) => panic!("{case}: refused: {e}"),
+        }
+    }
+}
+
 #[test]
 fn config_validation_catches_invalid_sasl_mechanism() {
     let mut config = full_config(None);

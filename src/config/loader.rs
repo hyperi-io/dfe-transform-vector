@@ -312,6 +312,20 @@ fn validate_bind(field: &str, value: &str) -> Result<()> {
     )))
 }
 
+/// Reject a bridge leg bound anywhere but loopback: either leg takes
+/// unauthenticated pushes, so off loopback it is an intake that skips the
+/// pod's own.
+fn validate_loopback_bind(field: &str, value: &str) -> Result<()> {
+    validate_bind(field, value)?;
+    match value.parse::<std::net::SocketAddr>() {
+        Ok(addr) if addr.ip().is_loopback() => Ok(()),
+        _ => Err(crate::Error::Validation(format!(
+            "{field} must be a loopback address (got '{value}'): the bridge leg takes \
+             unauthenticated pushes from inside the pod only"
+        ))),
+    }
+}
+
 /// Whether librdkafka reads `value` as a true boolean: `true` or `t` in any
 /// case, or `1`.
 fn librdkafka_true(value: &str) -> bool {
@@ -1377,10 +1391,10 @@ impl Config {
             return Ok(());
         }
         if direct_in {
-            validate_bind("bridge.to_vector", &self.bridge.to_vector)?;
+            validate_loopback_bind("bridge.to_vector", &self.bridge.to_vector)?;
         }
         if direct_out {
-            validate_bind("bridge.from_vector", &self.bridge.from_vector)?;
+            validate_loopback_bind("bridge.from_vector", &self.bridge.from_vector)?;
         }
         if direct_in && direct_out && self.bridge.to_vector == self.bridge.from_vector {
             return Err(crate::Error::Validation(
