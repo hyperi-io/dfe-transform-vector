@@ -1,5 +1,12 @@
 # Testing
 
+The house rules are hyperi-ai's testing standard, `standards/universal/testing.md`.
+
+## Tiers
+
+- **Core** runs on every push and PR: `cargo nextest run --all-features`. Unit, integration, smoke, and the e2e cases that are not `#[ignore]`.
+- **Full** runs nightly and before every release (`test.full.required_for_release` in `.hyperi-ci.yaml`): core plus every `#[ignore]` case, `cargo nextest run --all-features --run-ignored all`. Those are the `vector_validate` cases and the opt-in `e2e::kafka` pipelines.
+
 ## Backends
 
 There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
@@ -8,7 +15,11 @@ There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
    authenticate against it. Faster, and a real multi-broker cluster.
 2. **The run's shared broker**, otherwise -- one single-node Apache Kafka that
    scalo's `shared_service` starts for the whole run and every test process
-   joins.
+   joins. The image is scalo's `KAFKA_IMAGE`,
+   `apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837`
+   as of scalo 2.14.25. The first test that needs it starts it on the local
+   Docker daemon, locally and in CI alike, and a watcher removes it when the
+   run's last test process exits.
 3. **Skip**, when neither is available. In CI that is an assertion failure
    instead: a test that skips when its environment disappears is not a gate.
 
@@ -50,14 +61,13 @@ cargo nextest run --test e2e
 cargo nextest run --run-ignored all
 ```
 
-Opt-in (`#[ignore]`) cases are the ones that need a Vector binary to prove
-something about Vector itself: `vector_validate` runs the real validator over
-each assembled config, and `e2e::kafka` drives a bare Vector process against a
-broker.
+Opt-in (`#[ignore]`) cases are the full tier: `vector_validate` runs the real
+validator over each assembled config, and two `e2e::kafka` pipelines drive a
+bare Vector process against a broker.
 
 ## The WS21 acceptance case
 
-`e2e::filebeat_kafka` runs by default -- it owns its broker, so it is safe to.
+`e2e::filebeat_kafka` runs in core, on the shared broker, which no live cluster's data shares.
 It seeds the elastic/integrations filebeat corpus onto `filebeat_land`, runs the
 shipped binary over it, and grades `filebeat_load` against elastic's golden
 events.
