@@ -111,26 +111,26 @@ scalo's runtime serves the scaling pressure at `/scaling/pressure` and writes it
 See [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vector/blob/main/config.example.yaml)
 for a full annotated configuration.
 
-Key environment variable overrides (prefix `DFE_TRANSFORM_`):
+Key environment variable overrides (prefix `DFE_TRANSFORM_VECTOR_`):
 
 | Variable | Description |
 |----------|-------------|
-| `DFE_TRANSFORM_SOURCE_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
-| `DFE_TRANSFORM_SOURCE_LISTEN` | Push listener bind address (direct) |
-| `DFE_TRANSFORM_SOURCE__BROKERS` | Kafka source broker addresses |
-| `DFE_TRANSFORM_SOURCE__TOPICS` | Source topic list |
-| `DFE_TRANSFORM_SOURCE__GROUP_ID` | Consumer group ID |
-| `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}` | Kafka SASL credentials per endpoint; the chart mounts the Kafka Secret's `username` and `password` into all four |
-| `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` | Sets `source.tls.enabled` and `sink.tls.enabled` true when the value contains `SSL`; never sets them false |
-| `DFE_TRANSFORM_SINK_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
-| `DFE_TRANSFORM_SINK_ENDPOINT` | Next stage's Push listener (direct) |
-| `DFE_TRANSFORM_SINK__BROKERS` | Kafka sink broker addresses |
-| `DFE_TRANSFORM_SINK__TOPIC` | Sink output topic, and the routing key on direct |
-| `DFE_TRANSFORM_BRIDGE_TO_VECTOR` | Where Vector accepts records (direct, loopback) |
-| `DFE_TRANSFORM_BRIDGE_FROM_VECTOR` | Where the supervisor accepts them back (direct, loopback) |
-| `DFE_TRANSFORM_PIPELINE__NAME` | Pipeline name |
-| `DFE_TRANSFORM_TRANSFORMS__DIR` | Transform YAML directory |
-| `DFE_TRANSFORM_LOGGING__LEVEL` | Log level (trace/debug/info/warn/error) |
+| `DFE_TRANSFORM_VECTOR_SOURCE_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
+| `DFE_TRANSFORM_VECTOR_SOURCE_LISTEN` | Push listener bind address (direct) |
+| `DFE_TRANSFORM_VECTOR_SOURCE__BROKERS` | Kafka source broker addresses |
+| `DFE_TRANSFORM_VECTOR_SOURCE__TOPICS` | Source topic list |
+| `DFE_TRANSFORM_VECTOR_SOURCE__GROUP_ID` | Consumer group ID |
+| `DFE_TRANSFORM_VECTOR_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}` | Kafka SASL credentials per endpoint; the chart mounts the Kafka Secret's `username` and `password` into all four |
+| `DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL` | Sets `source.tls.enabled` and `sink.tls.enabled` true when the value contains `SSL`; never sets them false |
+| `DFE_TRANSFORM_VECTOR_SINK_TRANSPORT` | `bus` (or `kafka`) or `direct` (or `grpc`) |
+| `DFE_TRANSFORM_VECTOR_SINK_ENDPOINT` | Next stage's Push listener (direct) |
+| `DFE_TRANSFORM_VECTOR_SINK__BROKERS` | Kafka sink broker addresses |
+| `DFE_TRANSFORM_VECTOR_SINK__TOPIC` | Sink output topic, and the routing key on direct |
+| `DFE_TRANSFORM_VECTOR_BRIDGE_TO_VECTOR` | Where Vector accepts records (direct, loopback) |
+| `DFE_TRANSFORM_VECTOR_BRIDGE_FROM_VECTOR` | Where the supervisor accepts them back (direct, loopback) |
+| `DFE_TRANSFORM_VECTOR_PIPELINE__NAME` | Pipeline name |
+| `DFE_TRANSFORM_VECTOR_TRANSFORMS__DIR` | Transform YAML directory |
+| `DFE_TRANSFORM_VECTOR_LOGGING__LEVEL` | Log level (trace/debug/info/warn/error) |
 
 ### Hot-reload
 
@@ -178,7 +178,7 @@ metric.
 9598 is a loopback debug surface, not a scrape target. Nothing outside the pod
 needs it: no second Prometheus target, no PodMonitor selector, no published
 container port. Change the port with
-`DFE_TRANSFORM_METRICS__VECTOR_METRICS_ADDRESS` (or `metrics.vector_metrics_address`
+`DFE_TRANSFORM_VECTOR_METRICS__VECTOR_METRICS_ADDRESS` (or `metrics.vector_metrics_address`
 in the config file) and both the Vector sink and the wrapper's scrape follow it.
 
 The merge also feeds the app's own throughput counters, which otherwise read 0
@@ -330,7 +330,7 @@ What green does NOT mean:
 | Set `vector.version` in a deployment's config and forget it | Leave it unset, so the default reads `VECTOR_VERSION` | A committed chart once said 0.48.0 while the image baked 0.57.0, and only `version_check: warn` kept pods starting. Under `strict` that pairing refuses to start at all |
 | Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials and refuses a transform file declaring them |
 | Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs and `Debug`, and Vector reads the credential from files through its `directory` secret backend, so it never lands in the Vector config |
-| Put a `${VAR}` placeholder in a credential or a transform | Mount the secret and set `sasl.secret_dir`, or give the credential through `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`; read the environment in VRL with `get_env_var` | Vector 0.57+ expands no `${VAR}` without `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, so the placeholder reaches the broker as the password |
+| Put a `${VAR}` placeholder in a credential or a transform | Mount the secret and set `sasl.secret_dir`, or give the credential through `DFE_TRANSFORM_VECTOR_{SOURCE,SINK}_SASL_*`; read the environment in VRL with `get_env_var` | Vector 0.57+ expands no `${VAR}` without `--dangerously-allow-env-var-interpolation`, which the supervisor never passes, so the placeholder reaches the broker as the password |
 | Assume a config key you added is wired because it parses and validates | Prove it changes behaviour, and add it to the standing check that every committed config file loads | `metrics.address` and `logging.level` never left the struct. A config saying `metrics.address: 0.0.0.0:19099` still listened on 9090, so a deployment moving the metrics port lost every probe |
 | Set `enable.auto.commit: false` here, as the shared DFE consumer baseline does | Leave auto-commit on | Vector's kafka source only stores offsets and leaves librdkafka's commit timer to flush them, and that timer is armed only when auto-commit is on. Consumer lag sat at 72 across a quiet 90-second window while the app's own metrics said it had processed those same 72 events |
 | Read `/readyz` as "carrying traffic" | Read it as "the child was alive 500ms after spawn" | It once answered an unconditional 200 because nothing published a readiness signal, so Vector could crash and restart hundreds of times with the pod still Ready and zero restarts |

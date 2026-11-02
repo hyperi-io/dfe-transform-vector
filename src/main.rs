@@ -113,7 +113,7 @@ impl ServiceApp for App {
 
     #[allow(clippy::unnecessary_literal_bound)]
     fn env_prefix(&self) -> &str {
-        "DFE_TRANSFORM"
+        "DFE_TRANSFORM_VECTOR"
     }
 
     fn version_info(&self) -> VersionInfo {
@@ -243,7 +243,7 @@ async fn main() {
     // `run_app` binds the metrics listener on `CommonArgs::effective_metrics_addr()`
     // and builds the logger from `effective_log_level()`/`effective_log_format()`.
     // Unset, those fall through to scalo's config cascade, which reads `logger.*`
-    // rather than this app's `logging.*` and none of the flat `DFE_TRANSFORM_*`
+    // rather than this app's `logging.*` and none of the flat `DFE_TRANSFORM_VECTOR_*`
     // overrides. Fill the args from the loaded config first; the flags and
     // their env vars are already set by then, so they still win.
     //
@@ -568,8 +568,8 @@ async fn run_transform_service(
 mod tests {
     use super::*;
 
-    /// The env opt-out the charts render from the shared transform prefix.
-    const ENABLED_VAR: &str = "DFE_TRANSFORM_VERSION_CHECK__ENABLED";
+    /// The env opt-out the charts render under this app's own prefix.
+    const ENABLED_VAR: &str = "DFE_TRANSFORM_VECTOR_VERSION_CHECK__ENABLED";
 
     /// Serialises the tests that set process-wide env vars.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
