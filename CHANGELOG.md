@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.59](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.58...v1.0.59) (2026-11-02)
+
+### Bug Fixes
+
+* **vector:** restore curl in the runtime image ([6998135](https://github.com/hyperi-io/dfe-transform-vector/commit/6998135ee95c0d6149daab78b4fa9b3032f1e69b))
+
 ## [1.0.58](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.57...v1.0.58) (2026-11-01)
 
 ### Bug Fixes
