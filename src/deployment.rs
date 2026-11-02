@@ -149,7 +149,13 @@ pub fn contract() -> DeploymentContract {
         // defaulting to debian:trixie-slim. NOT pinned per-app -- the ubuntu
         // pin was a stale pre-trixie-cutover leftover.
         base_image: base_image_from_cascade(),
-        native_deps: NativeDepsContract::default(),
+        native_deps: {
+            // The wait-for-engine init container probes /readyz with curl from this
+            // image, and the Vector layer downloads with it.
+            let mut deps = NativeDepsContract::default();
+            deps.apt_packages.push("curl".into());
+            deps
+        },
         image_profile: ImageProfile::default(),
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.

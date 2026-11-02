@@ -15,10 +15,13 @@ FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20b
 
 LABEL io.hyperi.profile="production"
 
+# Runtime shared libraries for dynamically-linked Rust crates.
 # Apt versions are unpinned because Debian drops superseded ones, so the digest-pinned base is what fixes the release.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
@@ -51,13 +54,8 @@ ARG VECTOR_VERSION=0.60.0
 ARG VECTOR_SHA256_AMD64=89a9f134dcc35a6fbba9cb8ad0fec2d4802657bba6cb1c374a30660ef9456bdc
 ARG VECTOR_SHA256_ARM64=1540662d8bc33af5afd287f821ba930417e0f3124073bc9db6a29c59dda88dbb
 ARG TARGETARCH
-# The production base carries no curl, so this layer installs it for the
-# download and purges it again. Apt versions are unpinned for the same reason
-# as the base layer's.
-# hadolint ignore=DL4006,DL3008
+# hadolint ignore=DL4006
 RUN set -eu \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends curl \
     && case "${TARGETARCH:-amd64}" in \
         amd64) ARCH=x86_64; VECTOR_SHA256="${VECTOR_SHA256_AMD64}" ;; \
         arm64) ARCH=aarch64; VECTOR_SHA256="${VECTOR_SHA256_ARM64}" ;; \
@@ -84,8 +82,6 @@ RUN set -eu \
         'directory, taken from the release archive itself.' \
         > /usr/share/doc/vector/README.hyperi \
     && rm -rf /tmp/vector.tar.gz "${VDIR}" \
-    && apt-get purge -y --auto-remove curl \
-    && rm -rf /var/lib/apt/lists/* \
     && /usr/local/bin/vector --version
 
 # Vector data and config directories
