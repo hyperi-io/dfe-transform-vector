@@ -91,11 +91,11 @@ Key differences:
 - **No inline VRL** — transforms are separate YAML files the wrapper loads from `config.transforms.dir` (the image's `/etc/dfe-transform-vector/transforms`) or lists in `config.transforms.files`
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
 - **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
-- **Kafka brokers** come from `DFE_TRANSFORM_SOURCE_BROKERS` and
-  `DFE_TRANSFORM_SINK_BROKERS`. A `${VAR}` in the config is not expanded:
+- **Kafka brokers** come from `DFE_TRANSFORM_VECTOR_SOURCE_BROKERS` and
+  `DFE_TRANSFORM_VECTOR_SINK_BROKERS`. A `${VAR}` in the config is not expanded:
   neither the wrapper nor Vector 0.57+ interpolates environment variables
 - **SASL credentials** come from the Kafka Secret through
-  `DFE_TRANSFORM_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}`, and the wrapper hands
+  `DFE_TRANSFORM_VECTOR_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}`, and the wrapper hands
   them to Vector's directory secret backend as owner-only files
 - **KEDA** scales on CPU, with no Kafka lag trigger and no
   TriggerAuthentication

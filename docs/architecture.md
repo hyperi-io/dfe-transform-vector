@@ -124,7 +124,7 @@ memory guard.
 **A failed bridge leg stops the process.** Its senders would otherwise retry for
 ever against a pod that stayed up, so the service shuts down and exits non-zero.
 
-**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks and outside every credential path (the config directory, a mounted `sasl.secret_dir`, a TLS key), and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_*` variables.
+**Transforms cannot reach the Kafka credentials.** Vector runs whatever a transform file declares, with read access to the credentials. So a transform file declares only `transforms` (never `lua`) and `enrichment_tables`, each table resolves inside `transforms.data_dir` after `..` and symlinks and outside every credential path (the config directory, a mounted `sasl.secret_dir`, a TLS key), and a `SECRET[...]` naming an assembler backend is refused. Vector also runs without the `DFE_TRANSFORM_VECTOR_*` variables.
 
 ## Health and metrics invariants
 
@@ -156,7 +156,7 @@ Vector config. The generated components name it `SECRET[<backend>.<key>]` and
 Vector's `directory` secret backend reads it from files: a mounted secret at
 `sasl.secret_dir`, or owner-only files the assembler writes under
 `<config_dir>/.secrets` from a credential given as text. The released chart
-takes the second path: its Kafka Secret arrives in `DFE_TRANSFORM_{SOURCE,SINK}_SASL_*`,
+takes the second path: its Kafka Secret arrives in `DFE_TRANSFORM_VECTOR_{SOURCE,SINK}_SASL_*`,
 and `<config_dir>` sits on the `run` writable path. Changing the type to look
 safer breaks authentication.
 
