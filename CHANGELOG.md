@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.60](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.59...v1.0.60) (2026-11-03)
+
+### Bug Fixes
+
+* **deps:** update pulldown-cmark to 0.13.6 ([668d37d](https://github.com/hyperi-io/dfe-transform-vector/commit/668d37dc12256c596534d84be6b5b0c0e6480e4c))
+* read env under DFE_TRANSFORM_VECTOR_ only ([#141](https://github.com/hyperi-io/dfe-transform-vector/issues/141)) ([06e2cbd](https://github.com/hyperi-io/dfe-transform-vector/commit/06e2cbdbc393c20ef16ceefd00503d2f0020faaa))
+
 ## [1.0.59](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.58...v1.0.59) (2026-11-02)
 
 ### Bug Fixes
