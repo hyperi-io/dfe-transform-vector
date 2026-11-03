@@ -779,7 +779,7 @@ impl Default for ScalingConfig {
 }
 
 /// Environment variable prefix for all config overrides.
-pub const ENV_PREFIX: &str = "DFE_TRANSFORM";
+pub const ENV_PREFIX: &str = "DFE_TRANSFORM_VECTOR";
 
 use scalo::config::flat_env::{self, ApplyFlatEnv, Normalize};
 
@@ -805,7 +805,7 @@ fn init_cascade(path: Option<&str>) -> Result<()> {
     }
 }
 
-/// Apply figment env var cascade (DFE_TRANSFORM_SECTION__FIELD with __ nesting).
+/// Apply figment env var cascade (DFE_TRANSFORM_VECTOR_SECTION__FIELD with __ nesting).
 fn apply_figment_env(config: &mut Config) -> Result<()> {
     use figment::Figment;
     use figment::providers::{Env, Serialized};
@@ -823,7 +823,7 @@ impl ApplyFlatEnv for Config {
     /// Apply explicit flat env var overrides (highest priority after CLI args).
     ///
     /// Env var names are the contract with dfe-engine — do not rename.
-    /// Format: `DFE_TRANSFORM_<SUFFIX>` (prefix passed by caller).
+    /// Format: `DFE_TRANSFORM_VECTOR_<SUFFIX>` (prefix passed by caller).
     fn apply_flat_env(&mut self, prefix: &str) {
         // DFE source shorthand
         if let Some(v) = flat_env::flat_env_string(prefix, "DFE_SOURCE") {
@@ -982,8 +982,8 @@ impl Config {
     ///
     /// Priority (highest to lowest):
     ///   1. CLI args (handled by caller)
-    ///   2. Flat env overrides (`DFE_TRANSFORM_SOURCE_BROKERS`, etc.)
-    ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_SOURCE__BROKERS`)
+    ///   2. Flat env overrides (`DFE_TRANSFORM_VECTOR_SOURCE_BROKERS`, etc.)
+    ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_VECTOR_SOURCE__BROKERS`)
     ///   4. `.env` in the working directory, read by scalo's cascade, never a parent's
     ///   5. Config YAML file
     ///   6. Hard-coded defaults
@@ -1031,7 +1031,7 @@ impl Config {
 
         init_cascade(loaded_from)?;
 
-        // Apply figment env vars (DFE_TRANSFORM_SECTION__FIELD)
+        // Apply figment env vars (DFE_TRANSFORM_VECTOR_SECTION__FIELD)
         apply_figment_env(&mut config)?;
 
         // Apply explicit flat env overrides (highest priority)
@@ -1092,7 +1092,7 @@ impl Config {
     /// `ServiceRuntime` binds [`CommonArgs::effective_metrics_addr`] and the
     /// logger is built from `effective_log_level`/`effective_log_format`. Those
     /// fall through to scalo's config cascade, which reads `logger.*` rather
-    /// than `logging.*` and none of the flat `DFE_TRANSFORM_*` overrides -- so
+    /// than `logging.*` and none of the flat `DFE_TRANSFORM_VECTOR_*` overrides -- so
     /// a value set here reaches nothing unless it is put where the resolvers
     /// look.
     ///
@@ -1455,7 +1455,7 @@ impl Config {
                 return Err(crate::Error::Validation(format!(
                     "{prefix}.{field} holds a '${{...}}' placeholder, which nothing expands: \
                      Vector reads it literally. Set the credential itself (the \
-                     DFE_TRANSFORM_{side}_SASL_{upper} environment variable does), or point \
+                     DFE_TRANSFORM_VECTOR_{side}_SASL_{upper} environment variable does), or point \
                      {prefix}.secret_dir at a directory holding username and password files",
                     side = prefix
                         .split('.')

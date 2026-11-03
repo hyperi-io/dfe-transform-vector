@@ -144,7 +144,7 @@ async fn the_running_supervisor_exports_the_scaling_pressure_gauge() {
         .arg(&metrics_addr)
         .arg("run")
         // No phone-home from a test run, and no .env from the checkout.
-        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
+        .env("DFE_TRANSFORM_VECTOR_VERSION_CHECK__ENABLED", "false")
         .current_dir(dir.path())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())

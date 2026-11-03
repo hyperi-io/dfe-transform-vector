@@ -82,7 +82,7 @@ pub fn vector_args(config_dir: &Path) -> Vec<std::ffi::OsString> {
 }
 
 /// A command for the Vector binary at `binary`, without this process's own
-/// `DFE_TRANSFORM_*` variables.
+/// `DFE_TRANSFORM_VECTOR_*` variables.
 ///
 /// Those carry the Kafka credentials, and VRL's `get_env_var` hands Vector's
 /// environment to any transform. Vector reads the credentials from its secret
@@ -410,8 +410,11 @@ mod tests {
         // SAFETY: nextest runs each test in its own process, and nothing else
         // in this one touches the environment.
         unsafe {
-            std::env::set_var("DFE_TRANSFORM_SINK_SASL_PASSWORD", "probe-credential");
-            std::env::set_var("DFE_TRANSFORM_PROBE_OTHER", "probe-other");
+            std::env::set_var(
+                "DFE_TRANSFORM_VECTOR_SINK_SASL_PASSWORD",
+                "probe-credential",
+            );
+            std::env::set_var("DFE_TRANSFORM_VECTOR_PROBE_OTHER", "probe-other");
             std::env::set_var("PROBE_OPERATOR_VARIABLE", "kept");
         }
         let dir = tempfile::tempdir().unwrap();
@@ -451,7 +454,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("the {argv0} run wrote no environment: {e}"));
             assert!(
                 !seen.contains("probe-credential") && !seen.contains("probe-other"),
-                "the {argv0} run saw a DFE_TRANSFORM_ variable"
+                "the {argv0} run saw a DFE_TRANSFORM_VECTOR_ variable"
             );
             assert!(
                 seen.contains("PROBE_OPERATOR_VARIABLE=kept"),

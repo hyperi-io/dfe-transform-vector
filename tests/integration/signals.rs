@@ -40,7 +40,7 @@ async fn a_burst_of_sighups_never_holds_up_sigterm() {
         .arg("--metrics-addr")
         .arg(&metrics_addr)
         .arg("run")
-        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
+        .env("DFE_TRANSFORM_VECTOR_VERSION_CHECK__ENABLED", "false")
         .current_dir(dir.path())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())

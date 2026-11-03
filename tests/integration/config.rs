@@ -607,23 +607,23 @@ fn config_env_override_flat() {
 
     // SAFETY: `env_write_guard` excludes every other reader and writer of the
     // config environment for the life of `_exclusive`.
-    unsafe { std::env::set_var("DFE_TRANSFORM_PIPELINE_NAME", "env-override-test") };
+    unsafe { std::env::set_var("DFE_TRANSFORM_VECTOR_PIPELINE_NAME", "env-override-test") };
     let config = Config::load(None).unwrap();
-    unsafe { std::env::remove_var("DFE_TRANSFORM_PIPELINE_NAME") };
+    unsafe { std::env::remove_var("DFE_TRANSFORM_VECTOR_PIPELINE_NAME") };
 
     assert_eq!(config.pipeline.name, "env-override-test");
 }
 
-/// `config` with `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
+/// `config` with `DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
 /// or unset for `None`, through the flat env layer.
 fn with_security_protocol(config: Config, protocol: Option<&str>) -> Config {
     use scalo::config::flat_env::ApplyFlatEnv;
 
     with_vars(
-        &[("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", protocol)],
+        &[("DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL", protocol)],
         || {
             let mut config = config;
-            config.apply_flat_env("DFE_TRANSFORM");
+            config.apply_flat_env("DFE_TRANSFORM_VECTOR");
             config
         },
     )
@@ -673,16 +673,16 @@ fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
 }
 
 /// `full_config` through the flat env layer with
-/// `DFE_TRANSFORM_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`),
+/// `DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`),
 /// plus any other names in `extra`.
 fn with_secret_mechanism(mechanism: Option<&str>, extra: &[(&str, Option<&str>)]) -> Config {
     use scalo::config::flat_env::ApplyFlatEnv;
 
-    let mut vars = vec![("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", mechanism)];
+    let mut vars = vec![("DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM", mechanism)];
     vars.extend_from_slice(extra);
     with_vars(&vars, || {
         let mut config = full_config(None);
-        config.apply_flat_env("DFE_TRANSFORM");
+        config.apply_flat_env("DFE_TRANSFORM_VECTOR");
         config
     })
 }
@@ -766,25 +766,78 @@ fn an_unknown_secret_mechanism_is_refused_at_startup() {
 fn a_per_endpoint_mechanism_overrides_the_secret_one() {
     let config = with_secret_mechanism(
         Some("PLAIN"),
-        &[("DFE_TRANSFORM_SINK_SASL_MECHANISM", Some("scram_sha_256"))],
+        &[(
+            "DFE_TRANSFORM_VECTOR_SINK_SASL_MECHANISM",
+            Some("scram_sha_256"),
+        )],
     );
 
     assert_eq!(config.source.sasl.mechanism, "PLAIN");
     assert_eq!(config.sink.sasl.mechanism, "scram_sha_256");
 }
 
-/// `config-check` run by the binary from `dir`, returning what it printed.
-fn config_check_in(dir: &std::path::Path) -> String {
+/// `config-check` run by the binary from `dir` with `vars` set, returning what it printed.
+fn config_check_with_env(dir: &std::path::Path, vars: &[(&str, &str)]) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))
         .arg("config-check")
         .current_dir(dir)
-        .env_remove("DFE_TRANSFORM_PIPELINE_NAME")
-        .env_remove("DFE_TRANSFORM_SINK_TOPIC")
+        .env_remove("DFE_TRANSFORM_VECTOR_PIPELINE_NAME")
+        .env_remove("DFE_TRANSFORM_VECTOR_SINK_TOPIC")
+        .envs(vars.iter().copied())
         .output()
         .expect("the binary runs");
     let printed = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "config-check failed:\n{printed}");
     printed
+}
+
+/// `config-check` run by the binary from `dir`, returning what it printed.
+fn config_check_in(dir: &std::path::Path) -> String {
+    config_check_with_env(dir, &[])
+}
+
+/// The binary reads `DFE_TRANSFORM_VECTOR_` names and ignores the `DFE_TRANSFORM_` ones
+/// the app shared with dfe-transform-vrl: flat, `__` nested and `VECTOR_` keys alike.
+#[test]
+fn only_the_dfe_transform_vector_prefix_reaches_the_config() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join("config.yaml"),
+        "sink:\n  topic: from_the_file\n",
+    )
+    .expect("config file");
+
+    let printed = config_check_with_env(
+        dir.path(),
+        &[
+            ("DFE_TRANSFORM_VECTOR_PIPELINE_NAME", "new_pipeline"),
+            ("DFE_TRANSFORM_VECTOR_SINK__TOPIC", "new_topic"),
+            ("DFE_TRANSFORM_VECTOR_VECTOR_BINARY", "/new/vector"),
+        ],
+    );
+    for expected in ["new_pipeline", "new_topic", "/new/vector"] {
+        assert!(printed.contains(expected), "{expected} was not read");
+    }
+
+    let printed = config_check_with_env(
+        dir.path(),
+        &[
+            ("DFE_TRANSFORM_PIPELINE_NAME", "old_pipeline"),
+            ("DFE_TRANSFORM_SINK__TOPIC", "old_topic"),
+            ("DFE_TRANSFORM_SOURCE_BROKERS", "old-broker:9092"),
+            ("DFE_TRANSFORM_VECTOR_BINARY", "/old/vector"),
+            ("DFE_TRANSFORM_VRL_SINK_TOPIC", "vrl_topic"),
+        ],
+    );
+    for ignored in [
+        "old_pipeline",
+        "old_topic",
+        "old-broker",
+        "/old/vector",
+        "vrl_topic",
+    ] {
+        assert!(!printed.contains(ignored), "{ignored} was read");
+    }
 }
 
 /// The binary reads the `.env` in its working directory and no other.
@@ -803,7 +856,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     .expect("project config");
     fs::write(
         root.path().join(".env"),
-        "DFE_TRANSFORM_PIPELINE_NAME=from_parent_dotenv\n",
+        "DFE_TRANSFORM_VECTOR_PIPELINE_NAME=from_parent_dotenv\n",
     )
     .expect("parent .env");
 
@@ -816,7 +869,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     // The project's own .env still loads.
     fs::write(
         project.join(".env"),
-        "DFE_TRANSFORM_SINK_TOPIC=from_project_dotenv\n",
+        "DFE_TRANSFORM_VECTOR_SINK_TOPIC=from_project_dotenv\n",
     )
     .expect("project .env");
     let printed = config_check_in(&project);
@@ -1667,10 +1720,10 @@ fn a_config_file_may_name_the_transport_grpc_or_kafka() {
         // Only the file may set the transport here.
         with_vars(
             &[
-                ("DFE_TRANSFORM_SOURCE_TRANSPORT", None),
-                ("DFE_TRANSFORM_SINK_TRANSPORT", None),
-                ("DFE_TRANSFORM_SOURCE__TRANSPORT", None),
-                ("DFE_TRANSFORM_SINK__TRANSPORT", None),
+                ("DFE_TRANSFORM_VECTOR_SOURCE_TRANSPORT", None),
+                ("DFE_TRANSFORM_VECTOR_SINK_TRANSPORT", None),
+                ("DFE_TRANSFORM_VECTOR_SOURCE__TRANSPORT", None),
+                ("DFE_TRANSFORM_VECTOR_SINK__TRANSPORT", None),
             ],
             || Config::load(Some(path.to_str().unwrap())),
         )

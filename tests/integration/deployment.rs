@@ -20,7 +20,7 @@ fn contract_produces_valid_structure() {
 
     assert_eq!(c.app_name, "dfe-transform-vector");
     assert_eq!(c.binary_name, "dfe-transform-vector");
-    assert_eq!(c.env_prefix, "DFE_TRANSFORM");
+    assert_eq!(c.env_prefix, "DFE_TRANSFORM_VECTOR");
     assert_eq!(c.metric_prefix, "transform_vector");
     assert_eq!(c.metrics_port, 9090);
     // base_image is resolved via the scalo cascade (deployment.base_image),
@@ -80,11 +80,14 @@ fn contract_produces_valid_structure() {
     assert_eq!(
         env_vars,
         [
-            ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", "username"),
-            ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", "password"),
-            ("DFE_TRANSFORM_SINK_SASL_USERNAME", "username"),
-            ("DFE_TRANSFORM_SINK_SASL_PASSWORD", "password"),
-            ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", "sasl.mechanism"),
+            ("DFE_TRANSFORM_VECTOR_SOURCE_SASL_USERNAME", "username"),
+            ("DFE_TRANSFORM_VECTOR_SOURCE_SASL_PASSWORD", "password"),
+            ("DFE_TRANSFORM_VECTOR_SINK_SASL_USERNAME", "username"),
+            ("DFE_TRANSFORM_VECTOR_SINK_SASL_PASSWORD", "password"),
+            (
+                "DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM",
+                "sasl.mechanism"
+            ),
         ]
     );
 
@@ -98,7 +101,7 @@ fn contract_produces_valid_structure() {
 /// The chart mounts a Secret under every declared name, so a name the config
 /// never reads leaves the credential silently unused.
 ///
-/// Each name spells the field it fills -- `DFE_TRANSFORM_SINK_SASL_PASSWORD` is
+/// Each name spells the field it fills -- `DFE_TRANSFORM_VECTOR_SINK_SASL_PASSWORD` is
 /// `sink.sasl.password` -- so a name read into the other endpoint fails here too.
 /// A shared `KAFKA_SASL_*` name spells the field on both.
 #[test]
@@ -469,5 +472,5 @@ fn contract_json_roundtrip() {
 
     // Must contain key fields
     assert!(json.contains("dfe-transform-vector"));
-    assert!(json.contains("DFE_TRANSFORM"));
+    assert!(json.contains("DFE_TRANSFORM_VECTOR"));
 }

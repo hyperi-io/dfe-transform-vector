@@ -8,10 +8,10 @@
 
 //! Access control for the process-global environment `Config::load` reads.
 //!
-//! `Config::load` merges `DFE_TRANSFORM_*` env vars over the file it is given,
+//! `Config::load` merges `DFE_TRANSFORM_VECTOR_*` env vars over the file it is given,
 //! and the environment is per-PROCESS. `cargo test` runs the whole integration
 //! binary's tests as threads in one process, so a test that sets
-//! `DFE_TRANSFORM_PIPELINE_NAME` changes what every concurrently running
+//! `DFE_TRANSFORM_VECTOR_PIPELINE_NAME` changes what every concurrently running
 //! `Config::load` returns -- three unrelated tests fail with a pipeline name
 //! they never asked for.
 //!
@@ -26,7 +26,7 @@ use std::sync::{RwLock, RwLockWriteGuard};
 use dfe_transform_vector::Result;
 use dfe_transform_vector::config::Config;
 
-/// Shared/exclusive access to the `DFE_TRANSFORM_*` environment.
+/// Shared/exclusive access to the `DFE_TRANSFORM_VECTOR_*` environment.
 static CONFIG_ENV: RwLock<()> = RwLock::new(());
 
 /// Load config while holding shared access to the environment.
@@ -38,7 +38,7 @@ pub fn load_config(path: Option<&str>) -> Result<Config> {
     Config::load(path)
 }
 
-/// Take exclusive access before setting or removing a `DFE_TRANSFORM_*` var.
+/// Take exclusive access before setting or removing a `DFE_TRANSFORM_VECTOR_*` var.
 ///
 /// Hold the returned guard across the whole set -> load -> remove sequence.
 pub fn env_write_guard() -> RwLockWriteGuard<'static, ()> {

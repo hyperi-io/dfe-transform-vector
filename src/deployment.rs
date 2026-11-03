@@ -43,7 +43,7 @@ pub fn contract() -> DeploymentContract {
             startup_budget_seconds: 120,
             ..HealthContract::default()
         },
-        env_prefix: "DFE_TRANSFORM".into(),
+        env_prefix: crate::config::loader::ENV_PREFIX.into(),
         metric_prefix: "transform_vector".into(),
         config_mount_path: "/etc/dfe-transform-vector/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
@@ -203,7 +203,7 @@ pub fn contract() -> DeploymentContract {
 /// `key_name` is distinct because the chart renders it as a values key. The
 /// security protocol is not here: the DFE Kafka user Secret carries no
 /// `security.protocol` key, so a required mount of it would stop the pod, and
-/// the deployment sets `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` as plain env.
+/// the deployment sets `DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL` as plain env.
 fn secrets() -> Vec<SecretGroupContract> {
     let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
         env_var: env_var.into(),
@@ -214,27 +214,27 @@ fn secrets() -> Vec<SecretGroupContract> {
         "kafka",
         vec![
             env(
-                "DFE_TRANSFORM_SOURCE_SASL_USERNAME",
+                "DFE_TRANSFORM_VECTOR_SOURCE_SASL_USERNAME",
                 "source-username",
                 "username",
             ),
             env(
-                "DFE_TRANSFORM_SOURCE_SASL_PASSWORD",
+                "DFE_TRANSFORM_VECTOR_SOURCE_SASL_PASSWORD",
                 "source-password",
                 "password",
             ),
             env(
-                "DFE_TRANSFORM_SINK_SASL_USERNAME",
+                "DFE_TRANSFORM_VECTOR_SINK_SASL_USERNAME",
                 "sink-username",
                 "username",
             ),
             env(
-                "DFE_TRANSFORM_SINK_SASL_PASSWORD",
+                "DFE_TRANSFORM_VECTOR_SINK_SASL_PASSWORD",
                 "sink-password",
                 "password",
             ),
             env(
-                "DFE_TRANSFORM_KAFKA_SASL_MECHANISM",
+                "DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM",
                 "mechanism",
                 "sasl.mechanism",
             ),

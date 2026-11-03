@@ -6,7 +6,7 @@
 #
 # Configuration cascade (highest to lowest priority):
 #   1. CLI args (--config, --log-level, etc.)
-#   2. Environment variables (DFE_TRANSFORM_*)
+#   2. Environment variables (DFE_TRANSFORM_VECTOR_*)
 #   3. .env file in the working directory (never a parent's)
 #   4. Config file (this file)
 #   5. Hard-coded defaults
@@ -57,17 +57,17 @@ dfe_source: "my_source"
 #   # Vector reads the credentials from files through its directory secret
 #   # backend, never from its own config. Point secret_dir at a directory
 #   # holding `username` and `password` files (a mounted Kubernetes Secret), or
-#   # set DFE_TRANSFORM_SOURCE_SASL_USERNAME / _PASSWORD instead. A ${VAR}
+#   # set DFE_TRANSFORM_VECTOR_SOURCE_SASL_USERNAME / _PASSWORD instead. A ${VAR}
 #   # placeholder is refused: Vector expands none.
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512, or PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
-#     # DFE_TRANSFORM_KAFKA_SASL_MECHANISM sets it for source and sink, and
-#     # DFE_TRANSFORM_SOURCE_SASL_MECHANISM / SINK_SASL_MECHANISM override it.
+#     # DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM sets it for source and sink, and
+#     # DFE_TRANSFORM_VECTOR_SOURCE_SASL_MECHANISM / SINK_SASL_MECHANISM override it.
 #     secret_dir: "/var/run/secrets/dfe-kafka"
 #   tls:
 #     enabled: true
-#     # DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
+#     # DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
 #     # turns this on for source and sink. No value turns it off.
 #   # librdkafka overrides — production defaults baked in, override here
 #   # librdkafka_options:
