@@ -173,8 +173,8 @@ fn emit_dockerfile_produces_valid_output() {
         "Dockerfile missing Vector version ARG — Vector binary install absent"
     );
     assert!(
-        dockerfile.contains("packages.timber.io/vector"),
-        "Dockerfile missing Vector tarball download from packages.timber.io"
+        dockerfile.contains("github.com/vectordotdev/vector/releases/download/"),
+        "Dockerfile missing Vector tarball download from the GitHub release"
     );
     assert!(
         dockerfile.contains("/usr/local/bin/vector --version"),

@@ -621,7 +621,7 @@ COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
 
 # Vector binary downloaded inside the build, per $TARGETARCH, with its
 # LICENSE / NOTICE / licenses tree copied from the same release archive
-RUN curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/..."
+RUN curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/..."
 
 RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms
 USER appuser
