@@ -279,16 +279,16 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 // renovate: datasource=github-releases depName=vectordotdev/vector
 pub const VECTOR_VERSION: &str = "0.61.0";
 
-/// SHA256 of `vector-0.60.0-x86_64-unknown-linux-gnu.tar.gz`, read from
-/// Vector's published `vector-0.60.0-SHA256SUMS` and cross-checked against
+/// SHA256 of `vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz`, read from
+/// Vector's published `vector-0.61.0-SHA256SUMS` and cross-checked against
 /// the digest GitHub records for the identically-named release asset.
 const VECTOR_SHA256_AMD64: &str =
-    "89a9f134dcc35a6fbba9cb8ad0fec2d4802657bba6cb1c374a30660ef9456bdc";
+    "84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827";
 
-/// SHA256 of `vector-0.60.0-aarch64-unknown-linux-gnu.tar.gz`, sourced and
+/// SHA256 of `vector-0.61.0-aarch64-unknown-linux-gnu.tar.gz`, sourced and
 /// cross-checked the same way as [`VECTOR_SHA256_AMD64`].
 const VECTOR_SHA256_ARM64: &str =
-    "1540662d8bc33af5afd287f821ba930417e0f3124073bc9db6a29c59dda88dbb";
+    "4f6e3093c0963611c8e31478137adca07920e729bdcc734d4ba7ab6f948a7e9f";
 
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///

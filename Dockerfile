@@ -42,17 +42,17 @@ WORKDIR /home/appuser
 # binary shipped.
 #
 # This fragment is spliced into the generated Dockerfile by
-# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.60.0,
-# 89a9f134dcc35a6fbba9cb8ad0fec2d4802657bba6cb1c374a30660ef9456bdc and 1540662d8bc33af5afd287f821ba930417e0f3124073bc9db6a29c59dda88dbb.
+# `src/deployment.rs::emit_dockerfile()`, which substitutes 0.61.0,
+# 84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827 and 4f6e3093c0963611c8e31478137adca07920e729bdcc734d4ba7ab6f948a7e9f.
 # It lives in its own file rather than inside a Rust string so that hadolint
 # and shellcheck can actually read it -- shell embedded in `format!` is
 # validated by nothing until the image build runs in CI.
-ARG VECTOR_VERSION=0.60.0
+ARG VECTOR_VERSION=0.61.0
 # Pinned from Vector's own published SHA256SUMS for this version, cross-checked
 # against the GitHub release asset of the same name -- not fetched at build
 # time, which would only prove the download matches itself.
-ARG VECTOR_SHA256_AMD64=89a9f134dcc35a6fbba9cb8ad0fec2d4802657bba6cb1c374a30660ef9456bdc
-ARG VECTOR_SHA256_ARM64=1540662d8bc33af5afd287f821ba930417e0f3124073bc9db6a29c59dda88dbb
+ARG VECTOR_SHA256_AMD64=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
+ARG VECTOR_SHA256_ARM64=4f6e3093c0963611c8e31478137adca07920e729bdcc734d4ba7ab6f948a7e9f
 ARG TARGETARCH
 # hadolint ignore=DL4006
 RUN set -eu \
@@ -73,10 +73,10 @@ RUN set -eu \
         "${VDIR}/licenses" /usr/share/doc/vector/ \
     && printf '%s\n' \
         'Vector is redistributed here unmodified, under the Mozilla Public' \
-        'License 2.0. Version: 0.60.0' \
+        'License 2.0. Version: 0.61.0' \
         '' \
         'Source code for this version (MPL-2.0 section 3.2(a)):' \
-        '  https://github.com/vectordotdev/vector/releases/tag/v0.60.0' \
+        '  https://github.com/vectordotdev/vector/releases/tag/v0.61.0' \
         '' \
         'Upstream LICENSE, NOTICE and third-party attributions are in this' \
         'directory, taken from the release archive itself.' \
@@ -88,7 +88,7 @@ RUN set -eu \
 RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms \
     && chown -R appuser:appuser /var/lib/vector /var/run/vector /etc/dfe-transform-vector
 
-LABEL io.hyperi.vector.version="0.60.0"
+LABEL io.hyperi.vector.version="0.61.0"
 
 # Numeric, so Kubernetes runAsNonRoot can verify it without reading /etc/passwd.
 USER 1000
