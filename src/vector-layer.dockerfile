@@ -29,7 +29,7 @@ RUN set -eu \
         *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && VDIR="/tmp/vector-${ARCH}-unknown-linux-gnu" \
-    && curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
+    && curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
         -o /tmp/vector.tar.gz \
     && echo "${VECTOR_SHA256}  /tmp/vector.tar.gz" | sha256sum -c - \
     && tar xz -C /tmp -f /tmp/vector.tar.gz \

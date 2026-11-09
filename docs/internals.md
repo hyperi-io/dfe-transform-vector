@@ -572,7 +572,7 @@ The wrapper's config declares a **pinned Vector version**:
 
 ```yaml
 vector:
-  version: "0.60.0"              # Expected version
+  version: "0.61.0"              # Expected version
   version_check: warn            # strict | warn | disabled
   binary: /usr/local/bin/vector
 ```
@@ -613,7 +613,7 @@ Dockerfile copies it into the runtime image alongside the Vector binary.
 ```dockerfile
 # Runtime image — CI builds the wrapper binary externally
 FROM debian:trixie-slim
-ARG VECTOR_VERSION=0.60.0
+ARG VECTOR_VERSION=0.61.0
 ARG TARGETARCH
 
 # Wrapper binary (built by CI, copied in)
@@ -621,7 +621,7 @@ COPY dfe-transform-vector /usr/local/bin/dfe-transform-vector
 
 # Vector binary downloaded inside the build, per $TARGETARCH, with its
 # LICENSE / NOTICE / licenses tree copied from the same release archive
-RUN curl -fsSL "https://packages.timber.io/vector/${VECTOR_VERSION}/..."
+RUN curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/..."
 
 RUN mkdir -p /var/lib/vector /var/run/vector/config /etc/dfe-transform-vector/transforms
 USER appuser

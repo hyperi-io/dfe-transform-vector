@@ -115,7 +115,8 @@ WORK_DIR="$(mktemp -d "${CACHE_DIR}/.fetch-XXXXXX")"
 echo "Downloading Vector ${VECTOR_VERSION} for ${TRIPLE}..." >&2
 
 TARBALL="vector-${VECTOR_VERSION}-${TRIPLE}.tar.gz"
-URL="https://packages.timber.io/vector/${VECTOR_VERSION}/${TARBALL}"
+# The GitHub release, because packages.timber.io publishes later: 0.61.0 was missing there 11 days after release.
+URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/${TARBALL}"
 
 # Extract the whole archive rather than naming one member. Asking tar for
 # `./vector-<triple>/bin/vector` matched nothing in the macOS tarball, whose
