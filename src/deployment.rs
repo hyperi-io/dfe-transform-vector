@@ -277,7 +277,7 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 /// `default_config` both read this constant, so a deployment's expected
 /// version cannot drift from the shipped binary.
 // renovate: datasource=github-releases depName=vectordotdev/vector
-pub const VECTOR_VERSION: &str = "0.60.0";
+pub const VECTOR_VERSION: &str = "0.61.0";
 
 /// SHA256 of `vector-0.60.0-x86_64-unknown-linux-gnu.tar.gz`, read from
 /// Vector's published `vector-0.60.0-SHA256SUMS` and cross-checked against
