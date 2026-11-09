@@ -68,7 +68,7 @@ tokio-util = { version = ">=0.7.20, <0.8", features = ["rt"] }
 #
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = ">=2.14.25, <3", features = [
+scalo = { version = ">=2.14.26, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -147,14 +147,14 @@ tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
 # transport-kafka-test-support is the run's shared broker container the Kafka
 # tests use.
-scalo = { version = ">=2.14.25, <3", features = [
+scalo = { version = ">=2.14.26, <3", features = [
     "transport-kafka",
     "transport-kafka-test-support",
 ] }
 # The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
 dotenvy = ">=0.15.7, <0.16"
 # A stand-in Vector source for the bridge tests; scalo already builds this tonic.
-tonic = { version = ">=0.14.6, <0.15", features = ["gzip"] }
+tonic = { version = ">=0.14.9, <0.15", features = ["gzip"] }
 # Reads back what the app counted; the Prometheus exporter already builds it.
 metrics-util = { version = ">=0.20.4, <0.21", default-features = false, features = [
     "debugging",
