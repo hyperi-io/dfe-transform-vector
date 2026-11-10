@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.63](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.62...v1.0.63) (2026-11-10)
+
+### Bug Fixes
+
+* **ci:** drop Namespace runners, add test-tier ([a2629af](https://github.com/hyperi-io/dfe-transform-vector/commit/a2629afebc5a4e555030c6da2e2c8fa2ef6bdf20))
+* **transform-vector:** rebuild on scalo 2.14.28 ([#149](https://github.com/hyperi-io/dfe-transform-vector/issues/149)) ([3b49ffe](https://github.com/hyperi-io/dfe-transform-vector/commit/3b49ffe179da522a5a4bb81927dffa8080d03d5d))
+
 ## [1.0.62](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.61...v1.0.62) (2026-11-09)
 
 ### Bug Fixes
