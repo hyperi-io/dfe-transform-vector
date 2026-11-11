@@ -145,7 +145,7 @@ API, which the supervisor does not do.
 
 ## Build, chart and licence invariants
 
-**The Vector version has one source.** The constant `VECTOR_VERSION` in `src/deployment.rs` is substituted into the Dockerfile's `ARG VECTOR_VERSION`, and both `VectorConfig::default()` and the contract's `default_config` read it for `vector.version`. `version_check: strict` refuses to start a pod when the config's version and the binary's disagree, so a deployment that sets `vector.version` itself has to move it with the image.
+**The Vector version has one source.** The constant `VECTOR_VERSION` in `src/deployment.rs` is substituted into the Dockerfile's `ARG VECTOR_VERSION`, and both `VectorConfig::default()` and the contract's `default_config` read it for `vector.version`. `version_check: strict` refuses to start a pod when the config's version and the binary's disagree, so a deployment that sets `vector.version` itself has to move it with the image. dfe-infra's `versions.yaml` records the same release as `services.vector`, and dfe-fetcher's container Vector extractor runs that image.
 
 **`password` is a `String` on purpose, not a `SensitiveString`.** The config
 goes through a figment serialize-merge-deserialize round trip in
