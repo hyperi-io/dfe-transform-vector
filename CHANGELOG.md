@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.64](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.63...v1.0.64) (2026-11-11)
+
+### Bug Fixes
+
+* **scalo:** rebuild on 2.14.29 ([46af5d5](https://github.com/hyperi-io/dfe-transform-vector/commit/46af5d522358c3e2c8fb8756cc550477e74a6710))
+
 ## [1.0.63](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.62...v1.0.63) (2026-11-10)
 
 ### Bug Fixes
