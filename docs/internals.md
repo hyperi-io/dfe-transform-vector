@@ -2,30 +2,17 @@
 
 ## 1. Purpose
 
-dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka → transform → Kafka** pipelines that are first-class citizens in the DFE platform — indistinguishable from dfe-loader and dfe-receiver from dfe-engine's management, GitOps, and observability perspective.
+dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka → transform → Kafka** pipelines that the DFE platform manages, deploys and observes the same way as dfe-loader and dfe-receiver.
 
-Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: same config registry, same health contract, same metrics shape, same scaling signals, same Helm compilation, same Argo CD lifecycle.
+Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: the same health contract, metrics shape and scaling signal, a chart generated from its deployment contract, and the same Argo CD lifecycle. The app's shape is declared in dfe-infra's `apps.yaml`, not coded into dfe-engine.
 
 ---
 
 ## 2. Architecture
 
+The pod runs the chart generated from `contract()` (section 9), with the config the deployment mounts.
+
 ```text
-┌──────────────────────────────────────────────────────────────────┐
-│  dfe-engine (Python)                                             │
-│                                                                  │
-│  ServicePlugin("transform-vector")                               │
-│  ├─ ServiceDescriptor      (ports, health paths, kafka role)     │
-│  ├─ TransformVectorConfig  (Pydantic — big dials)                │
-│  ├─ DeploymentConfig       (Pydantic — K8s sizing)               │
-│  ├─ validate_config()      (cross-field validation)              │
-│  └─ HelmValuesCompiler     (generates values.yaml)               │
-│                                                                  │
-│  Config Registry: config_directory/transform-vector-*.yaml       │
-│  Deploy Registry: deployment_configs/transform-vector-*.yaml     │
-└──────────────────────┬───────────────────────────────────────────┘
-                       │ compiled Helm values + Argo CD Application
-                       ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  K8s Pod (Deployment)                                            │
 │                                                                  │
@@ -69,123 +56,9 @@ Vector is powerful but opaque. This wrapper makes it behave like every other DFE
 
 ---
 
-## 3. dfe-engine Integration
+## 3. Dead Letters
 
-### 3.1 ServiceDescriptor
-
-```python
-descriptor = ServiceDescriptor(
-    name="transform-vector",
-    display_name="DFE Transform - Vector",
-    image="ghcr.io/hyperi-io/dfe-transform-vector",
-    default_port=9090,
-    metrics_port=9090,
-    kafka_role=KafkaRole.BOTH,
-    consumer_group="dfe-transform-vector",
-    liveness_paths=("/livez",),
-    readiness_paths=("/readyz",),
-    description="Kafka-to-Kafka transform pipelines powered by Vector.dev",
-)
-```
-
-This is identical in shape to dfe-loader and dfe-receiver descriptors. dfe-engine discovers it via entry point and treats it as any other service.
-
-### 3.2 Config Model (Pydantic — dfe-engine side)
-
-```python
-class TransformVectorConfig(BaseServiceConfig):
-    """Runtime configuration — the 'big dials'."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # Universal (inherited pattern)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-
-    # Pipeline identity
-    pipeline: PipelineConfig          # name, version
-
-    # Kafka source (input)
-    source: SourceKafkaConfig         # brokers, topics, group_id, sasl, tls
-
-    # Kafka sink (output)
-    sink: SinkKafkaConfig             # brokers, topic, key_field, encoding
-
-    # Transform files
-    transforms: TransformFilesConfig  # file list or directory path
-
-    # Vector subprocess
-    vector: VectorProcessConfig       # binary path, data_dir, api_port, log_level
-
-    # Scaling
-    scaling: ScalingConfig            # pressure_threshold
-```
-
-Shared models (`MetricsConfig`, `LoggingConfig`, `SaslConfig`, `KafkaTlsConfig`) are reused from `dfe_engine.services.models.common` — same as dfe-loader and dfe-receiver.
-
-There is no DLQ and no `dlq` config. A record no retry would get through is dropped and counted in `pipeline_dead_letters_dropped_total`: `reason="too_large"` for one over the next stage's message-size ceiling, `reason="rejected"` for one the sink refused for good.
-
-### 3.3 ServicePlugin
-
-```python
-plugin = ServicePlugin(
-    descriptor=descriptor,
-    config_class=TransformVectorConfig,
-    deployment_class=TransformVectorDeploymentConfig,
-    validate_config=validate_transform_vector,
-    sizing_overrides={
-        "xs":     {"vector": {"memory_limit": "512Mi"}},
-        "small":  {"vector": {"memory_limit": "1Gi"}},
-        "medium": {"vector": {"memory_limit": "2Gi"}},
-        "large":  {"vector": {"memory_limit": "4Gi"}},
-        "xlarge": {"vector": {"memory_limit": "8Gi"}},
-    },
-    keda_defaults={
-        "min_replicas": 2,
-        "max_replicas": 8,
-        "kafka_trigger": {
-            "consumer_group": "dfe-transform-vector",
-            "lag_threshold": 1000,
-        },
-    },
-    config_template_overrides={
-        "production": {
-            "source": {"sasl": {"enabled": True, "mechanism": "scram_sha_512"},
-                        "tls": {"enabled": True}},
-            "sink":   {"sasl": {"enabled": True, "mechanism": "scram_sha_512"},
-                        "tls": {"enabled": True}},
-        },
-        "k8s": {
-            "source": {"brokers": ["kafka-bootstrap.kafka.svc.cluster.local:9092"]},
-            "sink":   {"brokers": ["kafka-bootstrap.kafka.svc.cluster.local:9092"]},
-        },
-    },
-)
-```
-
-### 3.4 Entry Point
-
-```toml
-# In dfe-engine's pyproject.toml or a separate plugin package
-[project.entry-points."dfe_engine.services"]
-transform-vector = "dfe_transform_vector_plugin:plugin"
-```
-
-### 3.5 What This Gives Us
-
-Once registered, dfe-engine automatically provides:
-
-| Capability | How |
-|---|---|
-| Config CRUD | `registry.get_config("transform-vector", "production")` |
-| Config validation | `registry.validate("transform-vector", {...})` |
-| Git-aware history | `registry.get_config_history(...)` |
-| Helm values compilation | `compiler.compile_all()` includes transform-vector |
-| Argo CD Application CRDs | Generated alongside loader and receiver |
-| KEDA ScaledObject | Generated from keda_defaults + deployment config |
-| T-shirt sizing | xs/small/medium/large/xlarge resource presets |
-| Environment profiles | dev/staging/production overrides |
-| Multi-instance | transform-vector-syslog, transform-vector-netflow, etc. |
+On `direct`, the supervisor's bridge sends a record the next stage refuses for good to the DLQ `dlq` configures: scalo's `DlqConfig`, by default NDJSON files under `/var/spool/scalo/dlq`. With `dlq.enabled: false` such a record is dropped and counted in `pipeline_dead_letters_dropped_total`: `reason="too_large"` for one over the next stage's message-size ceiling, `reason="rejected"` for one the sink refused for good. On `bus`, Vector's own Kafka sink delivers and the bridge DLQ is not used.
 
 ---
 
@@ -238,25 +111,35 @@ recovery, readiness returns 503 until Vector restarts successfully.
 
 ### 4.3 Metrics
 
-**Wrapper metrics** (emitted by the Rust binary):
+**Wrapper metrics** (emitted by the Rust binary). Names are bare unless
+`metrics.namespace` is set, and none is by default:
 
 ```text
 # DFE platform standard
-dfe_pipeline_ready 1                          # 1=ready, 0=not ready
+pipeline_ready 1                          # 1=ready, 0=not ready
 
 # Process lifecycle
-dfe_transform_vector_lifecycle_state{state="running"} 1
-dfe_transform_vector_uptime_seconds 3600
+transform_vector_lifecycle_state{state="running"} 1
+uptime_seconds 3600
 
 # Subprocess health
-dfe_transform_vector_crashes_total 0
-dfe_transform_vector_restarts_total 1
+crashes_total 0
+restarts_total 1
 
 # Config management
-dfe_transform_vector_config_reloads_total{result="success"} 5
-dfe_transform_vector_config_reloads_total{result="failure"} 0
-dfe_transform_vector_config_validation_errors_total 0
+transform_vector_config_reloads_total{result="success"} 5
+transform_vector_config_reloads_total{result="error"} 0
+transform_vector_config_reloads_total{result="rejected"} 0
+transform_vector_config_reloads_total{result="unconfirmed"} 0
+config_validation_errors_total 0
 ```
+
+`success` means Vector reported the reload. `error` (a config that does not
+load or validate, a failed assembly or publish, a SIGHUP that cannot be sent,
+or a reload Vector refused) and `rejected` (a change outside the transform
+files, which needs a restart) mean the running Vector did not take the change.
+`unconfirmed` means the change is published but Vector did not report whether
+it runs it.
 
 Vector, not the wrapper, owns the Kafka client, so the record counters
 (`records_received_total`, `records_processed_total`, `records_delivered_total`)
@@ -293,6 +176,11 @@ cannot fix that. A deployment adds a trigger with the library chart's
 `keda.extraTriggers` value. `spawn_circuit_gate_task` pins scalo's scaling
 pressure to 0 while the Vector subprocess is down.
 
+In a DFE deployment, dfe-infra's values set the CPU target to 70% and add no
+pressure trigger in any profile, so this app scales on CPU alone. The engine's
+[KEDA scaling page](https://github.com/hyperi-io/dfe-engine/blob/main/docs/deployment/keda-scaling.md)
+covers the triggers for every app.
+
 scalo's runtime serves the pressure at `/scaling/pressure` and writes it into the
 `scaling_pressure` gauge. With no pressure components and no memory reading fed
 to it, the value is 0 while Vector runs too.
@@ -321,10 +209,10 @@ pipeline:
   name: syslog-enrichment
 
 source:
-  brokers: "${KAFKA_BROKERS}"
+  brokers: ["kafka:9092"]     # or DFE_TRANSFORM_VECTOR_SOURCE_BROKERS
   topics:
     - raw_syslog_land
-  group_id: "dfe-transform-vector-${PIPELINE_NAME}"
+  group_id: dfe-transform-vector-syslog-enrichment
   sasl:
     mechanism: scram_sha_512
     # A mounted Secret holding `username` and `password` files. Vector reads
@@ -334,7 +222,7 @@ source:
     enabled: true
 
 sink:
-  brokers: "${KAFKA_BROKERS}"
+  brokers: ["kafka:9092"]     # or DFE_TRANSFORM_VECTOR_SINK_BROKERS
   topic: enriched_syslog_land
   key_field: ".org_id"
   encoding: json
@@ -775,17 +663,15 @@ The mounted config is the chart's `config` with `configOverrides` merged over it
 
 ### 9.3 Parity With dfe-loader/dfe-receiver Charts
 
+All three are generated on the same scalo-service library chart, so the shape is shared:
+
 | Feature | dfe-loader | dfe-receiver | dfe-transform-vector |
 |---|---|---|---|
-| Workload type | StatefulSet | StatefulSet | Deployment |
+| Workload type | Deployment | Deployment | Deployment |
 | Health probes | /livez, /readyz | /livez, /readyz | /livez, /readyz |
 | Metrics port | 9090 | 9090 | 9090 |
 | ConfigMap | config.yaml | config.yaml | config.yaml |
-| PVC | data dir | data dir | None -- `emptyDir` writable paths |
-| KEDA ScaledObject | Kafka lag | Kafka lag | CPU |
-| PodMonitor | Yes | Yes | Yes |
-| ServiceAccount + IRSA | Yes | Yes | Yes |
-| Reloader annotation | Yes | Yes | Yes |
+| KEDA ScaledObject (contract) | CPU, no Kafka lag trigger | CPU, no Kafka lag trigger | CPU, no Kafka lag trigger |
 
 ---
 
@@ -799,15 +685,14 @@ transform-vector-netflow      # Kafka(raw_netflow) → decode+geoip → Kafka(en
 transform-vector-dns          # Kafka(raw_dns) → parse+filter  → Kafka(enriched_dns)
 ```
 
-Each instance has its own:
+dfe-infra's `apps.yaml` declares the app `multiplicity: per_config`, so each source config gets its own:
 
-- Config file in dfe-engine registry: `transform-vector-syslog.yaml`
-- Deployment config: `deployment_configs/transform-vector-syslog.yaml`
+- Config file: `transform-vector-syslog.yaml`
 - Kafka consumer group: `dfe-transform-vector-syslog`
 - Helm release: separate Deployment
 - KEDA ScaledObject: independent scaling
 
-This is the standard dfe-engine multi-instance pattern — no special handling needed.
+The app is in the default composition of `docker-single` only. Elsewhere an operator adds an instance per source.
 
 ---
 
@@ -815,16 +700,15 @@ This is the standard dfe-engine multi-instance pattern — no special handling n
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Config schema + validation | dfe-engine (Pydantic) + wrapper (Rust) | Both validate, dfe-engine at compile/save time, wrapper at runtime |
-| Helm values compilation | dfe-engine | HelmValuesCompiler |
-| Argo CD Applications | dfe-engine | Generated from deployment registry |
-| K8s manifests | This repo's Helm chart | Deployment, Service, ConfigMap, etc. |
+| App shape | dfe-infra `apps.yaml` | Multiplicity, scaling, transports, source binding |
+| Config schema + validation | Wrapper (Rust) | `docs/config-schema.json` is generated from the config structs. dfe-engine judges a stored config against that mounted contract |
+| K8s manifests | Chart generated from `contract()` | On the scalo-service library chart (section 9) |
 | Config assembly (big dials → Vector YAML) | Wrapper (Rust) | The core novel work |
 | DAG wiring + validation | Wrapper (Rust) | Auto-wire source/sink, validate refs |
 | Vector process lifecycle | Wrapper (Rust) | Spawn, monitor, restart, shutdown |
 | Data processing | Vector (subprocess) | Kafka consume → transform → Kafka produce |
 | Health/metrics aggregation | Wrapper (Rust) | Composite health, proxied + own metrics |
-| Scaling signals | Wrapper (Rust) | Compute scaling_pressure from Vector metrics |
+| Scaling signals | Wrapper (Rust) | `scaling_pressure` is 0 while Vector runs and pinned to 0 while it is down. KEDA scales on CPU |
 | Vector binary version | Dockerfile ARG + config pin | Decoupled from wrapper releases |
 
 ---

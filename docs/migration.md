@@ -5,16 +5,9 @@ This guide covers migrating existing Vector pipelines from the official
 
 ## Pipeline Values Migration
 
-Existing pipeline values files in the `pipelines` repo follow the official
-Vector chart format. The new format uses the "big-dial" config pattern.
-
-### File Naming
-
-Old: `pipelines/<namespace>/vector-<pipeline>.yaml`
-New: `pipelines/<namespace>/dfe-transform-vector-<pipeline>.yaml`
-
-The ArgoCD ApplicationSet scans for `dfe-transform-vector-*.yaml` files.
-Both old and new pipelines can coexist during migration.
+A values file for the official Vector chart carries the whole Vector config.
+dfe-transform-vector's chart takes the "big-dial" config pattern instead, one
+values file per pipeline. Both releases can run side by side while you move.
 
 ### Values Format
 
@@ -90,7 +83,7 @@ Key differences:
 
 - **No inline VRL** — transforms are separate YAML files the wrapper loads from `config.transforms.dir` (the image's `/etc/dfe-transform-vector/transforms`) or lists in `config.transforms.files`
 - **No persistence** — Deployment (not StatefulSet), data dir loss just re-reads from Kafka
-- **SASL/TLS** inherited from `common.yaml` — only override pipeline-specific values
+- **SASL/TLS** can sit in one values file every pipeline layers over, so each pipeline file carries only its own values
 - **Kafka brokers** come from `DFE_TRANSFORM_VECTOR_SOURCE_BROKERS` and
   `DFE_TRANSFORM_VECTOR_SINK_BROKERS`. A `${VAR}` in the config is not expanded:
   neither the wrapper nor Vector 0.57+ interpolates environment variables
@@ -122,19 +115,16 @@ Key differences:
 
 ## Cutover Procedure
 
-See the cutover plan section below for step-by-step parallel deployment
-and traffic switching procedure.
-
 ### Step 1: Prepare Pipeline Values
 
-For each existing `vector-<name>.yaml`, create a corresponding
-`dfe-transform-vector-<name>.yaml` with big-dial config format.
+For each existing Vector values file, write a dfe-transform-vector values file
+in the big-dial format above.
 
 ### Step 2: Deploy in Parallel
 
-Both ApplicationSets run simultaneously. The new pipeline uses a
-different consumer group ID, so it reads from the same source topic
-independently without affecting the existing pipeline.
+Run both releases at once. The new pipeline uses a different consumer group
+ID, so it reads from the same source topic independently without affecting
+the existing pipeline.
 
 ### Step 3: Validate
 
@@ -150,12 +140,4 @@ Once validated:
 1. Scale down old pipeline replicas to 0
 2. Update downstream consumers to read from new output topic (if topic name changed)
 3. Monitor for 24-48 hours
-4. Remove old pipeline values file from pipelines repo
-
-### Step 5: Cleanup
-
-After all pipelines migrated:
-
-1. Remove old `vector.yaml` ApplicationSet from dfe-core
-2. Remove old `gitOps/addons/helm/vector/` directory
-3. Remove `vector_project.yaml` ArgoCD project (or update to cover new apps)
+4. Remove the old Vector release and its values file
