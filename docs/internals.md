@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka → transform → Kafka** pipelines that the DFE platform manages, deploys and observes the same way as dfe-loader and dfe-receiver.
+dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka -> transform -> Kafka** pipelines that the DFE platform manages, deploys and observes the same way as dfe-loader and dfe-receiver.
 
 Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: the same health contract, metrics shape and scaling signal, a chart generated from its deployment contract, and the same Argo CD lifecycle. The app's shape is declared in dfe-infra's `apps.yaml`, not coded into dfe-engine.
 
