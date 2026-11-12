@@ -1,4 +1,4 @@
-# DFE Transform Vector — Design Document
+# dfe-transform-vector internals
 
 ## 1. Purpose
 
