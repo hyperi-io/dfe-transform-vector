@@ -25,15 +25,15 @@ cargo build --release
 
 | | `bus` | `direct` |
 |---|---|---|
-| In | Kafka `<source>_land` | a scalo Push listener on `source.listen` (port 6000) |
+| In | Kafka `<source>_land` | a scalo Push listener on `source.listen` (port 6000 by default) |
 | Out | Kafka `<source>_load` | a scalo Push client to `sink.endpoint` |
 | Needs a broker | yes | no |
 
-One port, 9090, carries the ops surface: `/livez`, `/readyz` (200 only while Vector is up and its sink is delivering) and `/metrics`. Vector's own exporter on 9598 is loopback only.
+One port, 9090 by default, carries the ops surface: `/livez`, `/readyz` (200 only while Vector is up and its sink is not stalled) and `/metrics`. Vector's own exporter, `127.0.0.1:9598` by default, is loopback only.
 
 ## Configuration
 
-Settings load through a cascade: CLI, then `DFE_TRANSFORM_VECTOR_*` environment variables, then the config file, then defaults. The transport dials take a single underscore (`DFE_TRANSFORM_VECTOR_SOURCE_TRANSPORT`, `_SOURCE_LISTEN`, `_SINK_ENDPOINT`, the SASL pairs), and a key inside a section takes two (`DFE_TRANSFORM_VECTOR_SOURCE__BROKERS`, `_SINK__TOPIC`, `_TRANSFORMS__DIR`). [docs/config-schema.yaml](docs/config-schema.yaml) lists every key with its type and default.
+Settings load through a cascade: CLI, then `DFE_TRANSFORM_VECTOR_*` environment variables, then the working directory's `.env`, then the config file, then defaults. The transport dials take a single underscore (`DFE_TRANSFORM_VECTOR_SOURCE_TRANSPORT`, `_SOURCE_LISTEN`, `_SINK_ENDPOINT`, the SASL pairs), and a key inside a section takes two (`DFE_TRANSFORM_VECTOR_SOURCE__BROKERS`, `_SINK__TOPIC`, `_TRANSFORMS__DIR`). [docs/config-schema.yaml](docs/config-schema.yaml) lists every key with its type and default.
 
 A transform file change hot-reloads. A change to `source.*`, `sink.*`, `bridge.*`, `pipeline.name`, `vector.*`, `metrics.*` or `logging.*` takes a pod restart, and the watcher logs it as such. The reload path, the readiness rules, the metrics merge and the Kafka tuning are in [docs/internals.md](docs/internals.md) and [docs/librdkafka.md](docs/librdkafka.md).
 
@@ -45,7 +45,7 @@ A transform file change hot-reloads. A change to `source.*`, `sink.*`, `bridge.*
 - [docs/librdkafka.md](docs/librdkafka.md): Kafka client tuning.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers, and the e2e cases that need Docker and a Vector binary.
 
-The suite's published docs are at https://dfe.docs.hyperi.io.
+The suite's published docs are at <https://dfe.docs.hyperi.io>.
 
 ## Help and contributing
 
