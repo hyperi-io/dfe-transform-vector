@@ -206,7 +206,7 @@ cargo nextest run --run-ignored all          # everything, opt-in cases included
 
 What green does NOT mean:
 
-- **The default run skips the Vector validator.** Seven `#[ignore]` cases need a
+- **The default run skips the Vector validator.** Eight `#[ignore]` cases (seven in `tests/integration/vector_validate.rs`, one in `tests/e2e/kafka.rs`) need a
   real Vector binary -- six in `tests/integration/vector_validate.rs` and one in
   `tests/e2e/kafka.rs`. Until you pass `--run-ignored all`, nothing has run
   Vector's own validator over an assembled config.
@@ -226,7 +226,7 @@ What green does NOT mean:
 |---|---|---|
 | Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships |
 | Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
-| Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The library's trigger also reads `config.kafka.*`, which this app does not have, and refuses to render |
+| Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU, adding a pressure trigger through the chart's `keda.extraTriggers` where a deployment wants one | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The library's trigger also reads `config.kafka.*`, which this app does not have, and refuses to render |
 | Set `vector.version` in a deployment's config and forget it | Leave it unset, so the default reads `VECTOR_VERSION` | A pinned version that differs from the binary the image bakes refuses to start under `strict`, and runs only because `version_check: warn` lets it |
 | Mount a whole `templates/*.yaml` as a transform file | Copy only its `transforms:` block | The supervisor generates `sources:` and `sinks:` from the big dials and refuses a transform file declaring them |
 | Change `password` to a `SensitiveString` to look safer | Leave it a `String` | `SensitiveString` serialises as `***REDACTED***` and the figment serialize-merge-deserialize round trip in `apply_figment_env()` destroys the value. Masking happens in logs and `Debug`, and Vector reads the credential from files through its `directory` secret backend, so it never lands in the Vector config |
