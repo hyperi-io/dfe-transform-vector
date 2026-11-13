@@ -45,7 +45,7 @@ A transform file change hot-reloads when reload is enabled, after it validates. 
 - [docs/librdkafka.md](docs/librdkafka.md): Kafka client tuning.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers, and the e2e cases that need Docker and a Vector binary.
 
-The suite's published docs are at <https://dfe.docs.hyperi.io>.
+The suite's published docs are at <https://dfe.docs.hyperi.io>, and this repository's pages at <https://dfe.docs.hyperi.io/dfe-transform-vector/>.
 
 ## Help and contributing
 
