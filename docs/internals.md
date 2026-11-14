@@ -4,7 +4,7 @@
 
 dfe-transform-vector wraps Vector.dev as a managed subprocess to provide **Kafka -> transform -> Kafka** pipelines that the DFE platform manages, deploys and observes the same way as dfe-loader and dfe-receiver.
 
-Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: the same health contract, metrics shape and scaling signal, a chart generated from its deployment contract, and the same Argo CD lifecycle. The app's shape is declared in dfe-infra's `apps.yaml`, not coded into dfe-engine.
+Vector is powerful but opaque. This wrapper makes it behave like every other DFE service: the same health contract, metric names and scaling signal, a chart generated from its deployment contract, and the same Argo CD lifecycle. How the app is deployed is declared in dfe-infra's `apps.yaml`, not coded into dfe-engine.
 
 ---
 
@@ -663,7 +663,7 @@ The mounted config is the chart's `config` with `configOverrides` merged over it
 
 ### 9.3 Parity With dfe-loader/dfe-receiver Charts
 
-All three are generated on the same scalo-service library chart, so the shape is shared:
+All three are generated on the same scalo-service library chart, so they share the same features:
 
 | Feature | dfe-loader | dfe-receiver | dfe-transform-vector |
 |---|---|---|---|
@@ -700,7 +700,7 @@ The app is in the default composition of `docker-single` only. Elsewhere an oper
 
 | Concern | Owner | Notes |
 |---|---|---|
-| App shape | dfe-infra `apps.yaml` | Multiplicity, scaling, transports, source binding |
+| App deployment | dfe-infra `apps.yaml` | Multiplicity, scaling, transports, source binding |
 | Config schema + validation | Wrapper (Rust) | `docs/config-schema.json` is generated from the config structs. dfe-engine judges a stored config against that mounted contract |
 | K8s manifests | Chart generated from `contract()` | On the scalo-service library chart (section 9) |
 | Config assembly (big dials → Vector YAML) | Wrapper (Rust) | The core novel work |
