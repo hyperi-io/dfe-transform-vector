@@ -58,8 +58,8 @@ transforms:
       #
       # INTERIM: this pipeline keeps DFE 2.1 filebeat feeds working on
       # dfe-transform-vrl. Elastic compatibility is being replaced by
-      # dfe-transform-elastic (Rust-native, currently in beta); new integrations
-      # should NOT build on this file.
+      # dfe-transform-elastic (Rust-native), and new integrations should NOT
+      # build on this file.
       #
       # Deliberate departures from the 2.1 templates:
       #   - geoip enrichment is NOT ported: dfe-loader owns geoip enrichment in

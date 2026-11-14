@@ -6,53 +6,13 @@
 # License:   BUSL-1.1
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 #
-# Clippy configuration file. Lint levels are set in Cargo.toml [lints.clippy].
-# This file configures thresholds and behaviour.
+# Lint levels are in Cargo.toml [lints.clippy].
 
-# -----------------------------------------------------------------------------
-# Complexity Thresholds
-# -----------------------------------------------------------------------------
-
-# Maximum number of function arguments before warning
 too-many-arguments-threshold = 7
-
-# Cognitive complexity threshold (cyclomatic complexity)
 cognitive-complexity-threshold = 25
-
-# Type complexity threshold (nested generics)
 type-complexity-threshold = 350
-
-# Maximum lines in a function before warning
 too-many-lines-threshold = 150
 
 # unwrap_used / expect_used stay denied in shipped code, not in #[test] or #[cfg(test)]
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-
-# -----------------------------------------------------------------------------
-# Style Preferences
-# -----------------------------------------------------------------------------
-
-# MSRV (Minimum Supported Rust Version) - clippy uses this for suggestions
-# msrv = "1.85"
-
-# -----------------------------------------------------------------------------
-# Documentation
-# -----------------------------------------------------------------------------
-# Clippy lint levels should be configured in Cargo.toml:
-#
-# [lints.clippy]
-# pedantic = "warn"
-# nursery = "warn"
-# unwrap_used = "deny"
-# expect_used = "deny"
-# panic = "deny"
-# dbg_macro = "deny"          # Deny in CI, allow locally
-# todo = "warn"
-# unimplemented = "warn"
-#
-# # Allow common pedantic false positives
-# module_name_repetitions = "allow"
-# must_use_candidate = "allow"
-# missing_errors_doc = "allow"
-# missing_panics_doc = "allow"

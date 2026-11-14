@@ -16,7 +16,7 @@ dfe-transform-vector: the same VRL dfe-transform-vrl runs, wrapped in a Vector
 this directory and the pipeline runs -- there is nothing to author.
 
 > **INTERIM.** Elastic compatibility is being replaced by
-> `dfe-transform-elastic` (Rust-native, currently in beta). New integrations
+> `dfe-transform-elastic` (Rust-native). New integrations
 > should NOT build on this pipeline.
 
 ## Using it
