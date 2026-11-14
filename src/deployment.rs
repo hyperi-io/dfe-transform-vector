@@ -125,9 +125,9 @@ pub fn contract() -> DeploymentContract {
             }
         })),
         depends_on: vec!["kafka".into()],
-        // `KedaContract` is `#[non_exhaustive]` (scalo 2.8.13) so it can no
-        // longer be built via a struct literal. Build the app's real KEDA
-        // values into a `KedaConfig` and convert; the new `scaling_pressure_*`
+        // `KedaContract` is `#[non_exhaustive]`, so it cannot be built via a
+        // struct literal. Build the app's real KEDA
+        // values into a `KedaConfig` and convert; the `scaling_pressure_*`
         // trigger fields stay at their defaults (OFF -- the Prometheus
         // serverAddress is cluster-specific and must be set before enabling).
         keda: Some(

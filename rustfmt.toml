@@ -6,28 +6,11 @@
 # License:   BUSL-1.1
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 
-# Rust edition for parsing
 edition = "2024"
-
-# Line width (100 is common for modern displays)
 max_width = 100
-
-# Indentation
 tab_spaces = 4
 hard_tabs = false
-
-# Use default heuristics for formatting choices
 use_small_heuristics = "Default"
-
-# Reorder imports alphabetically
 reorder_imports = true
-
-# Use field init shorthand where possible: Foo { x } instead of Foo { x: x }
 use_field_init_shorthand = true
-
-# Use try! shorthand: ? instead of try!()
 use_try_shorthand = true
-
-# Nightly-only (uncomment when stable rustfmt supports these)
-# imports_granularity = "Module"
-# group_imports = "StdExternalCrate"

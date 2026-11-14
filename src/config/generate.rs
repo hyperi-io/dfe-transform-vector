@@ -508,8 +508,8 @@ const SERVICE_CONSUMER_OVERRIDES: &[(&str, &str)] = &[("enable.auto.commit", "tr
 /// Service-specific producer librdkafka overrides for transform-vector.
 ///
 /// - `queue.buffering.max.kbytes`: caps the local producer queue to 256 MiB
-///   (librdkafka default is 1 GiB) because transform-vector pods typically have
-///   2-4 GiB memory.
+///   (librdkafka default is 1 GiB), which is too large for a transform-vector
+///   pod.
 /// - `enable.idempotence`: the sink retries without limit, and a retry on a
 ///   non-idempotent producer can reorder and duplicate records within a
 ///   partition. librdkafka then sets `acks=all` and at most 5 requests in

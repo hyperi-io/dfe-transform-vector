@@ -25,10 +25,7 @@ path = "src/lib.rs"
 name = "dfe-transform-vector"
 path = "src/main.rs"
 
-# PGO workload driver -- built only with `--features pgo-driver`, by
-# scripts/pgo-workload.sh during a release-channel Tier 2 build. hyperi-ci
-# skips feature-gated bins when it detects and packages binaries, so this one
-# never reaches the publish payload.
+# PGO workload driver (scripts/pgo-workload.sh), built only with `--features pgo-driver`.
 [[bin]]
 name = "pgo-driver"
 path = "src/bin/pgo_driver.rs"
@@ -39,35 +36,9 @@ required-features = ["pgo-driver"]
 tokio = { version = ">=1.54.1, <2", features = ["full"] }
 tokio-util = { version = ">=0.7.20, <0.8", features = ["rt"] }
 
-# Shared library (CLI framework, deployment artefact generation, logging)
-#
-# `expression` compiles the CEL tiers of scalo's transport filters: without it
-# a tier 2 or tier 3 filter in config is refused at load.
-#
-# `health` is REQUIRED for a truthful `/readyz`: the metrics listener only
-# consults `HealthRegistry` under that feature, and its other readiness hook
-# is snapshotted before the app can set one.
-#
-# `transport-grpc-vector-compat` carries the direct transport: the supervisor
-# speaks scalo's `Transport/Push` to the rest of DFE and Vector's own
-# `vector.Vector/PushEvents` to the subprocess, and scalo has both halves of the
-# Vector protocol (`VectorCompatClient`, `VectorCompatService`). `lifecycle`
-# carries the idle gate a transform with no source topics reports through.
-# `worker-batch` carries the `BatchEngine` pipeline the bridge runs each leg on,
-# which holds a push until its records are delivered.
-#
-# `transport-kafka` carries `KafkaConfig`, the security floor `Config::validate`
-# holds the generated Kafka source and sink to, and `MESSAGE_MAX_BYTES`, the
-# record ceiling the generated sink takes. Only its config is used: the image
-# ships no librdkafka, so nothing here may build an rdkafka client.
-#
-# `scaling` carries the `ScalingPressure` the runtime serves at
-# `/scaling/pressure` and writes into the `scaling_pressure` gauge; the
-# supervisor drives its circuit gate directly, so it is named here as well as
-# arriving through `cli-service`.
-#
-# The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
-# renders only the contract version its scalo release writes.
+# `health` is REQUIRED for a truthful `/readyz`. `transport-kafka` is for its
+# config only: the image ships no librdkafka, so nothing may build an rdkafka
+# client. The floor moves with `release.helm.library` in .hyperi-ci.yaml.
 scalo = { version = ">=2.14.29, <3", features = [
     "cli-service",
     "config-reload",
@@ -101,8 +72,7 @@ bytes = ">=1.12.1, <2"
 serde = { version = ">=1.0.229, <2", features = ["derive"] }
 serde_json = ">=1.0.154, <2"
 
-# JSON Schema derivation for the reflectable config-schema capability
-# (scalo-rs#6). Same version range as scalo so cargo unifies to one schemars.
+# Config-schema derivation. Same range as scalo so cargo unifies to one schemars.
 schemars = { version = ">=1.2.3, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # Error handling
@@ -116,37 +86,26 @@ tracing-subscriber = { version = ">=0.3.23, <0.4", features = ["env-filter", "js
 # Metrics
 metrics = ">=0.24.6, <0.25"
 
-# Note: Vector metrics proxy uses raw TcpStream (no HTTP client crate needed).
-# /metrics, /livez and /readyz are served by scalo's MetricsManager listener.
-
 # Unix signals (sending SIGTERM/SIGHUP to child process), and renameat2 to
 # swap a reload's staged config in whole
 nix = { version = ">=0.31.3, <0.32", features = ["signal", "process", "fs"] }
 
-# Allocator (Tier 1 release-track optimisation; CI opts in per channel)
+# Allocator
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 prometheus-parse = ">=0.2.5, <0.3"
 
 [features]
-# CI (hyperi-ci) opts in via --features jemalloc per release channel.
-# Local cargo build uses the system allocator.
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
-# The PGO workload driver bin. Needs no dependency the supervisor does not
-# already carry, so a production build is unaffected either way.
 pgo-driver = []
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
 tokio-test = ">=0.4.6, <0.5"
-# The WS21 filebeat corpus (tests/common/filebeat.rs) is read in memory from
-# dfe-transform-vrl's committed tar.gz; chrono compares transformed timestamps
-# against the elastic golden outputs.
+# Reads dfe-transform-vrl's filebeat corpus tar.gz in memory.
 flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
 chrono = ">=0.4.45, <0.5"
-# transport-kafka-test-support is the run's shared broker container the Kafka
-# tests use.
 scalo = { version = ">=2.14.29, <3", features = [
     "transport-kafka",
     "transport-kafka-test-support",
@@ -185,22 +144,18 @@ dbg_macro = "deny"
 module_name_repetitions = "allow"
 # #[must_use] goes where dropping the value is a bug, not on every pure function.
 must_use_candidate = "allow"
-# The lints below fire in tests/ (54 sites) and one in main.rs, and the rest of src is clean.
-# 6 doc comments, 5 map then unwrap_or chains, 2 let-else candidates.
+# The lints below fire in tests/.
 doc_markdown = "allow"
 map_unwrap_or = "allow"
 manual_let_else = "allow"
-# 10 raw strings, 8 closures, 8 bare #[ignore] attributes.
 needless_raw_string_hashes = "allow"
 redundant_closure_for_method_calls = "allow"
 ignore_without_reason = "allow"
-# 2 float compares, 2 file extension compares, 2 similar names, 2 Duration subtractions, 2 empty asserts.
 float_cmp = "allow"
 case_sensitive_file_extension_comparisons = "allow"
 similar_names = "allow"
 unchecked_time_subtraction = "allow"
 assert_is_empty = "allow"
-# 1 single-arm match, 1 filter_map then next, 1 push_str of a format!, and 2 functions over 150 lines (the startup sequence in main.rs, one e2e test).
 single_match_else = "allow"
 filter_map_next = "allow"
 format_push_string = "allow"

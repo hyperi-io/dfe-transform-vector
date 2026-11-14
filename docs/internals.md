@@ -474,8 +474,7 @@ vector:
 | `disabled` | Skip check entirely. |
 
 Version check failures are logged at startup. No runtime version metrics are
-currently emitted — this is deferred until the scalo `version-check` feature
-is adopted.
+emitted.
 
 ### 7.2 Version Update Strategy
 

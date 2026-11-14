@@ -15,9 +15,8 @@ There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
    authenticate against it. Faster, and a real multi-broker cluster.
 2. **The run's shared broker**, otherwise -- one single-node Apache Kafka that
    scalo's `shared_service` starts for the whole run and every test process
-   joins. The image is scalo's `KAFKA_IMAGE`,
-   `apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837`
-   as of scalo 2.14.25. The first test that needs it starts it on the local
+   joins. The image is scalo's `KAFKA_IMAGE`.
+   The first test that needs it starts it on the local
    Docker daemon, locally and in CI alike, and a watcher removes it when the
    run's last test process exits.
 3. **Skip**, when neither is available. In CI that is an assertion failure

@@ -325,8 +325,7 @@ async fn run_transform_service(
     let started_at = Instant::now();
 
     // Drive the lifecycle-state gauge from lifecycle transitions
-    // (previously updated on every /metrics scrape; the runtime's
-    // server doesn't give us a pre-scrape hook, so we push instead).
+    // (the runtime's server has no pre-scrape hook, so we push).
     spawn_lifecycle_gauge_task(metrics.clone(), &lifecycle);
 
     // Drive scalo's ScalingPressure circuit gate from lifecycle

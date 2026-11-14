@@ -1774,7 +1774,7 @@ fn the_emitted_schema_lists_every_transport_name_the_file_reads() {
 ///
 /// Over a big dial the derived-key check refuses it outright. With the big
 /// dials off, the floor judges the typed protocol, PLAINTEXT, which production
-/// refuses whatever the raw map says -- scalo 2.13 judges typed fields only.
+/// refuses whatever the raw map says -- scalo judges typed fields only.
 #[test]
 fn a_raw_librdkafka_security_override_that_weakens_the_transport_is_refused() {
     let mut config = full_config(None);

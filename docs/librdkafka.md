@@ -46,8 +46,8 @@ after the whole merge, so `librdkafka_options` cannot reach them:
 | `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
 | `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
 
-Setting one of these in `librdkafka_options` used to be discarded in silence.
-`config-check` now refuses the config and names the big dial that owns the key.
+`config-check` refuses a config that sets one of these in `librdkafka_options`,
+and names the big dial that owns the key.
 The conditions above are part of the rule: with SASL off nothing derives
 `sasl.mechanism`, so setting it by hand there is still allowed.
 
@@ -201,7 +201,7 @@ baseline).
 
 | Setting | Side | Value | Reason |
 |---------|------|-------|--------|
-| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | Pods typically have 2-4 GiB memory. Default 1 GiB producer queue is too large. |
+| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | The default 1 GiB producer queue is too large for a transform-vector pod. |
 | `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline stalled reported lag between those points rather than losing offsets. Lag is what KEDA scales on here. |
 | `message.max.bytes` | producer | `16777216` (16 MiB), scalo's `MESSAGE_MAX_BYTES` | The record ceiling every other stage's producer and every topic scalo creates carry; librdkafka's own `1000000` refuses a larger record. Written only where neither layer 1 nor `sink.librdkafka_options` sets the key, so either of those still decides it. The size cap in front of the sink reads the same value. |
 

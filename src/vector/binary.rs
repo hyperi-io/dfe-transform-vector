@@ -405,8 +405,7 @@ mod tests {
 
     #[test]
     fn stable_on_the_real_release_list_today() {
-        // Only 0.56.0 exists on that line, so stable is 0.56.0 -- the version
-        // this image now pre-ships.
+        // Only 0.56.0 exists on that line, so stable is 0.56.0.
         let r = vs(&["0.57.0", "0.56.0", "0.55.0", "0.54.0"]);
         assert_eq!(select_stable(&r).unwrap().to_string(), "0.56.0");
     }

@@ -72,7 +72,7 @@ pub struct WiringResult {
 ///
 /// # Errors
 ///
-/// Currently never fails: every input yields a component list.
+/// Never fails: every input yields a component list.
 pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Component>> {
     let mut components = Vec::new();
 
@@ -109,7 +109,7 @@ pub fn extract_components(transforms: &[LoadedTransform]) -> Result<Vec<Componen
 ///
 /// # Errors
 ///
-/// Currently never fails: every component list yields a wiring.
+/// Never fails: every component list yields a wiring.
 pub fn auto_wire(mut components: Vec<Component>) -> Result<WiringResult> {
     if components.is_empty() {
         // No transforms: source wires directly to sink
