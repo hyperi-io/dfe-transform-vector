@@ -189,7 +189,7 @@ deployment asks for it.
 | `src/deployment.rs`, `src/vector-layer.dockerfile` | `contract()`, the source the Dockerfile and the released chart are generated from, and the two-binary image override spliced onto scalo's generated Dockerfile |
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
 | `pipelines/filebeat/` | The shipped filebeat pipeline |
-| `docs/` | `architecture.md` for the shape and the invariants, `internals.md` for field-by-field depth, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
+| `docs/` | `architecture.md` for why the service is built this way and the invariants, `internals.md` for field-by-field depth, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
 
@@ -266,7 +266,7 @@ Outbound -- what depends on this repo:
 Two more relationships that are real but are NOT declared edges in the suite
 graph, so no gate enforces them:
 
-- **dfe-infra `apps.yaml`** is the SSoT for this app's shape -- multiplicity,
+- **dfe-infra `apps.yaml`** is the SSoT for how this app is deployed -- multiplicity,
   scaling, transports, endpoints and which compiler derives its routing.
   dfe-engine reads that manifest, so adding or changing the app is a manifest
   edit, never an engine release.

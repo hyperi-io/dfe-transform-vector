@@ -12,7 +12,7 @@ already does the per-record transform work well, so building another transform
 engine was never the question. The question was the other half.
 
 Vector on its own is opaque to the platform around it. It has its own config
-shape, its own metrics endpoint, its own process lifecycle and its own idea of
+format, its own metrics endpoint, its own process lifecycle and its own idea of
 what "started" means. Every other DFE app presents one control surface: a
 big-dial YAML in the config registry, one ops port carrying `/livez`, `/readyz`
 and `/metrics`, an OTLP push, a consumer-lag scaling signal and a Helm chart
@@ -55,7 +55,7 @@ question asked of the wrong layer.
 | dfe-engine | What the app IS -- it reads `dfe-infra/apps.yaml`, compiles the Helm values and holds the config in its registry |
 | dfe-infra | The image pin and the GitOps deployment |
 
-Nothing about this app's shape is coded into dfe-engine. It is a `per_config`
+Nothing about how this app is deployed is coded into dfe-engine. It is a `per_config`
 app with `scale_deployed: true`, declared in `dfe-infra/apps.yaml` -- one
 deployment per source config, not a singleton, and KEDA drives the replica
 count. Its `default_in` list names only `docker-single`, so every other deploy
