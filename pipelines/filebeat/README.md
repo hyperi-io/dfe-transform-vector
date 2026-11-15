@@ -8,13 +8,11 @@ License:   BUSL-1.1
 Copyright: (c) 2026 HYPERI PTY LIMITED
 -->
 
-# Bundled pipeline: filebeat-compat (INTERIM)
+# Bundled pipeline: filebeat-compat (LEGACY)
 
-A pre-canned transform file that keeps DFE 2.1 filebeat feeds working on dfe-transform-vector: the same VRL dfe-transform-vrl runs, wrapped in a Vector `remap` and carrying the enrichment table it needs. Point `transforms.dir` at this directory, mount the table, and the pipeline runs -- there is nothing to author. The modules, the routing rules, the departures from DFE 2.1 and the known limitations are documented once, in dfe-transform-vrl `pipelines/filebeat/README.md`, and apply here unchanged.
+A pre-canned transform file that keeps DFE/XDR 2.0 and 2.1 filebeat feeds working on dfe-transform-vector: the same VRL dfe-transform-vrl runs, wrapped in a Vector `remap` and carrying the enrichment table it needs. Point `transforms.dir` at this directory, mount the table, and the pipeline runs -- there is nothing to author. The modules, the routing rules, the departures from DFE 2.1 and the known limitations are documented once, in dfe-transform-vrl `pipelines/filebeat/README.md`, and apply here unchanged.
 
-> **INTERIM.** Elastic compatibility is being replaced by
-> `dfe-transform-elastic` (Rust-native). New integrations
-> should NOT build on this pipeline.
+> **LEGACY.** Backwards compatibility for DFE/XDR 2.0 and 2.1 filebeat feeds, frozen at the Cisco IOS, Meraki and Umbrella modules. It takes no new modules and fetches nothing from Elastic at build, test or run time. New feeds use `dfe-transform-elastic`, and 2.0 and 2.1 feeds should plan to move there.
 
 ## Using it
 
