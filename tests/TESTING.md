@@ -51,8 +51,13 @@ cargo nextest run --run-ignored all
 
 Opt-in (`#[ignore]`) cases are the full tier: `vector_validate` runs the real validator over each buffer, SASL and TLS variant of an assembled config, and two `e2e::kafka` pipelines drive a bare Vector process against a broker.
 
-## The filebeat acceptance case
+## The WS21 acceptance case
 
-`e2e::filebeat_kafka` runs in core, on the shared broker, which no live cluster's data shares. It seeds the elastic/integrations filebeat corpus onto `filebeat_land`, runs the shipped binary over it, and grades `filebeat_load` against elastic's golden events.
+`e2e::filebeat_kafka` runs in core, on the shared broker, which no live cluster's data shares.
+It seeds the elastic/integrations filebeat corpus onto `filebeat_land`, runs the
+shipped binary over it, and grades `filebeat_load` against elastic's golden
+events.
 
-The corpus, the bundled pipeline and the list of documented divergences belong to dfe-transform-vrl, so the case needs that repo checked out beside this one, or `DFE_TRANSFORM_VRL_DIR` pointing at it. Without one it skips locally and fails under CI, which checks the repo out beside this one.
+The corpus, the bundled pipeline and the list of documented divergences belong
+to dfe-transform-vrl, so the case needs that repo checked out beside this one,
+or `DFE_TRANSFORM_VRL_DIR` pointing at it. Without one it prints a skip.

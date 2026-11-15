@@ -97,7 +97,7 @@ Left at librdkafka's default, unless a layer or a Vector field above writes them
 
 ## Central config file
 
-The central file is `$DFE_CONFIG_DIR/shared/librdkafka.yaml`. This app reads it if it is there and falls back to scalo's constants if it is not, and no other DFE app reads it. It is layer 1, so the service overrides still win over any key it sets.
+The central file is `$DFE_CONFIG_DIR/shared/librdkafka.yaml`, read only when `DFE_CONFIG_DIR` is set. This app reads it if it is there and falls back to scalo's constants if it is not, and no other DFE app reads it. It is layer 1, so the service overrides still win over any key it sets.
 
 The profiles load once, on first access, and are cached for the process lifetime, so a change to the file needs a restart: a hot reload keeps the cached profiles.
 
@@ -115,7 +115,7 @@ producer:
     # ...
 ```
 
-Only the `production` profile of each side is read. A profile in the file replaces the scalo constant set of that name, and a missing one leaves the constants in force.
+Only the `production` profile of each side is read. A profile in the file replaces the scalo constant set of that name, and a missing one leaves the constants in force. So does an empty one, or one holding no string, number or boolean value: it is skipped.
 
 ## Source code references
 

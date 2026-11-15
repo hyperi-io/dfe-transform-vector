@@ -76,7 +76,7 @@ The wiring follows these rules:
 The watcher polls the config file and the `.yaml` and `.yml` files of `transforms.dir`, or the listed `transforms.files`, every `reload.poll_interval_secs` (30 by default). A SIGHUP to the supervisor starts the same reload. Enrichment table files are not watched, and with `reload.enabled: false` nothing is, and a SIGHUP is logged and ignored.
 
 1. The config is re-read and validated.
-2. A change to the app's own keys outside the `transforms` block is refused. The watcher logs `non-transform config changed -- requires pod restart`, counts `rejected`, and keeps the running config. The change stays in the file, so every later transform change is refused too until the pod restarts. scalo's sections in the file are read once at startup and not compared: an edit to one needs a restart, and the watcher reloads the transforms and counts `success` without applying it.
+2. A change to the app's own keys outside the `transforms` block is refused. The watcher logs `non-transform config changed -- requires pod restart`, counts `rejected`, and keeps the running config. The change stays in the file, so every later transform change is refused too until the pod restarts or the edit is reverted, which lets the next transform change reload. scalo's sections in the file are read once at startup and not compared: an edit to one needs a restart, and the watcher reloads the transforms and counts `success` without applying it.
 3. A transform change is assembled into `<config_dir>.next`, its table files checked and `vector validate` run there. A failure is logged and counted `error`, and the directory Vector reads is untouched.
 4. The two directories swap in one `renameat2(RENAME_EXCHANGE)`, so a Vector restarted mid-reload reads the old one or the new one. A filesystem that cannot swap directories gets the files copied in place, which is not atomic.
 5. Vector gets a SIGHUP, and its exporter is read for the outcome: `vector_reloaded_total` counts `success`, a refusal in `vector_component_errors_total` counts `error` and swaps the old directory back, and no answer within 60 s counts `unconfirmed`.
@@ -110,7 +110,7 @@ On SIGTERM or SIGINT the intake stops, Vector gets a SIGTERM and 55 s to exit be
 
 At startup the supervisor also runs `vector --version` and compares the result with `vector.version`. `strict` and `warn` emit a security data-quality event on a mismatch, and no metric records it.
 
-| `version_check` | On a mismatch |
+| `vector.version_check` | On a mismatch |
 |---|---|
 | `strict` (the default) | Logs it and refuses to start |
 | `warn` | Logs a warning and carries on |
@@ -164,6 +164,6 @@ No chart is committed. At release hyperi-ci runs `generate-artefacts` for the de
 
 `dfe-transform-vector emit-contract` prints what the contract fixes: the probes on the metrics port and their startup budget, the Push port while `config.source.transport` is `direct` or `grpc`, the Kafka Secret in `DFE_TRANSFORM_VECTOR_{SOURCE,SINK}_SASL_{USERNAME,PASSWORD}` and `DFE_TRANSFORM_VECTOR_KAFKA_SASL_MECHANISM`, the writable paths `data`, `run` and `dlq` beside the library's `/tmp` under a read-only root, the requests and limits, the grace period, and KEDA on CPU with no Kafka lag trigger.
 
-The mounted config is the chart's `config` with `configOverrides` merged over it. The contract's `default_config` is never merged in, so the app's own defaults apply to anything a deployment leaves unset, `version_check: strict` included. The ConfigMap mounts over the config file's whole directory unless `configMount.subPath` is set, which hides the image's `/etc/dfe-transform-vector/transforms`: deliver transform files with a `fileSets` entry and point `transforms.dir` at its `mountPath`.
+The mounted config is the chart's `config` with `configOverrides` merged over it. The contract's `default_config` is never merged in, so the app's own defaults apply to anything a deployment leaves unset, `vector.version_check: strict` included. The ConfigMap mounts over the config file's whole directory unless `configMount.subPath` is set, which hides the image's `/etc/dfe-transform-vector/transforms`: deliver transform files with a `fileSets` entry and point `transforms.dir` at its `mountPath`.
 
 dfe-infra's `apps.yaml` declares the app `per_config`, so each source config gets its own Deployment, consumer group and ScaledObject. The app is in the default composition of `docker-single` only.
