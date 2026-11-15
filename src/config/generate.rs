@@ -348,10 +348,10 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
     encoding.insert(key("codec"), val(&sink.encoding));
     component.insert(key("encoding"), Value::Object(encoding));
 
-    // Compression
-    if sink.compression != "none" {
-        component.insert(key("compression"), val(&sink.compression));
-    }
+    // Compression. Vector writes this as `compression.codec`, the only
+    // statement of it: librdkafka reads `compression.type` as the same setting,
+    // so `build_sink_librdkafka` keeps that spelling out.
+    component.insert(key("compression"), val(&sink.compression));
 
     // Acknowledgements — on the sink (not source) per Vector 0.53+ guidance
     component.insert(key("acknowledgements"), enabled_block(acknowledged));
@@ -509,11 +509,15 @@ pub fn derived_source_options(source: &SourceConfig) -> Vec<(&'static str, &'sta
 
 /// Sink counterpart of [`derived_source_options`].
 ///
-/// `compression.type` is unconditional: the sink always writes it from
+/// `compression.type` and `compression.codec`, librdkafka's two spellings of
+/// one setting, are unconditional: the sink always writes the codec from
 /// `sink.compression`.
 #[must_use]
 pub fn derived_sink_options(sink: &SinkConfig) -> Vec<(&'static str, &'static str)> {
-    let mut derived = vec![("compression.type", "sink.compression")];
+    let mut derived = vec![
+        ("compression.type", "sink.compression"),
+        ("compression.codec", "sink.compression"),
+    ];
     if security_protocol(&sink.sasl, &sink.tls).is_some() {
         derived.push((
             "security.protocol",
@@ -606,15 +610,10 @@ fn build_sink_librdkafka(sink: &SinkConfig) -> Mapping {
         m.insert(key(k), val(v));
     }
 
-    // Compression from big-dial config (overrides scalo default if different)
-    let compression = match sink.compression.as_str() {
-        "none" => "none",
-        "gzip" => "gzip",
-        "lz4" => "lz4",
-        "snappy" => "snappy",
-        _ => "zstd",
-    };
-    m.insert(key("compression.type"), val(compression));
+    // The codec comes from `sink.compression` through Vector's own field, so a
+    // profile's spelling of it is dropped.
+    m.remove("compression.type");
+    m.remove("compression.codec");
     insert_security_options(&mut m, &sink.sasl, &sink.tls);
     m
 }
@@ -1386,7 +1385,7 @@ mod tests {
         assert!(text.contains("codec: json"));
         assert!(text.contains("compression: zstd"));
         // Production librdkafka defaults (from scalo kafka_config)
-        assert!(text.contains("compression.type: zstd"));
+        assert!(!text.contains("compression.type"));
         assert!(text.contains("socket.nagle.disable: \"true\""));
         assert!(text.contains("statistics.interval.ms: \"1000\""));
         // Service-specific override: producer queue cap
@@ -1546,16 +1545,16 @@ mod tests {
             sink.get("compression").and_then(Value::as_str),
             Some("zstd")
         );
-        assert_eq!(
-            sink.get("librdkafka_options")
-                .and_then(|o| o.get("compression.type"))
-                .and_then(Value::as_str),
-            Some("zstd")
-        );
+        let options = sink
+            .get("librdkafka_options")
+            .and_then(Value::as_object)
+            .expect("the librdkafka options");
+        assert!(!options.contains_key("compression.type"));
+        assert!(!options.contains_key("compression.codec"));
     }
 
     #[test]
-    fn sink_yaml_no_compression_sets_none_in_librdkafka() {
+    fn sink_yaml_no_compression_sets_none_on_the_vector_field() {
         let sink = SinkConfig {
             compression: "none".into(),
             ..Default::default()
@@ -1563,10 +1562,40 @@ mod tests {
         let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
-        // Vector-level compression omitted
-        assert!(!text.contains("\n    compression:"));
-        // librdkafka compression.type set to none
-        assert!(text.contains("compression.type: none"));
+        assert!(text.contains("\n    compression: none"));
+        assert!(!text.contains("compression.type"));
+    }
+
+    /// A sink states its compression codec once, as Vector's `compression`
+    /// field. Vector writes that as `compression.codec`, which librdkafka reads
+    /// as `compression.type`, so a second statement leaves the producer with
+    /// whichever one the client applied last.
+    #[test]
+    fn a_kafka_sink_states_its_compression_codec_once() {
+        for codec in ["none", "gzip", "lz4", "snappy", "zstd"] {
+            let sink = SinkConfig {
+                compression: codec.into(),
+                ..Default::default()
+            };
+            let component = kafka_sink_component(&sink, &["src".into()], true);
+            let options = component["librdkafka_options"].as_object().unwrap();
+            assert_eq!(component["compression"], codec);
+            assert!(!options.contains_key("compression.type"), "{codec}");
+            assert!(!options.contains_key("compression.codec"), "{codec}");
+        }
+    }
+
+    /// Either spelling in `sink.librdkafka_options` is refused, with the dial
+    /// that owns the codec named.
+    #[test]
+    fn both_spellings_of_the_compression_codec_are_derived_options() {
+        let derived = derived_sink_options(&SinkConfig::default());
+        for spelling in ["compression.type", "compression.codec"] {
+            assert!(
+                derived.contains(&(spelling, "sink.compression")),
+                "{spelling}"
+            );
+        }
     }
 
     #[test]
