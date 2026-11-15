@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.65](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.64...v1.0.65) (2026-11-15)
+
+### Bug Fixes
+
+* **deps:** take rustix 1.1.6 ([ed6925e](https://github.com/hyperi-io/dfe-transform-vector/commit/ed6925ef39071c03c6617e895b3c63d5f4ff0d86))
+* **scalo:** rebuild on 2.14.30 ([#163](https://github.com/hyperi-io/dfe-transform-vector/issues/163)) ([7441b42](https://github.com/hyperi-io/dfe-transform-vector/commit/7441b42bf235067a89c40aaa0967795149e742da))
+
 ## [1.0.64](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.63...v1.0.64) (2026-11-11)
 
 ### Bug Fixes
