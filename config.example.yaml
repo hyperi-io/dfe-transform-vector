@@ -1,5 +1,5 @@
 # =============================================================================
-# dfe-transform-vector — example configuration
+# dfe-transform-vector -- example configuration
 # =============================================================================
 #
 # Copy to config.yaml and modify as needed.
@@ -20,7 +20,7 @@ pipeline:
 # -----------------------------------------------------------------------------
 # DFE source name
 # -----------------------------------------------------------------------------
-# The one setting a working config cannot go without. It derives the platform
+# Set it, or set source.topics and sink.topic yourself. It derives the platform
 # topic names and the consumer group. With pipeline.name "my-pipeline" above:
 #   source.topics   -> ["my_source_land"]
 #   sink.topic      -> "my_source_load"
@@ -49,7 +49,7 @@ dfe_source: "my_source"
 #   auto_offset_reset: "largest"       # largest, smallest
 #   session_timeout_ms: 30000          # consumer group session timeout
 #   commit_interval_ms: 5000           # offset commit interval
-#   drain_timeout_ms: 15000            # max wait during rebalance (default: half session_timeout)
+#   drain_timeout_ms: 15000            # max wait during rebalance (Vector's default: half session_timeout_ms)
 #   topic_lag_metric: true             # expose consumer lag metric
 #   # Commit an offset, or answer a push, only once the record is delivered.
 #   acknowledgements:
@@ -69,7 +69,7 @@ dfe_source: "my_source"
 #     enabled: true
 #     # DFE_TRANSFORM_VECTOR_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
 #     # turns this on for source and sink. No value turns it off.
-#   # librdkafka overrides — production defaults baked in, override here
+#   # librdkafka overrides over the production profile (docs/librdkafka.md)
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
 #   #   queued.min.messages: "100000"
@@ -92,15 +92,15 @@ dfe_source: "my_source"
 #   socket_timeout_ms: 60000           # broker socket timeout
 #   batch:
 #     max_events: 10000                # Vector-level batch size (default 10K)
-#     # max_bytes: 8388608             # optional byte limit; on direct at most 16 MiB, 8 MiB unset
-#     timeout_secs: 1                  # flush timeout; at most 1 on direct
+#     # max_bytes: 8388608             # optional byte limit, at most 16 MiB on direct, where unset means 8 MiB
+#     timeout_secs: 1                  # flush timeout, at most 1 on direct
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
 #     secret_dir: "/var/run/secrets/dfe-kafka"
 #   tls:
 #     enabled: true
-#   # librdkafka overrides — production defaults baked in, override here
+#   # librdkafka overrides over the production profile (docs/librdkafka.md)
 #   # librdkafka_options:
 #   #   batch.size: "8388608"
 #   #   linger.ms: "20"
@@ -123,7 +123,7 @@ dfe_source: "my_source"
 # -----------------------------------------------------------------------------
 # transforms:
 #   dir: "/etc/dfe/transforms/"
-#   # Or specify individual files (loaded in order):
+#   # Or list the files, loaded in order. Read only when dir is unset.
 #   # files:
 #   #   - "/etc/dfe/transforms/parse.yaml"
 #   #   - "/etc/dfe/transforms/enrich.yaml"
@@ -138,15 +138,16 @@ dfe_source: "my_source"
 #   binary: "/usr/local/bin/vector"
 #   data_dir: "/var/lib/vector"
 #   # Where the assembled Vector config is written. The default is the
-#   # container path; a bare install has no write access there.
+#   # container path, which a bare install cannot write.
 #   config_dir: "/var/run/vector/config"
 #   # Vector's API is unauthenticated and nothing here uses it, so it is off.
 #   # Turned on, it binds a loopback address only.
 #   api_enabled: false
 #   api_address: "127.0.0.1:8686"
 #   log_level: "info"
-#   # Version pinning — prevents silent version drift
-#   version: "0.61.0"
+#   # The Vector release the binary must report. The default is the release
+#   # the image ships, so set it only beside a binary you supply.
+#   version: "<vector release>"
 #   version_check: "strict"           # strict, warn, disabled
 #   # The supervisor runs `binary` and never fetches one, so `preshipped` is
 #   # the only value accepted. To run a different Vector, point `binary` at it
@@ -174,11 +175,12 @@ dfe_source: "my_source"
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-# --log-level/LOG_LEVEL and --log-format/LOG_FORMAT outrank these;
-# --verbose/--quiet outrank everything.
+# --log-level/LOG_LEVEL and --log-format/LOG_FORMAT outrank these, and
+# --verbose/--quiet outrank everything. auto is JSON when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set, else text on a terminal or under CI, else JSON.
 logging:
   level: "info"                        # trace, debug, info, warn, error
-  format: "auto"                       # json, text, auto (text on a tty)
+  format: "auto"                       # json, text, auto
 
 # -----------------------------------------------------------------------------
 # Scaling pressure
@@ -186,11 +188,11 @@ logging:
 # NOTHING IN THIS APP READS `pressure_threshold`. It is accepted for parity
 # with the `scaling:` block every DFE service takes, and range-checked. scalo's
 # runtime reads its own `enabled` and `memory_gate_threshold` keys from this
-# block for the pressure gauge the subprocess circuit gates.
+# block for the scaling_pressure gauge. Nothing feeds that gauge a reading here,
+# so it stays 0 and the memory gate never fires.
 #
-# What actually scales this app is the chart's KEDA ScaledObject -- CPU, plus
-# any trigger a deployment adds -- gated by the Vector subprocess circuit, which
-# pins pressure to 0 while the subprocess is down (more pods cannot help a dead
-# subprocess).
+# What scales this app is the chart's KEDA ScaledObject: CPU, plus any trigger
+# a deployment adds. The subprocess circuit pins scaling_pressure to 0 while
+# Vector is down, which matters only to a trigger that reads it.
 # scaling:
 #   pressure_threshold: 0.8

@@ -1,245 +1,105 @@
-# librdkafka Configuration Reference
+# librdkafka settings
 
-DFE services use librdkafka (via Vector's Kafka source/sink or via rdkafka crate
-directly). This document covers the shared baseline defaults, per-service
-overrides, and how to customise settings through the config cascade.
+On the bus transport Vector owns the Kafka clients, and the supervisor writes their librdkafka settings into the generated source and sink as `librdkafka_options`. This page covers where those settings come from and how to change them.
 
-## Design Philosophy
+## Layers
 
-**Only set values that differ from librdkafka defaults.** Every non-default
-setting must have clear justification. Fewer overrides means fewer surprises,
-easier debugging, and automatic benefit from upstream librdkafka improvements.
+Three layers merge into `librdkafka_options`, highest last:
 
-## Configuration Cascade
+| Layer | Source | Who manages it |
+|-------|--------|----------------|
+| 1. Baseline profile | `consumer.production` or `producer.production` in the central file when it defines that profile, else scalo's `CONSUMER_PRODUCTION` or `PRODUCER_PRODUCTION` | Platform operator, or scalo |
+| 2. Service overrides | Hardcoded in `src/config/generate.rs` | This repo |
+| 3. Per-instance options | `source.librdkafka_options`, `sink.librdkafka_options` | Whoever writes the config |
 
-Three layers merge in priority order (highest wins):
+Layer 1 is one layer, not two. A profile in the central file REPLACES the matching scalo constant set outright, so a central `producer.production` that names only `linger.ms` ships only `linger.ms`, and every other baseline setting reverts to what Vector writes itself, below, or else librdkafka's default. Layer 2 sits on whichever source won, so a central setting cannot undo a service override: `queue.buffering.max.kbytes` set centrally takes no effect here.
 
-| Layer | Source | Who Manages |
-|-------|--------|-------------|
-| 3. User config YAML | `librdkafka_options:` in service config | Platform operator |
-| 2. Service-specific | Hardcoded in each service's generator | Service developer |
-| 1. Baseline profile | The central config file if it defines the profile, else `scalo::kafka_config` constants | Platform team / shared library |
+Vector applies `librdkafka_options` over the settings it writes itself from the source and sink fields, so every layer above outranks those:
 
-**Layer 1 is one layer, not two, and the two sources are mutually exclusive.**
-A profile named in `librdkafka.yaml` REPLACES the matching scalo constant set
-outright -- it does not merge over it. A central profile that names only
-`linger.ms` therefore ships only `linger.ms`, and every other baseline setting
-reverts to the librdkafka default. Restate the whole profile in the central
-file, or leave the profile out and let the constants stand.
+| librdkafka key | Written by Vector from |
+|---|---|
+| `session.timeout.ms`, `auto.commit.interval.ms`, `auto.offset.reset` | `source.session_timeout_ms` (30000), `source.commit_interval_ms` (5000), `source.auto_offset_reset` (`largest`) |
+| `enable.auto.commit`, `enable.auto.offset.store`, `statistics.interval.ms` | Vector's own source, as `true`, `false` and `1000` |
+| `message.timeout.ms`, `socket.timeout.ms` | `sink.message_timeout_ms` (0, no limit), `sink.socket_timeout_ms` (60000) |
+| `queue.buffering.max.ms`, `batch.num.messages`, `batch.size` | `sink.batch.timeout_secs`, `.max_events` and, where set, `.max_bytes` |
 
-**A service override beats the central file.** Layer 2 is applied on top of
-whichever layer-1 source won, so a platform-wide central setting cannot undo a
-service's hardcoded one -- see Service-Specific Overrides for what each service
-pins. Only layer 3, the per-instance `librdkafka_options:`, is above it. That
-matters when tuning: `queue.buffering.max.kbytes` is a transform-vector service
-override, so setting it centrally will NOT take effect.
+`linger.ms` is librdkafka's other name for `queue.buffering.max.ms`. rdkafka applies a client's options from a hash map, so with the production profile's `linger.ms` beside Vector's `queue.buffering.max.ms`, which one a producer ends up with is not fixed.
 
-### The big dials sit above all three
+A few keys are derived from the big dials and written after the merge, so `librdkafka_options` cannot reach them:
 
-A handful of librdkafka keys are DERIVED from the big-dial config and written
-after the whole merge, so `librdkafka_options` cannot reach them:
-
-| Key | Owned by | Applies when |
+| Key | Owned by | Written when |
 |---|---|---|
 | `compression.type` | `sink.compression` | always, on the sink |
 | `security.protocol` | `{source,sink}.sasl.enabled` + `.tls.enabled` | either is on |
 | `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
 | `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
 
-`config-check` refuses a config that sets one of these in `librdkafka_options`,
-and names the big dial that owns the key.
-The conditions above are part of the rule: with SASL off nothing derives
-`sasl.mechanism`, so setting it by hand there is still allowed.
+`config-check` refuses a config that sets one of these in `librdkafka_options`, and names the big dial that owns the key. The conditions are part of the rule: with SASL off nothing derives `sasl.mechanism`, so setting it by hand there is allowed. Any other key can be set per instance:
 
-### Example
+```yaml
+source:
+  librdkafka_options:
+    fetch.min.bytes: "2097152"    # 2 MiB instead of 1 MiB
 
-A transform-vector pod producing to Kafka, with no central config file:
+sink:
+  librdkafka_options:
+    queue.buffering.max.kbytes: "524288"  # 512 MiB
+```
 
-1. Baseline: scalo `PRODUCER_PRODUCTION` sets `linger.ms=100`,
-   `compression.type=zstd`, `socket.nagle.disable=true`,
-   `statistics.interval.ms=1000` -- or, if `librdkafka.yaml` defines
-   `producer.production`, exactly what that profile lists and nothing else
-2. Service override adds `queue.buffering.max.kbytes=262144` (256 MiB cap)
-3. User config YAML sets `linger.ms=20` for a specific pipeline
-4. The big dial `sink.compression: lz4` is applied last
+## Example
 
-Result: `linger.ms=20`, `compression.type=lz4`,
-`queue.buffering.max.kbytes=262144`, `socket.nagle.disable=true`,
-`statistics.interval.ms=1000`, and `message.max.bytes=16777216` because no layer
-set it
+For a producer with no central file, `sink.compression: lz4` and `sink.librdkafka_options: {linger.ms: "20"}`, the supervisor writes `linger.ms=20`, `compression.type=lz4`, `queue.buffering.max.kbytes=262144`, `enable.idempotence=true`, `socket.nagle.disable=true`, `statistics.interval.ms=1000` and `message.max.bytes=16777216`, the last because no layer set it.
 
-Add a central `producer.production` naming only `linger.ms=50` and the result
-becomes `linger.ms=50`, `compression.type=lz4`,
-`queue.buffering.max.kbytes=262144` -- `socket.nagle.disable` and
-`statistics.interval.ms` are gone, because the central profile replaced the
-constants rather than merging over them.
+Add a central `producer.production` naming only `linger.ms: "50"` and `socket.nagle.disable` and `statistics.interval.ms` drop out of `librdkafka_options`, because the central profile replaced the constants rather than merging over them. Vector still writes `statistics.interval.ms=1000` itself. `linger.ms` stays `20`: the per-instance option outranks the central file. Drop that option and it becomes `50`.
 
-## Consumer Profiles
+`dfe-transform-vector --config <file> assemble <dir>` writes `90_sink.yaml` and `00_source.yaml`, so you can read the result for any config.
 
-### Production (`CONSUMER_PRODUCTION`)
+## The production profiles
 
-High-throughput consumer baseline. Used by dfe-loader, dfe-transform-vector,
-and any service consuming from Kafka in production.
+This app reads `CONSUMER_PRODUCTION` for the source and `PRODUCER_PRODUCTION` for the sink, and no other profile. The librdkafka defaults below are those of the librdkafka release Vector bundles.
 
-| Setting | Value | librdkafka Default | Justification |
+| Consumer setting | Value | librdkafka default | Justification |
 |---------|-------|--------------------|---------------|
 | `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | KIP-429: incremental rebalances avoid stop-the-world pauses. Partitions stay assigned during rebalance -- only moving partitions are revoked. |
 | `fetch.min.bytes` | `1048576` (1 MiB) | `1` | Batch fetches for throughput. Broker waits until 1 MiB of data is available before responding, reducing fetch round-trips. |
-| `fetch.wait.max.ms` | `100` | `500` | Upper bound on fetch latency when `fetch.min.bytes` threshold isn't met. Prevents 500 ms stalls on low-volume topics. |
-| `queued.min.messages` | `20000` | `100000` | Pre-fetch queue depth. 10-20K is the efficiency sweet spot -- large enough for batching, small enough to avoid excessive memory and rebalance lag. |
-| `enable.auto.commit` | `false` | `true` | Suits a service that commits by hand after processing, which is how dfe-loader withholds offsets on a failed insert. transform-vector overrides this back to `true` -- see Service-Specific Overrides. |
-| `statistics.interval.ms` | `1000` | `0` (disabled) | Enable librdkafka internal metrics at 1-second granularity for Prometheus scraping. |
+| `fetch.wait.max.ms` | `100` | `500` | Upper bound on fetch latency when the `fetch.min.bytes` threshold isn't met. Prevents 500 ms stalls on low-volume topics. |
+| `queued.min.messages` | `20000` | `100000` | Pre-fetch queue depth, large enough for batching and small enough to bound memory and rebalance lag. |
+| `enable.auto.commit` | `false` | `true` | Suits a service that commits by hand after processing. This app overrides it back to `true` -- see Service overrides. |
+| `statistics.interval.ms` | `1000` | `0` (disabled) | librdkafka internal metrics at 1-second granularity. |
 
-**Settings intentionally left at default:**
-
-| Setting | Default | Why Not Changed |
-|---------|---------|-----------------|
-| `queued.max.messages.kbytes` | `65536` (64 MiB) | Adequate for DFE message sizes |
-| `socket.receive.buffer.bytes` | `0` (OS default) | OS auto-tuning is better than static values |
-| `auto.offset.reset` | `latest` | Controlled per-service via big-dial config, not librdkafka |
-| `session.timeout.ms` | `45000` | Default is sensible for K8s environments |
-| `heartbeat.interval.ms` | `3000` | Default (session.timeout / 15) is correct |
-| `max.poll.interval.ms` | `300000` | Default 5 min is generous enough |
-| `fetch.max.bytes` | `52428800` (50 MiB) | Default is adequate |
-
-### Development/Test (`CONSUMER_DEVTEST`)
-
-Fast iteration, low memory footprint. For local dev and CI.
-
-| Setting | Value | librdkafka Default | Justification |
+| Producer setting | Value | librdkafka default | Justification |
 |---------|-------|--------------------|---------------|
-| `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | Consistent with production |
-| `queued.min.messages` | `1000` | `100000` | Lower memory on dev machines |
-| `enable.auto.commit` | `false` | `true` | Consistent with production |
-| `reconnect.backoff.ms` | `10` | `100` | Fast reconnect for quick iteration |
-| `reconnect.backoff.max.ms` | `100` | `10000` | Cap quickly -- don't wait 10s in dev |
-| `log.connection.close` | `true` | `false` | Debug-friendly connection logging |
-| `statistics.interval.ms` | `1000` | `0` | Metrics available even in dev |
+| `linger.ms` | `100` | `5` | Larger batches -- 100 ms of latency for higher throughput. See Layers for how it meets Vector's `queue.buffering.max.ms`. |
+| `compression.type` | `zstd` | `none` | Best compression ratio with acceptable CPU cost. `sink.compression` replaces it on every sink. |
+| `socket.nagle.disable` | `true` | `true` | Already librdkafka's default. The profile states it. |
+| `statistics.interval.ms` | `1000` | `0` | librdkafka metrics. |
 
-### Low-Latency (`CONSUMER_LOW_LATENCY`)
+Left at librdkafka's default, unless a layer or a Vector field above writes them:
 
-Minimal fetch delay for latency-sensitive pipelines.
+| Setting | Default |
+|---------|---------|
+| `queued.max.messages.kbytes` | `65536` (64 MiB) |
+| `socket.receive.buffer.bytes` | `0` (OS default) |
+| `heartbeat.interval.ms` | `3000` |
+| `max.poll.interval.ms` | `300000` |
+| `fetch.max.bytes` | `52428800` (50 MiB) |
+| `acks` | `all` (-1), which idempotence requires anyway |
+| `retries` | `2147483647` |
 
-| Setting | Value | librdkafka Default | Justification |
-|---------|-------|--------------------|---------------|
-| `partition.assignment.strategy` | `cooperative-sticky` | `range,roundrobin` | Consistent across environments |
-| `fetch.wait.max.ms` | `10` | `500` | Return from fetch after 10 ms regardless of data available |
-| `queued.min.messages` | `1000` | `100000` | Smaller pre-fetch queue -- process sooner |
-| `enable.auto.commit` | `false` | `true` | DFE manages commits |
-| `reconnect.backoff.ms` | `10` | `100` | Fast reconnect |
-| `reconnect.backoff.max.ms` | `100` | `10000` | Cap quickly |
-| `statistics.interval.ms` | `1000` | `0` | Enable metrics |
-
-## Producer Profiles
-
-### Production (`PRODUCER_PRODUCTION`)
-
-High-throughput producer. Default for all DFE services writing to Kafka.
-
-| Setting | Value | librdkafka Default | Justification |
-|---------|-------|--------------------|---------------|
-| `linger.ms` | `100` | `5` | Accumulate larger batches -- 100 ms latency trade-off for significantly higher throughput. Most DFE pipelines are throughput-optimised. |
-| `compression.type` | `zstd` | `none` | Best compression ratio with acceptable CPU cost. Reduces network I/O and broker storage. |
-| `socket.nagle.disable` | `true` | `false` | Disable TCP Nagle's algorithm. Kafka already batches at the application level (`linger.ms`), so Nagle just adds latency. |
-| `statistics.interval.ms` | `1000` | `0` | Enable librdkafka metrics for Prometheus. |
-
-**Settings intentionally left at default:**
-
-| Setting | Default | Why Not Changed |
-|---------|---------|-----------------|
-| `acks` | `all` (-1) | Default is already the safest -- all ISR replicas must acknowledge. |
-| `batch.size` | `1000000` (1 MiB) | Adequate for most workloads |
-| `batch.num.messages` | `10000` | Default is reasonable |
-| `queue.buffering.max.kbytes` | `1048576` (1 GiB) | Default is fine for most services. transform-vector overrides to 256 MiB due to lower pod memory. |
-| `message.max.bytes` | `1000000` | Left out of the profile. dfe-transform-vector writes scalo's 16 MiB pipeline ceiling where no layer sets it -- see Service-Specific Overrides. |
-| `retries` | `2147483647` (max) | Default retry-forever with idempotence is correct. |
-| `delivery.timeout.ms` | `300000` (5 min) | Generous timeout for transient broker issues |
-
-### Exactly-Once (`PRODUCER_EXACTLY_ONCE`)
-
-Idempotent producer with ordering guarantees.
-
-| Setting | Value | librdkafka Default | Justification |
-|---------|-------|--------------------|---------------|
-| `enable.idempotence` | `true` | `false` | Exactly-once semantics within a partition. Broker deduplicates by producer ID + sequence number. |
-| `acks` | `all` | `all` (-1) | Already default but stated explicitly -- invariant for EOS. |
-| `max.in.flight.requests.per.connection` | `5` | `1000000` | Maximum value that preserves ordering with idempotent producer (librdkafka requirement). |
-| `linger.ms` | `20` | `5` | Moderate batching -- lower than production to reduce latency for EOS workloads. |
-| `compression.type` | `zstd` | `none` | Consistent with production |
-| `socket.nagle.disable` | `true` | `false` | Consistent with production |
-| `statistics.interval.ms` | `1000` | `0` | Enable metrics |
-
-### Low-Latency (`PRODUCER_LOW_LATENCY`)
-
-Minimal delay, leader-ack only. Trades durability for speed.
-
-| Setting | Value | librdkafka Default | Justification |
-|---------|-------|--------------------|---------------|
-| `acks` | `1` | `all` (-1) | Leader acknowledgement only -- skip ISR replication wait. Risk: data loss if leader crashes before replication. |
-| `linger.ms` | `0` | `5` | Send immediately, no batching delay. |
-| `compression.type` | `lz4` | `none` | LZ4 is the fastest compression codec -- adds minimal CPU for significant bandwidth reduction. |
-| `socket.nagle.disable` | `true` | `false` | No TCP coalescing |
-| `statistics.interval.ms` | `1000` | `0` | Enable metrics |
-
-### Development/Test (`PRODUCER_DEVTEST`)
-
-Fast acks, no compression overhead. For local dev and CI.
-
-| Setting | Value | librdkafka Default | Justification |
-|---------|-------|--------------------|---------------|
-| `acks` | `1` | `all` (-1) | Faster for dev -- don't wait for full ISR |
-| `socket.nagle.disable` | `true` | `false` | Consistent across profiles |
-| `statistics.interval.ms` | `1000` | `0` | Enable metrics even in dev |
-
-## Service-Specific Overrides
-
-Each DFE service may add overrides on top of the shared baseline. These are
-hardcoded in the service and applied at layer 2 (below user config, above
-baseline).
-
-### dfe-transform-vector
+## Service overrides
 
 | Setting | Side | Value | Reason |
 |---------|------|-------|--------|
-| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | The default 1 GiB producer queue is too large for a transform-vector pod. |
-| `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline stalled reported lag between those points rather than losing offsets. Lag is what KEDA scales on here. |
-| `message.max.bytes` | producer | `16777216` (16 MiB), scalo's `MESSAGE_MAX_BYTES` | The record ceiling every other stage's producer and every topic scalo creates carry; librdkafka's own `1000000` refuses a larger record. Written only where neither layer 1 nor `sink.librdkafka_options` sets the key, so either of those still decides it. The size cap in front of the sink reads the same value. |
+| `queue.buffering.max.kbytes` | producer | `262144` (256 MiB) | librdkafka's default 1 GiB producer queue is too large for a transform-vector pod. |
+| `enable.idempotence` | producer | `true` | The sink retries without limit, and a retry on a non-idempotent producer can reorder and duplicate records within a partition. |
+| `enable.auto.commit` | consumer | `true` | Vector's kafka source stores offsets on delivery and leaves the periodic flush to librdkafka's commit timer, which the baseline's `false` never arms. Vector still commits on rebalance and clean shutdown, so the baseline left reported lag stuck between those points rather than losing offsets. |
+| `message.max.bytes` | producer | `16777216` (16 MiB), scalo's `MESSAGE_MAX_BYTES` | The record ceiling every other stage's producer and every topic scalo creates carry, where librdkafka's own `1000000` refuses a larger record. Written only where neither layer 1 nor `sink.librdkafka_options` sets the key. The size cap in front of the sink reads the same value. |
 
-### dfe-loader
+## Central config file
 
-No service-specific overrides currently. Uses production baseline as-is.
+The central file is `$DFE_CONFIG_DIR/shared/librdkafka.yaml`. This app reads it if it is there and falls back to scalo's constants if it is not, and no other DFE app reads it. It is layer 1, so the service overrides still win over any key it sets.
 
-### dfe-receiver
-
-No service-specific overrides currently. Uses production baseline as-is.
-
-## Central Config File
-
-A single `librdkafka.yaml` in the deployment's private config repo
-is the management point for the platform-wide baseline. All DFE services
-read this file at startup and fall back to scalo coded-in constants if
-it isn't present. It is layer 1, so service-specific constants (layer 2)
-still override any key it sets.
-
-**Location:** `<config-repo>/shared/librdkafka.yaml`
-
-**Discovery:** Via `DFE_CONFIG_DIR` environment variable. The service reads
-`$DFE_CONFIG_DIR/shared/librdkafka.yaml`. This follows the same pattern
-dfe-engine uses for `services/`, `deployment/`, etc.
-
-**Activation:**
-
-```bash
-cd /path/to/config-repo
-cp shared/librdkafka.yaml.example shared/librdkafka.yaml
-# Edit as needed, then commit
-```
-
-**Caching:** Profiles are loaded once on first access via `OnceLock` and
-cached for the process lifetime. Changes require a service restart (or
-future hot-reload support).
-
-**Format:**
+The profiles load once, on first access, and are cached for the process lifetime, so a change to the file needs a restart: a hot reload keeps the cached profiles.
 
 ```yaml
 consumer:
@@ -248,64 +108,20 @@ consumer:
     fetch.min.bytes: "1048576"
     # ... add/remove/change any librdkafka setting
 
-  devtest:
-    # ...
-
-  low_latency:
-    # ...
-
 producer:
   production:
     linger.ms: "100"
     compression.type: zstd
     # ...
-
-  exactly_once:
-    # ...
-
-  low_latency:
-    # ...
-
-  devtest:
-    # ...
 ```
 
-Profile names match the scalo constant names (`production`, `devtest`,
-`low_latency`, `exactly_once`). If a profile exists in the file, it
-completely replaces the scalo constant for that profile. If a profile
-is missing from the file, the scalo constant is used.
+Only the `production` profile of each side is read. A profile in the file replaces the scalo constant set of that name, and a missing one leaves the constants in force.
 
-## User Config Overrides
+## Source code references
 
-Any setting can be overridden per-instance via the service's config YAML:
-
-```yaml
-source:
-  librdkafka_options:
-    fetch.min.bytes: "2097152"    # 2 MiB instead of 1 MiB
-    custom.vendor.setting: "value"
-
-sink:
-  librdkafka_options:
-    queue.buffering.max.kbytes: "524288"  # 512 MiB
-```
-
-These are layer 3 (highest priority) and override everything below, including
-the service-specific constants -- but NOT the derived keys in the table above.
-`compression.type` belongs to `sink.compression`, and putting it here is a
-config error rather than a silent no-op.
-
-## Source Code References
-
-- **Shared baseline constants:** `scalo/src/kafka_config.rs`
-- **Central config loader:** `src/config/kafka_defaults.rs` (YAML loading, `OnceLock` cache, fallback)
-- **Profile accessors:** `kafka_defaults::consumer_profile()`, `kafka_defaults::producer_profile()`
-- **3-layer merge:** `kafka_defaults::merge_layers()` (base + service overrides + user overrides)
-- **YAML generator:** `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`)
-- **Config schema:** `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
-- **Central config file:** `<config-repo>/shared/librdkafka.yaml.example`
-
-## Reference
-
-- [librdkafka CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) -- full property reference with defaults
-- [KIP-429](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol) -- cooperative-sticky rebalance protocol
+- Profile constants: scalo-rs `src/kafka_config.rs`
+- Central file loader: `src/config/kafka_defaults.rs` (`consumer_profile()`, `producer_profile()`, the `OnceLock` cache, `merge_layers()`)
+- Layer merge and derived keys: `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`, `SERVICE_CONSUMER_OVERRIDES`, `SERVICE_PRODUCER_OVERRIDES`)
+- Config fields: `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
+- [librdkafka CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) -- every property, with its default
+- [KIP-429](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol) -- the cooperative-sticky rebalance protocol

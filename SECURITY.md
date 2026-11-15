@@ -17,12 +17,10 @@ Please include:
 
 ## What to Expect
 
-- **Acknowledgment**: We will acknowledge receipt of your report within
-  5 business days
-- **Investigation**: We will investigate and keep you informed of our progress
-- **Resolution**: We will work to resolve confirmed vulnerabilities promptly
-- **Disclosure**: We will coordinate with you on an appropriate disclosure
-  timeline
+- We will acknowledge receipt of your report within 5 business days
+- We will investigate and keep you informed of our progress
+- We will work to resolve confirmed vulnerabilities promptly
+- We will coordinate with you on an appropriate disclosure timeline
 
 ## Safe Harbour
 
@@ -39,12 +37,12 @@ We will not pursue legal action against security researchers who:
 ## Recognition
 
 With your permission, we will credit you for the discovery of confirmed
-vulnerabilities. We do not currently offer monetary bounties, but we value
+vulnerabilities. We do not offer monetary bounties, but we value
 and appreciate responsible disclosure.
 
 ## Out of Scope
 
-The following are generally out of scope:
+These are generally out of scope:
 
 - Social engineering or phishing attacks
 - Denial of service (DoS/DDoS) attacks
