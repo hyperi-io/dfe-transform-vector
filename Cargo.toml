@@ -102,10 +102,6 @@ pgo-driver = []
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
 tokio-test = ">=0.4.6, <0.5"
-# Reads dfe-transform-vrl's filebeat corpus tar.gz in memory.
-flate2 = ">=1.1.10, <2"
-tar = ">=0.4.46, <0.5"
-chrono = ">=0.4.45, <0.5"
 scalo = { version = ">=2.14.30, <3", features = [
     "transport-kafka",
     "transport-kafka-test-support",

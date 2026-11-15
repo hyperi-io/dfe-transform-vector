@@ -67,7 +67,7 @@ jobs:
     uses: hyperi-io/hyperi-ci/.github/workflows/rust-ci.yml@main
     with:
       publish-target: both
-      # The filebeat corpus test reads the pipeline and corpus from this repo, beside the checkout.
+      # The filebeat test reads the pipeline and cases from this repo, beside the checkout.
       sibling-checkouts: hyperi-io/dfe-transform-vrl
       tag: ${{ inputs.tag || '' }}
       from-head: ${{ inputs.from-head || '' }}
