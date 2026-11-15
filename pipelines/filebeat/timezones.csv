@@ -1,0 +1,213 @@
+abbreviation,name,offset
+ACDT, Australian Central Daylight Time, +10:30
+ACST, Australian Central Standard Time, +09:30
+ACT, Acre Time, -05:00
+ACWST, Australian Central Western Standard Time, +8:45
+ADT, Arabia Daylight Time, +04:00
+ADT, Atlantic Daylight Time, -03:00
+AEDT, Australian Eastern Daylight Time, +11:00
+AEST, Australian Eastern Standard Time, +10:00
+AFT, Afghanistan Time, +4:30
+AKDT, Alaska Daylight Time, -08:00
+AKST, Alaska Standard Time, -09:00
+ALMT, Alma-Ata Time, +06:00
+AMST, Amazon Summer Time, -03:00
+AMST, Armenia Summer Time, +05:00
+AMT, Amazon Time, -04:00
+AMT, Armenia Time, +04:00
+ANAST, Anadyr Summer Time, +12:00
+ANAT, Anadyr Time, +12:00
+AQTT, Aqtobe Time, +05:00
+ART, Argentina Time, -03:00
+AST, Arabia Standard Time, +03:00
+AST, Atlantic Standard Time, -04:00
+AWDT, Australian Western Daylight Time, +09:00
+AWST, Australian Western Standard Time, +08:00
+AZOST, Azores Summer Time, +00:00
+AZOT, Azores Time, -01:00
+AZST, Azerbaijan Summer Time, +05:00
+AZT, Azerbaijan Time, +04:00
+AoE, Anywhere on Earth, -12:00
+BNT, Brunei Darussalam Time, +08:00
+BOT, Bolivia Time, -04:00
+BRST, Brasília Summer Time, -02:00
+BRT, Brasília Time, -03:00
+BST, Bangladesh Standard Time, +06:00
+BST, Bougainville Standard Time, +11:00
+BST, British Summer Time, +01:00
+BTT, Bhutan Time, +06:00
+CAST, Casey Time, +08:00
+CAT, Central Africa Time, +02:00
+CCT, Cocos Islands Time, +6:30
+CDT, Central Daylight Time, -05:00
+CDT, Cuba Daylight Time, -04:00
+CEST, Central European Summer Time, +02:00
+CET, Central European Time, +01:00
+CHADT, Chatham Island Daylight Time, +13:45
+CHAST, Chatham Island Standard Time, +12:45
+CHOST, Choibalsan Summer Time, +09:00
+CHOT, Choibalsan Time, +08:00
+CHUT, Chuuk Time, +10:00
+CIDST, Cayman Islands Daylight Saving Time, -04:00
+CIST, Cayman Islands Standard Time, -05:00
+CKT, Cook Island Time, -10:00
+CLST, Chile Summer Time, -03:00
+CLT, Chile Standard Time, -04:00
+COT, Colombia Time, -05:00
+CST, Central Standard Time, -06:00
+CST, China Standard Time, +08:00
+CST, Cuba Standard Time, -05:00
+CVT, Cape Verde Time, -01:00
+CXT, Christmas Island Time, +07:00
+ChST, Chamorro Standard Time, +10:00
+DAVT, Davis Time, +07:00
+DDUT, Dumont-d'Urville Time, +10:00
+EASST, Easter Island Summer Time, -05:00
+EAST, Easter Island Standard Time, -06:00
+EAT, Eastern Africa Time, +03:00
+ECT, Ecuador Time, -05:00
+EDT, Eastern Daylight Time, -04:00
+EEST, Eastern European Summer Time, +03:00
+EET, Eastern European Time, +02:00
+EGST, Eastern Greenland Summer Time, +00:00
+EGT, East Greenland Time, -01:00
+EST, Eastern Standard Time, -05:00
+FET, Further-Eastern European Time, +03:00
+FJST, Fiji Summer Time, +13:00
+FJT, Fiji Time, +12:00
+FKST, Falkland Islands Summer Time, -03:00
+FKT, Falkland Island Time, -04:00
+FNT, Fernando de Noronha Time, -02:00
+GALT, Galapagos Time, -06:00
+GAMT, Gambier Time, -09:00
+GET, Georgia Standard Time, +04:00
+GFT, French Guiana Time, -03:00
+GILT, Gilbert Island Time, +12:00
+GMT, Greenwich Mean Time, +00:00
+GST, Gulf Standard Time, +04:00
+GST, South Georgia Time, -02:00
+GYT, Guyana Time, -04:00
+HDT, Hawaii-Aleutian Daylight Time, -09:00
+HKT, Hong Kong Time, +08:00
+HOVST, Hovd Summer Time, +08:00
+HOVT, Hovd Time, +07:00
+HST, Hawaii Standard Time, -10:00
+ICT, Indochina Time, +07:00
+IDT, Israel Daylight Time, +03:00
+IOT, Indian Chagos Time, +06:00
+IRDT, Iran Daylight Time, +4:30
+IRKST, Irkutsk Summer Time, +09:00
+IRKT, Irkutsk Time, +08:00
+IRST, Iran Standard Time, +3:30
+IST, India Standard Time, +5:30
+IST, Irish Standard Time, +01:00
+IST, Israel Standard Time, +02:00
+JST, Japan Standard Time, +09:00
+KGT, Kyrgyzstan Time, +06:00
+KOST, Kosrae Time, +11:00
+KRAST, Krasnoyarsk Summer Time, +08:00
+KRAT, Krasnoyarsk Time, +07:00
+KST, Korea Standard Time, +09:00
+KUYT, Kuybyshev Time, +04:00
+LHDT, Lord Howe Daylight Time, +11:00
+LHST, Lord Howe Standard Time, +10:30
+LINT, Line Islands Time, +14:00
+MAGST, Magadan Summer Time, +12:00
+MAGT, Magadan Time, +11:00
+MART, Marquesas Time, -9:30
+MAWT, Mawson Time, +05:00
+MDT, Mountain Daylight Time, -06:00
+MHT, Marshall Islands Time, +12:00
+MMT, Myanmar Time, +6:30
+MSD, Moscow Daylight Time, +04:00
+MSK, Moscow Standard Time, +03:00
+MST, Mountain Standard Time, -07:00
+MT, Mountain Time, -7:00 / -6:00
+MUT, Mauritius Time, +04:00
+MVT, Maldives Time, +05:00
+MYT, Malaysia Time, +08:00
+NCT, New Caledonia Time, +11:00
+NDT, Newfoundland Daylight Time, -2:30
+NFT, Norfolk Time, +11:00
+NOVST, Novosibirsk Summer Time, +07:00
+NOVT, Novosibirsk Time, +06:00
+NPT, Nepal Time , +5:45
+NRT, Nauru Time, +12:00
+NST, Newfoundland Standard Time, -3:30
+NUT, Niue Time, -11:00
+NZDT, New Zealand Daylight Time, +13:00
+NZST, New Zealand Standard Time, +12:00
+OMSST, Omsk Summer Time, +07:00
+OMST, Omsk Standard Time, +06:00
+ORAT, Oral Time, +05:00
+PDT, Pacific Daylight Time, -07:00
+PET, Peru Time, -05:00
+PETST, Kamchatka Summer Time, +12:00
+PETT, Kamchatka Time, +12:00
+PGT, Papua New Guinea Time, +10:00
+PHOT, Phoenix Island Time, +13:00
+PHT, Philippine Time, +08:00
+PKT, Pakistan Standard Time, +05:00
+PMDT, Pierre & Miquelon Daylight Time, -02:00
+PMST, Pierre & Miquelon Standard Time, -03:00
+PONT, Pohnpei Standard Time, +11:00
+PST, Pacific Standard Time, -08:00
+PST, Pitcairn Standard Time, -08:00
+PWT, Palau Time, +09:00
+PYST, Paraguay Summer Time, -03:00
+PYT, Paraguay Time, -04:00
+PYT, Pyongyang Time, +8:30
+QYZT, Qyzylorda Time, +06:00
+RET, Reunion Time, +04:00
+ROTT, Rothera Time, -03:00
+SAKT, Sakhalin Time, +11:00
+SAMT, Samara Time, +04:00
+SAST, South Africa Standard Time, +02:00
+SBT, Solomon Islands Time, +11:00
+SCT, Seychelles Time, +04:00
+SGT, Singapore Time, +08:00
+SRET, Srednekolymsk Time, +11:00
+SRT, Suriname Time, -03:00
+SST, Samoa Standard Time, -11:00
+SYOT, Syowa Time, +03:00
+TAHT, Tahiti Time, -10:00
+TFT, French Southern and Antarctic Time, +05:00
+TJT, Tajikistan Time	, +05:00
+TKT, Tokelau Time, +13:00
+TLT, East Timor Time, +09:00
+TMT, Turkmenistan Time, +05:00
+TOST, Tonga Summer Time, +14:00
+TOT, Tonga Time, +13:00
+TRT, Turkey Time, +03:00
+TVT, Tuvalu Time, +12:00
+ULAST, Ulaanbaatar Summer Time, +09:00
+ULAT, Ulaanbaatar Time, +08:00
+UTC, Coordinated Universal Time, +00:00
+UYST, Uruguay Summer Time, -02:00
+UYT, Uruguay Time, -03:00
+UZT, Uzbekistan Time, +05:00
+VET, Venezuelan Standard Time, -04:00
+VLAST, Vladivostok Summer Time, +11:00
+VLAT, Vladivostok Time, +10:00
+VOST, Vostok Time, +06:00
+VUT, Vanuatu Time, +11:00
+WAKT, Wake Time, +12:00
+WARST, Western Argentine Summer Time, -03:00
+WAST, West Africa Summer Time, +02:00
+WAT, West Africa Time, +01:00
+WEST, Western European Summer Time, +01:00
+WET, Western European Time, +00:00
+WFT, Wallis and Futuna Time, +12:00
+WGST, Western Greenland Summer Time, -02:00
+WGT, West Greenland Time, -03:00
+WIB, Western Indonesian Time, +07:00
+WIT, Eastern Indonesian Time, +09:00
+WITA, Central Indonesian Time, +08:00
+WST, West Samoa Time, +13:00
+WST, Western Sahara Summer Time, +01:00
+WT, Western Sahara Standard Time, +00:00
+YAKST, Yakutsk Summer Time, +10:00
+YAKT, Yakutsk Time, +09:00
+YAPT, Yap Time, +10:00
+YEKST, Yekaterinburg Summer Time, +06:00
+YEKT, Yekaterinburg Time, +05:00

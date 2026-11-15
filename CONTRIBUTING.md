@@ -151,6 +151,7 @@ A Rust supervisor that runs Vector as a child process so a Vector pipeline behav
 | `src/health.rs`, `src/metrics.rs`, `src/metrics/scrape.rs` | Readiness publishing, and the scrape that merges `vector_*` into scalo's registry |
 | `src/deployment.rs`, `src/vector-layer.dockerfile` | `contract()`, the source the Dockerfile and the released chart are generated from, and the two-binary image override spliced onto scalo's generated Dockerfile |
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
+| `pipelines/filebeat/` | The bundled filebeat pipeline. The image does not carry it |
 | `docs/` | `architecture.md` for why the service is built this way and the invariants, `internals.md` for field-by-field depth, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
@@ -170,7 +171,7 @@ What green does NOT mean:
 
 - The default run leaves out the `#[ignore]` cases in `tests/integration/vector_validate.rs` and `tests/e2e/kafka.rs`. The `vector_validate` ones run Vector's own validator over each buffer, SASL and TLS variant of an assembled config, so until you pass `--run-ignored all` those variants are unchecked.
 - Locally, a missing broker or Vector binary SKIPS rather than fails. In CI that absence is an assertion failure for the cases that run by default, so CI is stricter than a green laptop run.
-- `e2e::app_kafka` runs by default: the shipped binary over a shared broker with an authored transform file. Without Docker it skips locally and fails under CI.
+- `e2e::filebeat_kafka` runs by default and needs a dfe-transform-vrl checkout, for its cases and the bundled pipeline: beside this repo, or named by `DFE_TRANSFORM_VRL_DIR`. Without one it skips locally and fails under CI, which checks the repo out beside this one.
 - A docs-only push runs no CI at all. `paths-ignore` for `docs/**` and `**.md` is on the `push` trigger but not on `pull_request`, so the PR is the only place a docs change is checked. A silent push is not a pass.
 
 ### What tends to bite
@@ -208,3 +209,4 @@ Outbound -- what depends on this repo:
 Two more relationships that are real but are NOT declared edges in the suite graph, so no gate enforces them:
 
 - dfe-infra `apps.yaml` is the SSoT for how this app is deployed -- multiplicity, scaling, transports, endpoints and which compiler derives its routing. dfe-engine reads that manifest, so adding or changing the app is a manifest edit, never an engine release.
+- dfe-transform-vrl holds the filebeat cases (`tests/fixtures/filebeat/cases.yaml`) and the bundled pipeline that `e2e::filebeat_kafka` grades against. The dependency is a test-time checkout only, which CI makes and a laptop may not.

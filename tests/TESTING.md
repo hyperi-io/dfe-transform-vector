@@ -17,7 +17,7 @@ There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
 
 `KafkaFixture::hermetic` skips step 1 outright and takes the shared broker.
 Anything using the real DFE topic names takes that path, because
-`e2e_syslog_land` on a shared live broker is somebody else's data.
+`filebeat_land` on a shared live broker is somebody else's data.
 `KafkaFixture::scram` starts a SCRAM-only broker the test holds alone.
 
 scalo names every container under the suite prefix, labels it with the repo,
@@ -51,8 +51,12 @@ cargo nextest run --run-ignored all
 
 Opt-in (`#[ignore]`) cases are the full tier: `vector_validate` runs the real validator over each buffer, SASL and TLS variant of an assembled config, and two `e2e::kafka` pipelines drive a bare Vector process against a broker.
 
-## The app over Kafka
+## The WS21 acceptance case
 
-`e2e::app_kafka` runs in core, on the shared broker, which no live cluster's data shares.
-It seeds synthetic syslog-style lines onto `e2e_syslog_land`, runs the shipped
-binary with an authored transform file, and grades `e2e_syslog_load` against the fields each case names.
+`e2e::filebeat_kafka` runs in core, on the shared broker, which no live cluster's data shares.
+It seeds the synthetic filebeat cases onto `filebeat_land`, runs the shipped
+binary over them, and grades `filebeat_load` against the fields each case names.
+
+The cases (`tests/fixtures/filebeat/cases.yaml`) and the bundled pipeline belong
+to dfe-transform-vrl, so the case needs that repo checked out beside this one,
+or `DFE_TRANSFORM_VRL_DIR` pointing at it. Without one it prints a skip.
