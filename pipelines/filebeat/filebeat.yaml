@@ -6,8 +6,8 @@
 # License:   BUSL-1.1
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 #
-# A pre-canned transform file, dropped into `transforms.dir` as it stands: the
-# wrapper writes it into Vector's config dir verbatim, so the top-level
+# A pre-canned transform file for `transforms.dir`. The wrapper parses it and
+# writes it into Vector's config dir with its wired `inputs`, so the top-level
 # `enrichment_tables` key reaches Vector and the VRL's timezone lookups resolve.
 # `inputs: [dfe_source]` binds it to whatever Kafka topic `dfe_source` derives,
 # and the wrapper wires the transform's output to `dfe_sink`.
@@ -17,10 +17,10 @@
 # path or points `path` at its own copy; startup validation names the path when
 # the file is not there.
 #
-# The VRL body is byte-identical to dfe-transform-vrl pipelines/filebeat/
-# filebeat.vrl @ e0b7087, which is where it is maintained. Refresh by copying
+# The VRL body is dfe-transform-vrl pipelines/filebeat/filebeat.vrl @ e0b7087,
+# bar two lines of its header comment, and that repo maintains it. Refresh by copying
 # that file again rather than editing the copy here, so the two transform apps
-# keep grading against the same corpus.
+# keep passing the same cases.
 
 enrichment_tables:
   timezones:

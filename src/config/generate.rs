@@ -27,7 +27,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use scalo::transport::kafka::MESSAGE_MAX_BYTES;
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
+use tracing::warn;
 
 /// A YAML mapping in the generated Vector config.
 type Mapping = Map<String, Value>;
@@ -323,6 +324,7 @@ fn direct_sink_component(
         build_batch_block(
             &sink.batch,
             Some(sink.batch.max_bytes.unwrap_or(DIRECT_BATCH_MAX_BYTES)),
+            sink.batch.timeout_secs.into(),
         ),
     );
 
@@ -367,10 +369,28 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
         Value::Number(sink.socket_timeout_ms.into()),
     );
 
-    // Vector-level batch
+    // librdkafka options — production defaults + user overrides
+    let mut rdkafka = build_sink_librdkafka(sink);
+
+    // Vector always writes `batch.timeout_secs` as `queue.buffering.max.ms`,
+    // which librdkafka reads as `linger.ms`. A layer that names the delay
+    // moves into that field, so the sink states it once.
+    let timeout_secs = match take_batching_delay(&mut rdkafka) {
+        Some(layered) => {
+            if sink.batch.timeout_secs != BatchConfig::default().timeout_secs {
+                warn!(
+                    sink_batch_timeout_secs = sink.batch.timeout_secs,
+                    layered_delay_secs = %layered,
+                    "sink.batch.timeout_secs is ignored: a librdkafka layer sets the batching delay"
+                );
+            }
+            layered
+        }
+        None => sink.batch.timeout_secs.into(),
+    };
     component.insert(
         key("batch"),
-        build_batch_block(&sink.batch, sink.batch.max_bytes),
+        build_batch_block(&sink.batch, sink.batch.max_bytes, timeout_secs),
     );
 
     // SASL
@@ -386,21 +406,35 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
     // Buffer
     component.insert(key("buffer"), build_buffer_block(&sink.buffer));
 
-    // librdkafka options — production defaults + user overrides
-    let rdkafka = build_sink_librdkafka(sink);
     component.insert(key("librdkafka_options"), Value::Object(rdkafka));
 
     component
 }
 
+/// Remove the batching delay from a sink's librdkafka options and return it in
+/// seconds, the unit of Vector's `batch.timeout_secs`.
+///
+/// `None`, with the options untouched, when no layer names it or the value is
+/// not a number of milliseconds. librdkafka refuses such a value at startup.
+fn take_batching_delay(rdkafka: &mut Mapping) -> Option<Number> {
+    let name = ["linger.ms", "queue.buffering.max.ms"]
+        .into_iter()
+        .find(|name| rdkafka.contains_key(*name))?;
+    let millis: f64 = rdkafka.get(name)?.as_str()?.trim().parse().ok()?;
+    if !millis.is_finite() || millis < 0.0 {
+        return None;
+    }
+    let seconds = Number::from_f64(millis / 1000.0)?;
+    rdkafka.remove("linger.ms");
+    rdkafka.remove("queue.buffering.max.ms");
+    Some(seconds)
+}
+
 /// A sink's Vector-level `batch` block, with `max_bytes` written when given.
-fn build_batch_block(batch: &BatchConfig, max_bytes: Option<u64>) -> Value {
+fn build_batch_block(batch: &BatchConfig, max_bytes: Option<u64>, timeout_secs: Number) -> Value {
     let mut block = Mapping::new();
     block.insert(key("max_events"), Value::Number(batch.max_events.into()));
-    block.insert(
-        key("timeout_secs"),
-        Value::Number(batch.timeout_secs.into()),
-    );
+    block.insert(key("timeout_secs"), Value::Number(timeout_secs));
     if let Some(max_bytes) = max_bytes {
         block.insert(key("max_bytes"), Value::Number(max_bytes.into()));
     }
@@ -1352,7 +1386,6 @@ mod tests {
         assert!(text.contains("codec: json"));
         assert!(text.contains("compression: zstd"));
         // Production librdkafka defaults (from scalo kafka_config)
-        assert!(text.contains("linger.ms: \"100\""));
         assert!(text.contains("compression.type: zstd"));
         assert!(text.contains("socket.nagle.disable: \"true\""));
         assert!(text.contains("statistics.interval.ms: \"1000\""));
@@ -1374,7 +1407,10 @@ mod tests {
         assert!(text.contains("socket_timeout_ms: 60000"));
         // Vector batch
         assert!(text.contains("max_events: 10000"));
-        assert!(text.contains("timeout_secs: 1"));
+        // The production profile's `linger.ms` is the batching delay, in
+        // Vector's field.
+        assert!(text.contains("timeout_secs: 0.1"));
+        assert!(!text.contains("linger.ms"));
     }
 
     #[test]
@@ -1430,7 +1466,65 @@ mod tests {
 
         assert!(text.contains("max_events: 5000"));
         assert!(text.contains("max_bytes: 8388608"));
-        assert!(text.contains("timeout_secs: 2"));
+        // The production profile's `linger.ms` replaces `timeout_secs` on the bus.
+        assert!(text.contains("timeout_secs: 0.1"));
+    }
+
+    /// A Kafka sink states its batching delay once, as `batch.timeout_secs`.
+    /// Vector writes that as `queue.buffering.max.ms`, which librdkafka reads
+    /// as `linger.ms`, so a second statement leaves the producer with whichever
+    /// one the client applied last.
+    #[test]
+    fn a_kafka_sink_states_its_batching_delay_once() {
+        let with_option = |k: &str, v: &str| SinkConfig {
+            librdkafka_options: [(k.to_string(), v.to_string())].into(),
+            ..Default::default()
+        };
+
+        for (case, sink, seconds) in [
+            ("profile only", SinkConfig::default(), 0.1),
+            ("user linger.ms", with_option("linger.ms", "20"), 0.02),
+            (
+                "user queue.buffering.max.ms",
+                with_option("queue.buffering.max.ms", "5"),
+                0.005,
+            ),
+        ] {
+            let component = kafka_sink_component(&sink, &["src".into()], true);
+            let options = component["librdkafka_options"].as_object().unwrap();
+            assert!(!options.contains_key("linger.ms"), "{case}");
+            assert!(!options.contains_key("queue.buffering.max.ms"), "{case}");
+            assert_eq!(component["batch"]["timeout_secs"], seconds, "{case}");
+        }
+    }
+
+    /// The delay leaves the librdkafka options for Vector's own field, and a
+    /// value that is not a number of milliseconds stays where librdkafka
+    /// refuses it.
+    #[test]
+    fn the_batching_delay_moves_into_the_batch_timeout() {
+        let options = |pairs: &[(&str, &str)]| -> Mapping {
+            pairs.iter().map(|(k, v)| (k.to_string(), val(v))).collect()
+        };
+
+        for (case, pairs, seconds, left) in [
+            ("none", &[("fetch.min.bytes", "1")][..], None, 1),
+            ("linger", &[("linger.ms", "100")][..], Some(0.1), 0),
+            (
+                "alias",
+                &[("queue.buffering.max.ms", "1000")][..],
+                Some(1.0),
+                0,
+            ),
+            ("zero", &[("linger.ms", "0")][..], Some(0.0), 0),
+            ("not a number", &[("linger.ms", "soon")][..], None, 1),
+            ("negative", &[("linger.ms", "-5")][..], None, 1),
+        ] {
+            let mut rdkafka = options(pairs);
+            let delay = take_batching_delay(&mut rdkafka).map(|n| n.as_f64().unwrap());
+            assert_eq!(delay, seconds, "{case}");
+            assert_eq!(rdkafka.len(), left, "{case}");
+        }
     }
 
     /// The stack's producer compression is zstd, so a sink that names none

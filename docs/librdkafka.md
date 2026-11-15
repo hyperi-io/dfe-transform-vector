@@ -23,7 +23,7 @@ Vector applies `librdkafka_options` over the settings it writes itself from the 
 | `message.timeout.ms`, `socket.timeout.ms` | `sink.message_timeout_ms` (0, no limit), `sink.socket_timeout_ms` (60000) |
 | `queue.buffering.max.ms`, `batch.num.messages`, `batch.size` | `sink.batch.timeout_secs`, `.max_events` and, where set, `.max_bytes` |
 
-`linger.ms` is librdkafka's other name for `queue.buffering.max.ms`. rdkafka applies a client's options from a hash map, so with the production profile's `linger.ms` beside Vector's `queue.buffering.max.ms`, which one a producer ends up with is not fixed.
+`linger.ms` is librdkafka's other name for `queue.buffering.max.ms`, and a client built from both takes whichever its hash map applied last. Vector always writes `sink.batch.timeout_secs` as `queue.buffering.max.ms`, so the supervisor moves a batching delay that a layer names into `batch.timeout_secs` and leaves both spellings out of `librdkafka_options`. A layer that names either spelling replaces the other spelling from every layer below it, and within one layer the spelling that sorts last wins. A layer therefore outranks `sink.batch.timeout_secs`. The production profile names `linger.ms`, so on the bus transport `timeout_secs` has no effect until a central profile drops that key, and the supervisor logs a warning when `timeout_secs` is not 1 and a layer overrides it.
 
 A few keys are derived from the big dials and written after the merge, so `librdkafka_options` cannot reach them:
 
@@ -48,9 +48,9 @@ sink:
 
 ## Example
 
-For a producer with no central file, `sink.compression: lz4` and `sink.librdkafka_options: {linger.ms: "20"}`, the supervisor writes `linger.ms=20`, `compression.type=lz4`, `queue.buffering.max.kbytes=262144`, `enable.idempotence=true`, `socket.nagle.disable=true`, `statistics.interval.ms=1000` and `message.max.bytes=16777216`, the last because no layer set it.
+For a producer with no central file, `sink.compression: lz4` and `sink.librdkafka_options: {linger.ms: "20"}`, the supervisor writes `batch.timeout_secs: 0.02` on the sink and, in `librdkafka_options`, `compression.type=lz4`, `queue.buffering.max.kbytes=262144`, `enable.idempotence=true`, `socket.nagle.disable=true`, `statistics.interval.ms=1000` and `message.max.bytes=16777216`, the last because no layer set it.
 
-Add a central `producer.production` naming only `linger.ms: "50"` and `socket.nagle.disable` and `statistics.interval.ms` drop out of `librdkafka_options`, because the central profile replaced the constants rather than merging over them. Vector still writes `statistics.interval.ms=1000` itself. `linger.ms` stays `20`: the per-instance option outranks the central file. Drop that option and it becomes `50`.
+Add a central `producer.production` naming only `linger.ms: "50"` and `socket.nagle.disable` and `statistics.interval.ms` drop out of `librdkafka_options`, because the central profile replaced the constants rather than merging over them. Vector still writes `statistics.interval.ms=1000` itself. The delay stays 20 ms: the per-instance option outranks the central file. Drop that option and it becomes 50 ms.
 
 `dfe-transform-vector --config <file> assemble <dir>` writes `90_sink.yaml` and `00_source.yaml`, so you can read the result for any config.
 
@@ -69,7 +69,7 @@ This app reads `CONSUMER_PRODUCTION` for the source and `PRODUCER_PRODUCTION` fo
 
 | Producer setting | Value | librdkafka default | Justification |
 |---------|-------|--------------------|---------------|
-| `linger.ms` | `100` | `5` | Larger batches -- 100 ms of latency for higher throughput. See Layers for how it meets Vector's `queue.buffering.max.ms`. |
+| `linger.ms` | `100` | `5` | Larger batches -- 100 ms of latency for higher throughput. This is the delay the sink uses, in place of `sink.batch.timeout_secs`. See Layers. |
 | `compression.type` | `zstd` | `none` | Best compression ratio with acceptable CPU cost. `sink.compression` replaces it on every sink. |
 | `socket.nagle.disable` | `true` | `true` | Already librdkafka's default. The profile states it. |
 | `statistics.interval.ms` | `1000` | `0` | librdkafka metrics. |

@@ -313,7 +313,7 @@ const SHA256_ARM64_PLACEHOLDER: &str = "@VECTOR_SHA256_ARM64@";
 /// dfe-transform-vector ships TWO binaries in its runtime image — its own
 /// Rust wrapper (autobuilt by cargo, handled by scalo's contract) AND
 /// the upstream `vector` binary (downloaded inside the build at the
-/// version pinned by [`VECTOR_VERSION`]). The other five DFE Rust apps
+/// version pinned by [`VECTOR_VERSION`]). The other DFE Rust apps
 /// are single-binary images; this consumer-side override exists because
 /// scalo's deployment contract has no slot for an add-on native binary.
 ///

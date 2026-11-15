@@ -606,7 +606,7 @@
           "default": null
         },
         "timeout_secs": {
-          "description": "Max batch age (seconds) before flush. Default: 1, and at most 1 on the\ndirect transport.",
+          "description": "Max batch age (seconds) before flush. Default: 1, and at most 1 on the\ndirect transport. On the bus transport it applies only where no\nlibrdkafka layer sets `linger.ms`, which the production profile does.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,

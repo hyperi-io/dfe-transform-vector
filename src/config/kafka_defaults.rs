@@ -180,11 +180,39 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
     }
 }
 
+/// Settings librdkafka accepts under two spellings and stores as one. A client
+/// built from a map applies its entries in hash order, so a map holding both
+/// spellings ends up with whichever was applied last.
+const ALIASES: &[(&str, &str)] = &[("linger.ms", "queue.buffering.max.ms")];
+
+/// The other spelling of `key`, when librdkafka has one.
+fn alias_of(key: &str) -> Option<&'static str> {
+    ALIASES.iter().find_map(|(a, b)| {
+        if key == *a {
+            Some(*b)
+        } else if key == *b {
+            Some(*a)
+        } else {
+            None
+        }
+    })
+}
+
+/// Write `key`, dropping the other spelling of the same setting.
+fn insert_unaliased(map: &mut HashMap<String, String>, key: &str, value: &str) {
+    if let Some(twin) = alias_of(key) {
+        map.remove(twin);
+    }
+    map.insert(key.to_string(), value.to_string());
+}
+
 /// Merge a base profile with user overrides.
 ///
 /// Applied in order, so the last writer wins: the central config (or its scalo
 /// fallback) baseline, then service-specific overrides, then the user's
-/// `librdkafka_options` from config YAML.
+/// `librdkafka_options` from config YAML. A layer that names a setting under
+/// one spelling replaces the other spelling from every layer below it, and
+/// within one layer the spelling that sorts last wins.
 #[must_use]
 #[allow(
     clippy::implicit_hasher,
@@ -195,14 +223,22 @@ pub fn merge_layers(
     service_overrides: &[(&str, &str)],
     user_overrides: &HashMap<String, String>,
 ) -> HashMap<String, String> {
-    let mut merged = base.clone();
+    let mut merged = HashMap::with_capacity(base.len());
 
-    for (k, v) in service_overrides {
-        merged.insert((*k).to_string(), (*v).to_string());
+    let mut base_entries: Vec<(&String, &String)> = base.iter().collect();
+    base_entries.sort();
+    for (k, v) in base_entries {
+        insert_unaliased(&mut merged, k, v);
     }
 
-    for (k, v) in user_overrides {
-        merged.insert(k.clone(), v.clone());
+    for (k, v) in service_overrides {
+        insert_unaliased(&mut merged, k, v);
+    }
+
+    let mut user_entries: Vec<(&String, &String)> = user_overrides.iter().collect();
+    user_entries.sort();
+    for (k, v) in user_entries {
+        insert_unaliased(&mut merged, k, v);
     }
 
     merged
@@ -273,6 +309,68 @@ mod tests {
 
         // User override beats service override
         assert_eq!(merged["queue.buffering.max.kbytes"], "524288");
+    }
+
+    /// The setting under its other spelling never survives a higher layer, so
+    /// the merged map names it exactly once.
+    #[test]
+    fn merge_layers_keeps_one_spelling_of_an_aliased_setting() {
+        type Pairs = &'static [(&'static str, &'static str)];
+        let map = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        let cases: [(Pairs, Pairs, Pairs, &str, &str); 6] = [
+            // (base, service, user, surviving key, surviving value)
+            (&[("linger.ms", "100")], &[], &[], "linger.ms", "100"),
+            (
+                &[("linger.ms", "100")],
+                &[],
+                &[("queue.buffering.max.ms", "5")],
+                "queue.buffering.max.ms",
+                "5",
+            ),
+            (
+                &[("queue.buffering.max.ms", "5")],
+                &[],
+                &[("linger.ms", "20")],
+                "linger.ms",
+                "20",
+            ),
+            (
+                &[("linger.ms", "100")],
+                &[("queue.buffering.max.ms", "7")],
+                &[],
+                "queue.buffering.max.ms",
+                "7",
+            ),
+            (
+                &[("linger.ms", "100"), ("queue.buffering.max.ms", "5")],
+                &[],
+                &[],
+                "queue.buffering.max.ms",
+                "5",
+            ),
+            (
+                &[],
+                &[],
+                &[("linger.ms", "20"), ("queue.buffering.max.ms", "5")],
+                "queue.buffering.max.ms",
+                "5",
+            ),
+        ];
+
+        for (base, service, user, key, value) in cases {
+            let merged = merge_layers(&map(base), service, &map(user));
+            let spellings: Vec<&str> = ["linger.ms", "queue.buffering.max.ms"]
+                .into_iter()
+                .filter(|k| merged.contains_key(*k))
+                .collect();
+            assert_eq!(spellings, vec![key], "base {base:?} user {user:?}");
+            assert_eq!(merged[key], value, "base {base:?} user {user:?}");
+        }
     }
 
     #[test]

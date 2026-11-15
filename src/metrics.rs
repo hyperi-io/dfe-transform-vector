@@ -126,8 +126,8 @@ impl WrapperMetrics {
             "config_validation_errors_total",
             "Total config validation errors",
         );
-        // App-segment name: the manager's namespace prepends the platform
-        // prefix, giving `dfe_transform_vector_scrape_failures_total`.
+        // Registered as written, `transform_vector_scrape_failures_total`: names
+        // are bare unless `metrics.namespace` is set.
         let scrape_failures_total = manager.counter(
             "transform_vector_scrape_failures_total",
             "Failed scrapes of Vector's prometheus_exporter",
@@ -140,7 +140,7 @@ impl WrapperMetrics {
 
         // Describe the labelled metrics (recorded via macros in
         // set_lifecycle_state / record_config_reload). Names are BARE --
-        // the manager's namespace adds the app prefix once.
+        // the manager's `metrics.namespace`, when set, prefixes them.
         metrics::describe_gauge!(
             "transform_vector_lifecycle_state",
             "Current lifecycle state (1=active)"
