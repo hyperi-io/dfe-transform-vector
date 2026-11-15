@@ -453,7 +453,7 @@ pub fn warn_if_disk_buffer_is_ephemeral(config_dir: &Path, vector_config: &Vecto
                  (writable layer or emptyDir). Buffered events will be LOST on \
                  restart or reschedule -- the durability a disk buffer exists to \
                  provide is absent, and nothing will error when it happens. \
-                 Mount external storage at that path (Helm: persistence.enabled=true; \
+                 Mount external storage at that path (Helm: writablePaths.data.persistence.enabled=true; \
                  docker: -v), or switch to buffer.type=memory so the trade is explicit.",
                 data_dir.display()
             );

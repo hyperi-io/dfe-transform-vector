@@ -506,7 +506,8 @@ pub struct BatchConfig {
     /// transport at most 16 MiB, and 8 MiB when unset.
     pub max_bytes: Option<u64>,
     /// Max batch age (seconds) before flush. Default: 1, and at most 1 on the
-    /// direct transport.
+    /// direct transport. On the bus transport it applies only where no
+    /// librdkafka layer sets `linger.ms`, which the production profile does.
     pub timeout_secs: u32,
 }
 
