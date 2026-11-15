@@ -67,10 +67,9 @@ bare Vector process against a broker.
 ## The WS21 acceptance case
 
 `e2e::filebeat_kafka` runs in core, on the shared broker, which no live cluster's data shares.
-It seeds the elastic/integrations filebeat corpus onto `filebeat_land`, runs the
-shipped binary over it, and grades `filebeat_load` against elastic's golden
-events.
+It seeds the synthetic filebeat cases onto `filebeat_land`, runs the shipped
+binary over them, and grades `filebeat_load` against the fields each case names.
 
-The corpus, the bundled pipeline and the list of documented divergences belong
+The cases (`tests/fixtures/filebeat/cases.yaml`) and the bundled pipeline belong
 to dfe-transform-vrl, so the case needs that repo checked out beside this one,
 or `DFE_TRANSFORM_VRL_DIR` pointing at it. Without one it prints a skip.
