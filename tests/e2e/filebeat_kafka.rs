@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      tests/e2e/filebeat_kafka.rs
-// Purpose:   WS21 parity: the filebeat corpus through the app, Vector and a broker
+// Purpose:   WS21 parity: the filebeat cases through the app, Vector and a broker
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -9,11 +9,11 @@
 //! The transform hop of the WS21 chain, with Vector doing the transforming.
 //!
 //! ```text
-//! filebeat corpus -> filebeat_land -> dfe-transform-vector -> filebeat_load
+//! filebeat cases -> filebeat_land -> dfe-transform-vector -> filebeat_load
 //! ```
 //!
-//! This is the parity half of the acceptance case: the same corpus, the same
-//! bundled filebeat VRL, the same golden events, and the same assertions as
+//! This is the parity half of the acceptance case: the same cases, the same
+//! bundled filebeat VRL, and the same assertions as
 //! `dfe-transform-vrl/tests/e2e/filebeat_kafka.rs`. Only the transform app
 //! differs, which is what makes WS21 a test of the transform LAYER rather
 //! than of one app.
@@ -30,9 +30,8 @@
 //! - The app runs `vector validate` before starting, so a pipeline Vector's
 //!   VRL cannot compile fails here rather than silently passing nothing on.
 //!
-//! The corpus, the pipeline and the divergence list belong to
-//! dfe-transform-vrl. Without that checkout there is nothing to run against
-//! and the test says so.
+//! The cases and the pipeline belong to dfe-transform-vrl. Without that
+//! checkout there is nothing to run against and the test says so.
 //!
 //! NOT covered here, because it needs a cluster: the receiver hop that picks
 //! the source, and the loader hop that lands rows in `ClickHouse`.
@@ -43,7 +42,7 @@ use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
 use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 
 use crate::common::{self, KafkaFixture};
-use crate::filebeat_corpus as fb;
+use crate::filebeat_cases as fb;
 
 /// The source this instance is bound to, and the topics that follow from it.
 const SOURCE: &str = "filebeat";
@@ -58,41 +57,26 @@ const UNMATCHED_PROBE: &str = "ws21 probe: a line no filebeat module claims";
 /// the 5.5K-line pipeline, and start Vector.
 const READY_TIMEOUT: Duration = Duration::from_secs(240);
 
-/// How long the corpus gets to arrive on the sink topic once the app is ready.
+/// How long the cases get to arrive on the sink topic once the app is ready.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// One golden event, and the corpus line it grades.
-struct Golden {
-    log: &'static str,
-    idx: usize,
-    event: serde_json::Value,
-}
-
-/// Every corpus line as Vector will read it off `filebeat_land`, paired with
-/// the goldens they must produce.
-fn corpus_workload() -> (Vec<serde_json::Value>, Vec<Golden>) {
-    let mut inputs = Vec::new();
-    let mut goldens = Vec::new();
-
-    for log in fb::all_logs() {
-        let lines = fb::corpus_lines(log);
-        let expected = fb::corpus_expected(&format!("{log}-expected.json"));
-        assert_eq!(
-            lines.len(),
-            expected.len(),
-            "{log}: {} input lines but {} golden events",
-            lines.len(),
-            expected.len()
-        );
-        let conf = fb::corpus_conf(log);
-        for (idx, (line, event)) in lines.iter().zip(expected).enumerate() {
-            inputs.push(fb::input_event(line, conf.as_ref()));
-            goldens.push(Golden { log, idx, event });
-        }
-    }
-
+/// Every case as Vector will read it off `filebeat_land`, plus the
+/// shape-unmatched probe.
+///
+/// Each case event carries its name in a root `_case` field. The pipeline keeps
+/// root fields on every branch, so the name comes out the far side and pairs
+/// an output with its case whatever order the broker returns them in.
+fn workload() -> Vec<serde_json::Value> {
+    let mut inputs: Vec<serde_json::Value> = fb::cases()
+        .iter()
+        .map(|case| {
+            let mut event = fb::case_event(case);
+            event["_case"] = serde_json::json!(case.name);
+            event
+        })
+        .collect();
     inputs.push(fb::input_event(UNMATCHED_PROBE, None));
-    (inputs, goldens)
+    inputs
 }
 
 fn client_config(base: &KafkaConfig, topics: &[&str], group: &str) -> KafkaConfig {
@@ -296,65 +280,39 @@ async fn drain(
     out
 }
 
-/// Match every golden to an output event, consuming each output once.
-///
-/// The sink topic has one partition, so the output usually arrives in the
-/// order it was produced; that position is tried first and the scan is the
-/// fallback. Returns the goldens that nothing produced, each with the
-/// closest candidate's problems.
-fn match_goldens(goldens: &[Golden], outputs: &[serde_json::Value]) -> Vec<String> {
-    let mut used = vec![false; outputs.len()];
-    let mut unmatched = Vec::new();
-
-    for (position, golden) in goldens.iter().enumerate() {
-        let mut order: Vec<usize> = Vec::with_capacity(outputs.len());
-        if position < outputs.len() {
-            order.push(position);
-        }
-        order.extend((0..outputs.len()).filter(|i| *i != position));
-
-        let mut closest: Option<Vec<String>> = None;
-        let mut matched = false;
-        for candidate in order {
-            if used[candidate] {
-                continue;
+/// Grade every case against the output event that carries its name.
+/// Returns one line per case that has no output or whose output disagrees.
+fn grade_cases(outputs: &[serde_json::Value]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for case in fb::cases() {
+        let found = outputs
+            .iter()
+            .find(|e| e.get("_case").and_then(serde_json::Value::as_str) == Some(&case.name));
+        match found {
+            None => failures.push(format!("{}: no output event carried its name", case.name)),
+            Some(event) if fb::is_unmatched(event) => {
+                failures.push(format!("{}: routed to filebeat_unmatched", case.name));
             }
-            let problems = fb::problems_against_golden(
-                golden.log,
-                golden.idx,
-                &golden.event,
-                &outputs[candidate],
-            );
-            if problems.is_empty() {
-                used[candidate] = true;
-                matched = true;
-                break;
+            Some(event) => {
+                let problems = fb::problems_for(case, event);
+                if !problems.is_empty() {
+                    failures.push(format!("{}: {}", case.name, problems.join("; ")));
+                }
             }
-            if closest.as_ref().is_none_or(|c| problems.len() < c.len()) {
-                closest = Some(problems);
-            }
-        }
-
-        if !matched {
-            let detail = closest.map_or_else(
-                || "no output event was left to compare against".to_string(),
-                |problems| problems.join("; "),
-            );
-            unmatched.push(format!("{}[{}]: {detail}", golden.log, golden.idx));
         }
     }
-    unmatched
+    failures
 }
 
 #[tokio::test]
-async fn filebeat_corpus_round_trips_through_vector() {
+async fn filebeat_cases_round_trip_through_vector() {
     if fb::vrl_repo().is_none() {
         common::require_service_in_ci(
             "dfe-transform-vrl checkout",
-            "the corpus and the bundled pipeline grade this test, and CI clones the repo beside this one",
+            "the cases and the bundled pipeline grade this test, and CI clones the repo beside this one",
         );
         eprintln!(
-            "SKIP: the corpus and the bundled pipeline live in dfe-transform-vrl. \
+            "SKIP: the cases and the bundled pipeline live in dfe-transform-vrl. \
              Point DFE_TRANSFORM_VRL_DIR at a checkout to run this."
         );
         return;
@@ -364,18 +322,17 @@ async fn filebeat_corpus_round_trips_through_vector() {
         eprintln!("SKIP: no Vector binary (run scripts/fetch-vector.sh)");
         return;
     };
-    let Some(fixture) = KafkaFixture::hermetic("filebeat-corpus-round-trip").await else {
+    let Some(fixture) = KafkaFixture::hermetic("filebeat-cases-round-trip").await else {
         common::require_service_in_ci("Kafka", "no Docker to start a broker container");
         eprintln!("SKIP: no Docker, so this test cannot own a broker.");
         return;
     };
     let base = fixture.config.clone();
 
-    let (inputs, goldens) = corpus_workload();
+    let inputs = workload();
     eprintln!(
-        "WS21: replaying {} corpus lines from {} logs through {LAND_TOPIC} -> {LOAD_TOPIC}",
-        inputs.len(),
-        fb::all_logs().len()
+        "WS21: replaying {} events through {LAND_TOPIC} -> {LOAD_TOPIC}",
+        inputs.len()
     );
 
     let admin =
@@ -503,23 +460,22 @@ async fn filebeat_corpus_round_trips_through_vector() {
         outputs[probe_at]
     );
 
-    // Assertion 3 -- every corpus line agrees with its elastic golden, after
-    // the port's documented divergences.
-    let mut corpus_outputs = outputs;
-    corpus_outputs.remove(probe_at);
-    let unmatched = match_goldens(&goldens, &corpus_outputs);
+    // Assertion 3 -- every case agrees with the fields it names.
+    let failures = grade_cases(&outputs);
     assert!(
-        unmatched.is_empty(),
-        "{} of {} corpus events did not match their golden:\n{}",
-        unmatched.len(),
-        goldens.len(),
-        unmatched.join("\n")
+        failures.is_empty(),
+        "{} of {} cases did not match:\n{}",
+        failures.len(),
+        fb::cases().len(),
+        failures.join("\n")
     );
 
-    // Assertion 4 -- all three module branches actually ran.
+    // Assertion 4 -- all three module branches actually ran. A pipeline that
+    // detected nothing would still satisfy the count above by passing
+    // everything through unmatched.
     let branch_ran = |module: &str, probe: &dyn Fn(&serde_json::Value) -> bool| {
         assert!(
-            corpus_outputs.iter().any(probe),
+            outputs.iter().any(probe),
             "no output event came from the {module} branch"
         );
     };
