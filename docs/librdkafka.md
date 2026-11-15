@@ -119,7 +119,7 @@ Only the `production` profile of each side is read. A profile in the file replac
 
 ## Source code references
 
-- Profile constants: scalo-rs `src/kafka_config.rs`
+- Profile constants: [scalo-rs src/kafka_config.rs](https://github.com/hyperi-io/scalo-rs/blob/main/src/kafka_config.rs)
 - Central file loader: `src/config/kafka_defaults.rs` (`consumer_profile()`, `producer_profile()`, the `OnceLock` cache, `merge_layers()`)
 - Layer merge and derived keys: `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`, `SERVICE_CONSUMER_OVERRIDES`, `SERVICE_PRODUCER_OVERRIDES`)
 - Config fields: `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
