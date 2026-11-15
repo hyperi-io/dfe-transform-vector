@@ -11,5 +11,9 @@
 
 mod common;
 
+/// The filebeat cases and their comparison, owned by dfe-transform-vrl.
+#[path = "common/filebeat.rs"]
+mod filebeat_cases;
+
 #[path = "e2e/mod.rs"]
 mod e2e;

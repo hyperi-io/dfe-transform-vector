@@ -664,7 +664,8 @@ mod tests {
         )));
     }
 
-    /// A transform file declaring a `file` table at `path`.
+    /// A transform file declaring a `file` table at `path`, the shape the
+    /// bundled filebeat pipeline ships.
     fn file_table(path: &Path) -> String {
         format!(
             "enrichment_tables:\n  timezones:\n    type: file\n    file:\n      path: {}\n      \
@@ -677,7 +678,7 @@ mod tests {
     fn a_missing_table_file_is_named_with_its_path() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let missing = tmp.path().join("data/timezones.csv");
-        write_yaml_file(tmp.path(), "50_000_tables.yaml", &file_table(&missing));
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&missing));
 
         let unreadable = unreadable_enrichment_tables(tmp.path());
         assert_eq!(unreadable.len(), 1, "{unreadable:?}");
@@ -697,7 +698,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let table = tmp.path().join("timezones.csv");
         std::fs::write(&table, "abbreviation\nUTC\n").expect("write table");
-        write_yaml_file(tmp.path(), "50_000_tables.yaml", &file_table(&table));
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&table));
 
         assert_eq!(unreadable_enrichment_tables(tmp.path()), Vec::new());
     }
@@ -707,7 +708,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().join("timezones.csv");
         std::fs::create_dir(&dir).expect("create dir");
-        write_yaml_file(tmp.path(), "50_000_tables.yaml", &file_table(&dir));
+        write_yaml_file(tmp.path(), "50_000_filebeat.yaml", &file_table(&dir));
 
         let unreadable = unreadable_enrichment_tables(tmp.path());
         assert_eq!(unreadable.len(), 1, "{unreadable:?}");
@@ -764,7 +765,7 @@ mod tests {
         let config_dir = tmp.path().join("config");
         std::fs::create_dir(&config_dir).expect("config dir");
         let missing = tmp.path().join("timezones.csv");
-        write_yaml_file(&config_dir, "50_000_tables.yaml", &file_table(&missing));
+        write_yaml_file(&config_dir, "50_000_filebeat.yaml", &file_table(&missing));
 
         let vector_config = VectorConfig {
             binary: always_valid_binary(tmp.path())

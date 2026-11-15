@@ -117,7 +117,7 @@ impl KafkaFixture {
     /// Acquire the run's shared broker container, never the live cluster.
     ///
     /// `acquire` prefers the live cluster, which is wrong for a test that uses
-    /// the real DFE topic names: `e2e_syslog_land` on a shared live broker is
+    /// the real DFE topic names: `filebeat_land` on a shared live broker is
     /// somebody else's data. Returns `None` when no container can be started.
     pub async fn hermetic(_test: &str) -> Option<Self> {
         match shared_broker().await {

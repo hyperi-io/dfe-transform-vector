@@ -416,11 +416,11 @@ async fn a_table_file_vector_validate_passes_but_cannot_load_fails_validation() 
     fs::create_dir_all(&transforms).expect("transforms dir");
     let table = work_dir.path().join("data/timezones.csv");
     fs::write(
-        transforms.join("01_tables.yaml"),
+        transforms.join("01_filebeat.yaml"),
         format!(
             "enrichment_tables:\n  timezones:\n    type: file\n    file:\n      path: {}\n      \
              encoding:\n        type: csv\n    schema:\n      abbreviation: string\n\
-             transforms:\n  tables:\n    type: remap\n    inputs: [dfe_source]\n    \
+             transforms:\n  filebeat:\n    type: remap\n    inputs: [dfe_source]\n    \
              source: |\n      .seen = true\n",
             table.display()
         ),
