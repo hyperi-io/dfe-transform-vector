@@ -171,7 +171,7 @@ What green does NOT mean:
 
 - The default run leaves out the `#[ignore]` cases in `tests/integration/vector_validate.rs` and `tests/e2e/kafka.rs`. The `vector_validate` ones run Vector's own validator over each buffer, SASL and TLS variant of an assembled config, so until you pass `--run-ignored all` those variants are unchecked.
 - Locally, a missing broker or Vector binary SKIPS rather than fails. In CI that absence is an assertion failure for the cases that run by default, so CI is stricter than a green laptop run.
-- `e2e::filebeat_kafka` runs by default and needs a dfe-transform-vrl checkout, for its corpus and elastic's golden events: beside this repo, or named by `DFE_TRANSFORM_VRL_DIR`. Without one it skips locally and fails under CI, which checks the repo out beside this one.
+- `e2e::filebeat_kafka` runs by default and needs a dfe-transform-vrl checkout, for its cases and the bundled pipeline: beside this repo, or named by `DFE_TRANSFORM_VRL_DIR`. Without one it skips locally and fails under CI, which checks the repo out beside this one.
 - A docs-only push runs no CI at all. `paths-ignore` for `docs/**` and `**.md` is on the `push` trigger but not on `pull_request`, so the PR is the only place a docs change is checked. A silent push is not a pass.
 
 ### What tends to bite
@@ -209,4 +209,4 @@ Outbound -- what depends on this repo:
 Two more relationships that are real but are NOT declared edges in the suite graph, so no gate enforces them:
 
 - dfe-infra `apps.yaml` is the SSoT for how this app is deployed -- multiplicity, scaling, transports, endpoints and which compiler derives its routing. dfe-engine reads that manifest, so adding or changing the app is a manifest edit, never an engine release.
-- dfe-transform-vrl holds the filebeat corpus, the bundled pipeline and the documented divergences that `e2e::filebeat_kafka` grades against. The dependency is a test-time checkout only, which CI makes and a laptop may not.
+- dfe-transform-vrl holds the filebeat cases (`tests/fixtures/filebeat/cases.yaml`) and the bundled pipeline that `e2e::filebeat_kafka` grades against. The dependency is a test-time checkout only, which CI makes and a laptop may not.

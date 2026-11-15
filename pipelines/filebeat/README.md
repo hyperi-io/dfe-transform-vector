@@ -10,7 +10,7 @@ Copyright: (c) 2026 HYPERI PTY LIMITED
 
 # Bundled pipeline: filebeat-compat (INTERIM)
 
-A pre-canned transform file that keeps DFE 2.1 filebeat feeds working on dfe-transform-vector: the same VRL dfe-transform-vrl runs, wrapped in a Vector `remap` and carrying the enrichment table it needs. Point `transforms.dir` at this directory, mount the table, and the pipeline runs -- there is nothing to author. The modules, the routing rules, the departures from DFE 2.1 and the known divergences from the elastic goldens are documented once, in dfe-transform-vrl `pipelines/filebeat/README.md`, and apply here unchanged.
+A pre-canned transform file that keeps DFE 2.1 filebeat feeds working on dfe-transform-vector: the same VRL dfe-transform-vrl runs, wrapped in a Vector `remap` and carrying the enrichment table it needs. Point `transforms.dir` at this directory, mount the table, and the pipeline runs -- there is nothing to author. The modules, the routing rules, the departures from DFE 2.1 and the known limitations are documented once, in dfe-transform-vrl `pipelines/filebeat/README.md`, and apply here unchanged.
 
 > **INTERIM.** Elastic compatibility is being replaced by
 > `dfe-transform-elastic` (Rust-native). New integrations
@@ -33,4 +33,4 @@ Events carry the DFE 2.1 Kafka fields (`{message, tags, timestamp}`), and the op
 
 ## Provenance
 
-`filebeat.yaml` embeds dfe-transform-vrl `pipelines/filebeat/filebeat.vrl` @ `e0b7087`, the same program bar two lines of its header comment, and `timezones.csv` is that repo's table copied. Refresh by copying both again rather than editing here -- the two transform apps grade against the same corpus (`tests/e2e/filebeat_kafka.rs` in each), and that only means something while the program is the same one.
+`filebeat.yaml` embeds dfe-transform-vrl `pipelines/filebeat/filebeat.vrl` @ `e0b7087`, the same program bar two lines of its header comment, and `timezones.csv` is that repo's table copied. Refresh by copying both again rather than editing here -- the two transform apps grade against the same cases (`tests/e2e/filebeat_kafka.rs` in each), and that only means something while the program is the same one.
