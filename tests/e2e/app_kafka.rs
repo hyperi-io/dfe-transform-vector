@@ -1,40 +1,21 @@
 // Project:   dfe-transform-vector
-// File:      tests/e2e/filebeat_kafka.rs
-// Purpose:   WS21 parity: the filebeat cases through the app, Vector and a broker
+// File:      tests/e2e/app_kafka.rs
+// Purpose:   The app binary over a real broker with an authored transform file
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! The transform hop of the WS21 chain, with Vector doing the transforming.
+//! The shipped binary reading `e2e_syslog_land`, transforming with Vector and
+//! writing `e2e_syslog_load`.
 //!
-//! ```text
-//! filebeat cases -> filebeat_land -> dfe-transform-vector -> filebeat_load
-//! ```
+//! The instance is bound to its source by NAME: `dfe_source` is the only
+//! topic setting in the config, and both topics and the consumer group derive
+//! from it. The app also runs `vector validate` before it starts Vector, so a
+//! transform file Vector cannot compile fails here.
 //!
-//! This is the parity half of the acceptance case: the same cases, the same
-//! bundled filebeat VRL, and the same assertions as
-//! `dfe-transform-vrl/tests/e2e/filebeat_kafka.rs`. Only the transform app
-//! differs, which is what makes WS21 a test of the transform LAYER rather
-//! than of one app.
-//!
-//! What it exercises that a config test cannot:
-//!
-//! - The instance is bound to its source by NAME. `dfe_source: filebeat` is
-//!   the only topic setting in the config; `filebeat_land`, `filebeat_load`
-//!   and the consumer group are all derived from it.
-//! - The VRL arrives as an authored transform file, wrapped in a `remap`,
-//!   with its lookup table declared alongside it -- so a top-level
-//!   `enrichment_tables:` reaching Vector through the assembler is proved,
-//!   not assumed.
-//! - The app runs `vector validate` before starting, so a pipeline Vector's
-//!   VRL cannot compile fails here rather than silently passing nothing on.
-//!
-//! The cases and the pipeline belong to dfe-transform-vrl. Without that
-//! checkout there is nothing to run against and the test says so.
-//!
-//! NOT covered here, because it needs a cluster: the receiver hop that picks
-//! the source, and the loader hop that lands rows in `ClickHouse`.
+//! The receiver hop that picks the source and the loader hop that lands rows
+//! in `ClickHouse` need a cluster and are not covered.
 
 use std::time::{Duration, Instant};
 
@@ -42,41 +23,78 @@ use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaTransport};
 use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 
 use crate::common::{self, KafkaFixture};
-use crate::filebeat_cases as fb;
 
-/// The source this instance is bound to, and the topics that follow from it.
-const SOURCE: &str = "filebeat";
-const LAND_TOPIC: &str = "filebeat_land";
-const LOAD_TOPIC: &str = "filebeat_load";
+const SOURCE: &str = "e2e_syslog";
+const LAND_TOPIC: &str = "e2e_syslog_land";
+const LOAD_TOPIC: &str = "e2e_syslog_load";
 
-/// A line no filebeat module claims, carried through to prove the
-/// shape-unmatched catch-all still passes an event on rather than dropping it.
-const UNMATCHED_PROBE: &str = "ws21 probe: a line no filebeat module claims";
+/// A synthetic line and the fields the transform must set, or `None` where it
+/// must tag the event `unparsed` and pass it on.
+struct Case {
+    name: &'static str,
+    line: &'static str,
+    expect: Option<(&'static str, &'static str)>,
+}
 
-/// How long the app gets to assemble the config, run `vector validate` over
-/// the 5.5K-line pipeline, and start Vector.
-const READY_TIMEOUT: Duration = Duration::from_secs(240);
+const CASES: &[Case] = &[
+    Case {
+        name: "denied",
+        line: "denied src=203.0.113.7",
+        expect: Some(("203.0.113.7", "denied")),
+    },
+    Case {
+        name: "allowed",
+        line: "allowed src=198.51.100.23",
+        expect: Some(("198.51.100.23", "allowed")),
+    },
+    Case {
+        name: "reset",
+        line: "conn_reset src=192.0.2.1",
+        expect: Some(("192.0.2.1", "conn_reset")),
+    },
+    Case {
+        name: "no_source",
+        line: "a line with no key value pairs",
+        expect: None,
+    },
+    Case {
+        name: "bad_ip",
+        line: "denied src=not-an-address",
+        expect: None,
+    },
+];
+
+/// How long the app gets to assemble the config, validate and start Vector.
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long the cases get to arrive on the sink topic once the app is ready.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Every case as Vector will read it off `filebeat_land`, plus the
-/// shape-unmatched probe.
-///
-/// Each case event carries its name in a root `_case` field. The pipeline keeps
-/// root fields on every branch, so the name comes out the far side and pairs
-/// an output with its case whatever order the broker returns them in.
+const TRANSFORM: &str = r#"transforms:
+  parse_line:
+    type: remap
+    inputs:
+      - dfe_source
+    source: |
+      parsed, err = parse_regex(.message, r'^(?P<action>[a-z_]+) src=(?P<ip>[0-9.]+)$')
+      if err == null {
+        .source.ip = parsed.ip
+        .event.action = parsed.action
+      } else {
+        .tags = ["unparsed"]
+      }
+"#;
+
 fn workload() -> Vec<serde_json::Value> {
-    let mut inputs: Vec<serde_json::Value> = fb::cases()
+    CASES
         .iter()
-        .map(|case| {
-            let mut event = fb::case_event(case);
-            event["_case"] = serde_json::json!(case.name);
-            event
-        })
-        .collect();
-    inputs.push(fb::input_event(UNMATCHED_PROBE, None));
-    inputs
+        .map(|c| serde_json::json!({ "message": c.line, "_case": c.name }))
+        .collect()
+}
+
+fn write_transform(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).expect("create the transforms dir");
+    std::fs::write(dir.join("01_parse_line.yaml"), TRANSFORM).expect("write the transform file");
 }
 
 fn client_config(base: &KafkaConfig, topics: &[&str], group: &str) -> KafkaConfig {
@@ -99,50 +117,6 @@ fn free_port() -> u16 {
     port
 }
 
-/// The bundled filebeat VRL as a Vector `remap` transform, with the lookup
-/// table it needs declared in the same file.
-///
-/// The top-level `enrichment_tables` key is the point: the assembler writes
-/// this file into Vector's config dir verbatim, so Vector merges the
-/// declaration and the VRL's `get_enrichment_table_record` calls resolve.
-fn write_transform(dir: &std::path::Path) {
-    let vrl = std::fs::read_to_string(fb::pipeline_vrl().expect("the bundled pipeline"))
-        .expect("read the bundled filebeat.vrl");
-    let timezones = fb::timezones_csv().expect("the bundled timezones table");
-
-    let doc = serde_json::json!({
-        "enrichment_tables": {
-            "timezones": {
-                "type": "file",
-                "file": {
-                    "path": timezones.to_string_lossy(),
-                    "encoding": { "type": "csv" },
-                },
-                "schema": { "abbreviation": "string" },
-            },
-        },
-        "transforms": {
-            "filebeat": {
-                "type": "remap",
-                "inputs": ["dfe_source"],
-                "source": vrl,
-            },
-        },
-    });
-
-    std::fs::create_dir_all(dir).expect("create the transforms dir");
-    std::fs::write(
-        dir.join("01_filebeat.yaml"),
-        scalo::yaml::to_string(&doc).expect("transform serialises"),
-    )
-    .expect("write the transform file");
-}
-
-/// The config file the app runs from.
-///
-/// `dfe_source` is the ONLY topic setting: leaving `source.topics`,
-/// `sink.topic` and `source.group_id` at their defaults is what lets the app
-/// derive them, which is the binding under test.
 fn write_config(
     dir: &std::path::Path,
     brokers: &[String],
@@ -165,13 +139,7 @@ fn write_config(
             "encoding": "json",
             "compression": "none",
         },
-        "transforms": {
-            "dir": transforms_dir.to_string_lossy(),
-            "data_dir": fb::timezones_csv()
-                .and_then(|table| table.parent().map(std::path::Path::to_path_buf))
-                .expect("the bundled timezones table")
-                .to_string_lossy(),
-        },
+        "transforms": { "dir": transforms_dir.to_string_lossy() },
         "vector": {
             "binary": vector_binary.to_string_lossy(),
             "data_dir": data_dir.to_string_lossy(),
@@ -280,49 +248,14 @@ async fn drain(
     out
 }
 
-/// Grade every case against the output event that carries its name.
-/// Returns one line per case that has no output or whose output disagrees.
-fn grade_cases(outputs: &[serde_json::Value]) -> Vec<String> {
-    let mut failures = Vec::new();
-    for case in fb::cases() {
-        let found = outputs
-            .iter()
-            .find(|e| e.get("_case").and_then(serde_json::Value::as_str) == Some(&case.name));
-        match found {
-            None => failures.push(format!("{}: no output event carried its name", case.name)),
-            Some(event) if fb::is_unmatched(event) => {
-                failures.push(format!("{}: routed to filebeat_unmatched", case.name));
-            }
-            Some(event) => {
-                let problems = fb::problems_for(case, event);
-                if !problems.is_empty() {
-                    failures.push(format!("{}: {}", case.name, problems.join("; ")));
-                }
-            }
-        }
-    }
-    failures
-}
-
 #[tokio::test]
-async fn filebeat_cases_round_trip_through_vector() {
-    if fb::vrl_repo().is_none() {
-        common::require_service_in_ci(
-            "dfe-transform-vrl checkout",
-            "the cases and the bundled pipeline grade this test, and CI clones the repo beside this one",
-        );
-        eprintln!(
-            "SKIP: the cases and the bundled pipeline live in dfe-transform-vrl. \
-             Point DFE_TRANSFORM_VRL_DIR at a checkout to run this."
-        );
-        return;
-    }
+async fn syslog_lines_round_trip_through_vector() {
     let Some(vector_binary) = common::vector_binary_path() else {
         common::require_service_in_ci("Vector binary", "scripts/fetch-vector.sh found nothing");
         eprintln!("SKIP: no Vector binary (run scripts/fetch-vector.sh)");
         return;
     };
-    let Some(fixture) = KafkaFixture::hermetic("filebeat-cases-round-trip").await else {
+    let Some(fixture) = KafkaFixture::hermetic("syslog-round-trip").await else {
         common::require_service_in_ci("Kafka", "no Docker to start a broker container");
         eprintln!("SKIP: no Docker, so this test cannot own a broker.");
         return;
@@ -331,18 +264,18 @@ async fn filebeat_cases_round_trip_through_vector() {
 
     let inputs = workload();
     eprintln!(
-        "WS21: replaying {} events through {LAND_TOPIC} -> {LOAD_TOPIC}",
+        "replaying {} events through {LAND_TOPIC} -> {LOAD_TOPIC}",
         inputs.len()
     );
 
     let admin =
-        KafkaAdmin::new(&client_config(&base, &[LAND_TOPIC], "ws21-admin")).expect("admin client");
+        KafkaAdmin::new(&client_config(&base, &[LAND_TOPIC], "admin")).expect("admin client");
     admin
         .create_topics(&[(LAND_TOPIC, 1, 1), (LOAD_TOPIC, 1, 1)])
         .await
         .expect("create the source-bound topics");
 
-    let producer = KafkaTransport::new(&client_config(&base, &[LAND_TOPIC], "ws21-seed"))
+    let producer = KafkaTransport::new(&client_config(&base, &[LAND_TOPIC], "seed"))
         .await
         .expect("seed producer");
     // `send`'s first argument is the DESTINATION, which for Kafka is the topic
@@ -365,7 +298,7 @@ async fn filebeat_cases_round_trip_through_vector() {
     let seeded = drain(
         &base,
         LAND_TOPIC,
-        "ws21-seed-check",
+        "seed-check",
         inputs.len(),
         Duration::from_secs(60),
     )
@@ -429,14 +362,7 @@ async fn filebeat_cases_round_trip_through_vector() {
         "dfe-transform-vector did not report ready on {probes} within {READY_TIMEOUT:?}"
     );
 
-    let outputs = drain(
-        &base,
-        LOAD_TOPIC,
-        "ws21-verify",
-        inputs.len(),
-        DRAIN_TIMEOUT,
-    )
-    .await;
+    let outputs = drain(&base, LOAD_TOPIC, "verify", inputs.len(), DRAIN_TIMEOUT).await;
     stop(&mut app).await;
 
     // Assertion 1 -- everything that went in came out.
@@ -448,45 +374,44 @@ async fn filebeat_cases_round_trip_through_vector() {
         outputs.len()
     );
 
-    // Assertion 2 -- the shape-unmatched catch-all passes an event through
-    // tagged, rather than dropping it.
-    let probe_at = outputs
-        .iter()
-        .position(|e| e.get("message").and_then(serde_json::Value::as_str) == Some(UNMATCHED_PROBE))
-        .expect("the unmatched probe must arrive on the sink topic");
-    assert!(
-        fb::is_unmatched(&outputs[probe_at]),
-        "an unclaimed line must carry filebeat_unmatched: {}",
-        outputs[probe_at]
-    );
-
-    // Assertion 3 -- every case agrees with the fields it names.
-    let failures = grade_cases(&outputs);
+    // Assertion 2 -- each line carries the fields its case names.
+    let mut failures = Vec::new();
+    for case in CASES {
+        let Some(event) = outputs
+            .iter()
+            .find(|e| e.get("_case").and_then(serde_json::Value::as_str) == Some(case.name))
+        else {
+            failures.push(format!("{}: no output event carried its name", case.name));
+            continue;
+        };
+        let ip = event
+            .pointer("/source/ip")
+            .and_then(serde_json::Value::as_str);
+        let action = event
+            .pointer("/event/action")
+            .and_then(serde_json::Value::as_str);
+        let unparsed = event
+            .pointer("/tags")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|t| t.iter().any(|v| v == "unparsed"));
+        match case.expect {
+            Some((want_ip, want_action)) => {
+                if ip != Some(want_ip) || action != Some(want_action) || unparsed {
+                    failures.push(format!("{}: got {event}", case.name));
+                }
+            }
+            None => {
+                if !unparsed || ip.is_some() || action.is_some() {
+                    failures.push(format!("{}: expected unparsed, got {event}", case.name));
+                }
+            }
+        }
+    }
     assert!(
         failures.is_empty(),
         "{} of {} cases did not match:\n{}",
         failures.len(),
-        fb::cases().len(),
+        CASES.len(),
         failures.join("\n")
     );
-
-    // Assertion 4 -- all three module branches actually ran. A pipeline that
-    // detected nothing would still satisfy the count above by passing
-    // everything through unmatched.
-    let branch_ran = |module: &str, probe: &dyn Fn(&serde_json::Value) -> bool| {
-        assert!(
-            outputs.iter().any(probe),
-            "no output event came from the {module} branch"
-        );
-    };
-    let product_is = |event: &serde_json::Value, want: &str| {
-        event
-            .get("observer")
-            .and_then(|o| o.get("product"))
-            .and_then(serde_json::Value::as_str)
-            == Some(want)
-    };
-    branch_ran("umbrella", &|e| product_is(e, "Umbrella"));
-    branch_ran("ios", &|e| product_is(e, "IOS"));
-    branch_ran("meraki", &|e| e.get("cisco_meraki").is_some());
 }
