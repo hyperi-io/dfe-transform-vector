@@ -1,26 +1,19 @@
 # Testing
 
-The house rules are hyperi-ai's testing standard, `standards/universal/testing.md`.
+Which tier runs what, and how the tests find a broker and a Vector binary.
 
 ## Tiers
 
-- **Core** runs on every push and PR: `cargo nextest run --all-features`. Unit, integration, smoke, and the e2e cases that are not `#[ignore]`.
-- **Full** runs nightly and before every release (`test.full.required_for_release` in `.hyperi-ci.yaml`): core plus every `#[ignore]` case, `cargo nextest run --all-features --run-ignored all`. Those are the `vector_validate` cases and the opt-in `e2e::kafka` pipelines.
+- Core runs on every push and PR: `cargo nextest run --all-features`. Unit, integration, smoke, and the e2e cases that are not `#[ignore]`.
+- Full runs nightly and before every release (`test.full.required_for_release` in `.hyperi-ci.yaml`): core plus every `#[ignore]` case, `cargo nextest run --all-features --run-ignored all --ignore-default-filter`. Those are the `vector_validate` cases, the opt-in `e2e::kafka` pipelines and one timing measurement in `src/metrics/scrape.rs`.
 
-## Backends
+## Brokers and the Vector binary
 
 There is no mode switch. `KafkaFixture::acquire` resolves a broker on its own:
 
-1. **A live cluster**, if `KAFKA_BROKERS` (and any SASL settings) in `.env`
-   authenticate against it. Faster, and a real multi-broker cluster.
-2. **The run's shared broker**, otherwise -- one single-node Apache Kafka that
-   scalo's `shared_service` starts for the whole run and every test process
-   joins. The image is scalo's `KAFKA_IMAGE`.
-   The first test that needs it starts it on the local
-   Docker daemon, locally and in CI alike, and a watcher removes it when the
-   run's last test process exits.
-3. **Skip**, when neither is available. In CI that is an assertion failure
-   instead: a test that skips when its environment disappears is not a gate.
+1. A live cluster, if `KAFKA_BROKERS` (and any SASL settings) in `.env` authenticate against it. Faster, and a real multi-broker cluster.
+2. Otherwise the run's shared broker: one single-node Apache Kafka, scalo's `KAFKA_IMAGE`, that scalo's `shared_service` starts for the whole run and every test process joins. The first test that needs it starts it on the local Docker daemon, locally and in CI alike, and a watcher removes it when the run's last test process exits.
+3. A skip, when neither is available. In CI that is an assertion failure instead: a test that skips when its environment disappears is not a gate.
 
 `KafkaFixture::hermetic` skips step 1 outright and takes the shared broker.
 Anything using the real DFE topic names takes that path, because
@@ -35,11 +28,7 @@ leftovers from a killed run with:
 docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vector-integration)
 ```
 
-## The Vector binary
-
-Tests that spawn Vector resolve it through `scripts/fetch-vector.sh`, which
-downloads the pinned build once into `.tmp/`, and fall back to `vector` on
-`PATH`. Without either they skip.
+Tests that spawn Vector resolve it through `scripts/fetch-vector.sh`, which downloads the pinned build once into `.tmp/`, and fall back to `vector` on `PATH`. Without either they skip locally, and the cases that run by default fail under CI.
 
 ## Suites
 
@@ -53,16 +42,14 @@ cargo nextest run --test integration
 # CLI surface
 cargo nextest run --test smoke
 
-# End to end -- needs Docker or a live cluster, plus a Vector binary
+# The e2e tests -- need Docker or a live cluster, plus a Vector binary
 cargo nextest run --test e2e
 
 # Everything, opt-in cases included
 cargo nextest run --run-ignored all
 ```
 
-Opt-in (`#[ignore]`) cases are the full tier: `vector_validate` runs the real
-validator over each assembled config, and two `e2e::kafka` pipelines drive a
-bare Vector process against a broker.
+Opt-in (`#[ignore]`) cases are the full tier: `vector_validate` runs the real validator over each buffer, SASL and TLS variant of an assembled config, and two `e2e::kafka` pipelines drive a bare Vector process against a broker.
 
 ## The WS21 acceptance case
 
