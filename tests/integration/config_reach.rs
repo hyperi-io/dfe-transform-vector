@@ -219,8 +219,9 @@ fn a_misspelt_logging_value_is_named_as_a_config_error() {
 /// `sink.compression: zstd` produced zstd and logged nothing.
 #[test]
 fn a_librdkafka_option_the_generator_overwrites_is_refused() {
-    let cases: [(&str, &str, &str); 3] = [
+    let cases: [(&str, &str, &str); 4] = [
         ("sink", "compression.type", "sink.compression"),
+        ("sink", "compression.codec", "sink.compression"),
         ("sink", "security.protocol", "sink.sasl.enabled"),
         ("source", "sasl.mechanism", "source.sasl.mechanism"),
     ];

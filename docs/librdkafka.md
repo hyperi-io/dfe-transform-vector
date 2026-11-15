@@ -29,7 +29,7 @@ A few keys are derived from the big dials and written after the merge, so `librd
 
 | Key | Owned by | Written when |
 |---|---|---|
-| `compression.type` | `sink.compression` | always, on the sink |
+| `compression.type`, `compression.codec` | `sink.compression` | always, on the sink, as Vector's `compression` field |
 | `security.protocol` | `{source,sink}.sasl.enabled` + `.tls.enabled` | either is on |
 | `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
 | `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
@@ -48,7 +48,7 @@ sink:
 
 ## Example
 
-For a producer with no central file, `sink.compression: lz4` and `sink.librdkafka_options: {linger.ms: "20"}`, the supervisor writes `batch.timeout_secs: 0.02` on the sink and, in `librdkafka_options`, `compression.type=lz4`, `queue.buffering.max.kbytes=262144`, `enable.idempotence=true`, `socket.nagle.disable=true`, `statistics.interval.ms=1000` and `message.max.bytes=16777216`, the last because no layer set it.
+For a producer with no central file, `sink.compression: lz4` and `sink.librdkafka_options: {linger.ms: "20"}`, the supervisor writes `batch.timeout_secs: 0.02` and `compression: lz4` on the sink and, in `librdkafka_options`, `queue.buffering.max.kbytes=262144`, `enable.idempotence=true`, `socket.nagle.disable=true`, `statistics.interval.ms=1000` and `message.max.bytes=16777216`, the last because no layer set it.
 
 Add a central `producer.production` naming only `linger.ms: "50"` and `socket.nagle.disable` and `statistics.interval.ms` drop out of `librdkafka_options`, because the central profile replaced the constants rather than merging over them. Vector still writes `statistics.interval.ms=1000` itself. The delay stays 20 ms: the per-instance option outranks the central file. Drop that option and it becomes 50 ms.
 
@@ -119,7 +119,7 @@ Only the `production` profile of each side is read. A profile in the file replac
 
 ## Source code references
 
-- Profile constants: scalo-rs `src/kafka_config.rs`
+- Profile constants: [scalo-rs src/kafka_config.rs](https://github.com/hyperi-io/scalo-rs/blob/main/src/kafka_config.rs)
 - Central file loader: `src/config/kafka_defaults.rs` (`consumer_profile()`, `producer_profile()`, the `OnceLock` cache, `merge_layers()`)
 - Layer merge and derived keys: `src/config/generate.rs` (`build_source_librdkafka`, `build_sink_librdkafka`, `SERVICE_CONSUMER_OVERRIDES`, `SERVICE_PRODUCER_OVERRIDES`)
 - Config fields: `src/config/loader.rs` (`SourceConfig.librdkafka_options`, `SinkConfig.librdkafka_options`)
