@@ -9,6 +9,6 @@ description = "Project-specific false positive allowlist"
 paths = [
     '''(^|/)ci/''',
     '''(^|/)ai/''',
-    # The Meraki event subtype '8021x_eap_failure' matches a key rule.
+    # Commits before the history rewrite still hold the deleted file, and gitleaks scans them.
     '''pipelines/filebeat/filebeat\.yaml''',
 ]

@@ -551,8 +551,7 @@ impl Default for BufferConfig {
     }
 }
 
-/// Where the bundled filebeat pipeline and the engine's file set put the
-/// enrichment tables.
+/// Where the engine's file set puts the enrichment tables.
 pub const DEFAULT_TRANSFORMS_DATA_DIR: &str = "/etc/dfe-transform-vector/data";
 
 /// Transform file loading configuration.

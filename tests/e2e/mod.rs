@@ -6,7 +6,7 @@
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-mod filebeat_kafka;
+mod app_kafka;
 mod kafka;
 // The Vector metrics merge is asserted inside `kafka` against a real Vector,
 // and against a fake exporter in `tests/integration/metrics.rs`.
