@@ -39,7 +39,7 @@ transforms:
       - dfe_source
     source: |
       ##############################################################################
-      # dfe-transform-vrl bundled pipeline: filebeat-compat -- INTERIM
+      # dfe-transform-vrl bundled pipeline: filebeat-compat -- LEGACY
       #
       # Single-file port of the DFE 2.1 Vector filebeat transform templates
       # (dfe-vector-templates src/core_templates 14x family):
@@ -56,10 +56,9 @@ transforms:
       # umbrella templates differed only in the hardcoded .log.file.path seed;
       # they collapse to one body driven by the detected log type.
       #
-      # INTERIM: this pipeline keeps DFE 2.1 filebeat feeds working on
-      # dfe-transform-vrl. Elastic compatibility is being replaced by
-      # dfe-transform-elastic (Rust-native), and new integrations should NOT
-      # build on this file.
+      # LEGACY: backwards compatibility for DFE/XDR 2.0 and 2.1 filebeat feeds
+      # on dfe-transform-vrl, frozen at these three modules. New feeds use
+      # dfe-transform-elastic.
       #
       # Deliberate departures from the 2.1 templates:
       #   - geoip enrichment is NOT ported: dfe-loader owns geoip enrichment in
