@@ -10,13 +10,13 @@
 check: ## Pre-push validation (quality + test)
 	hyperi-ci check
 
-quality: ## Run all quality checks
+quality:
 	hyperi-ci run quality
 
-test: ## Run tests
+test:
 	hyperi-ci run test
 
-build: ## Build artifacts
+build:
 	hyperi-ci run build
 
 ci: quality test build ## Run full CI pipeline locally

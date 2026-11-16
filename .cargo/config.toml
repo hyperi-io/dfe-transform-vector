@@ -1,5 +1,3 @@
-# Per-target CPU optimisations.
-#
 # Under [target.<triple>], never [build]: cargo drops build.rustflags when a
 # CARGO_TARGET_<triple>_RUSTFLAGS is set, as CI runners do.
 

@@ -62,8 +62,5 @@ GEMINI.md
 tarpaulin-report.json
 cobertura.xml
 
-# Local scratch / tmp (CORE.md: scratch goes here, gitignored, NOT
-# /tmp). Bare patterns (no leading slash) match a tmp dir at ANY
-# depth, so these cover top-level .tmp/ and tmp/ as well as nested
-# ones like tests/tmp/. Mirrored in attach.py _DEFAULT_EXCLUDES.
+# Scratch directories at any depth.
 tmp/

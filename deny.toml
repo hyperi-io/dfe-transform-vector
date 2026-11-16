@@ -1,4 +1,3 @@
-# cargo-deny v0.19+ configuration
 # Run: cargo deny check
 
 [advisories]
@@ -21,9 +20,7 @@ allow = [
     "CC0-1.0",
     "Unlicense",
     "OpenSSL",
-    # webpki-root-certs/webpki-roots (via reqwest -> rustls-platform-verifier)
-    # relicensed MPL-2.0 -> CDLA-Permissive-2.0; the CCADB cert data is a
-    # permissive data licence. Matches scalo's own deny.toml allowance.
+    # The CCADB certificate data in webpki-roots, a permissive data licence.
     "CDLA-Permissive-2.0",
 ]
 
