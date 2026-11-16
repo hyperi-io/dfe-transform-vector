@@ -92,6 +92,7 @@ properties:
       brokers:
       - localhost:9092
       topic: ""
+      dlq_topic: dfe_transform_dlq
       key_field: ""
       encoding: json
       compression: zstd
@@ -458,6 +459,13 @@ $defs:
           the downstream stage picks its table by, so a source keeps its name.
         type: string
         default: ""
+      dlq_topic:
+        description: |-
+          Topic a record over the producer's size ceiling is dead-lettered to on
+          the bus transport, as a DLQ envelope the loader reads. Unused on direct,
+          where the bridge's `dlq` holds it, and while `dlq.enabled` is false.
+        type: string
+        default: dfe_transform_dlq
       key_field:
         description: Event field path for Kafka partition key (e.g., ".org_id").
         type: string
@@ -810,8 +818,9 @@ $defs:
       The default writes NDJSON files under `/var/spool/scalo/dlq`, which the
       deployment contract declares writable. With `enabled: false` such a record
       is dropped and counted on `pipeline_dead_letters_dropped_total`. Only the
-      direct transport's bridge has one: on the bus Vector's own Kafka sink
-      delivers.
+      direct transport's bridge writes through it. On the bus a record over the
+      sink's size ceiling goes to `sink.dlq_topic`, and only `enabled` and
+      `max_payload_bytes` apply.
     $ref: "#/$defs/DlqConfig"
   DlqConfig:
     description: Top-level DLQ configuration.

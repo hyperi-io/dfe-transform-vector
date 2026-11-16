@@ -53,13 +53,15 @@ transforms:
 | `00_global.yaml` | `timezone: UTC`, `data_dir`, the API switch, one `directory` secret backend per credential source |
 | `00_source.yaml` | `dfe_source`: a `kafka` source on bus, carrying the librdkafka layers in [librdkafka.md](librdkafka.md), or a `vector` source on `bridge.to_vector` on direct |
 | `50_NNN_<file>` | Each transform file, in filename order, re-serialised with its wired `inputs` |
-| `90_sink.yaml` | `dfe_sink`: on bus a `kafka` sink behind the `dfe_size_cap` filter, on direct a `vector` sink dialling `bridge.from_vector` |
+| `90_sink.yaml` | `dfe_sink`: on bus a `kafka` sink behind the `dfe_size_cap` route, plus `dfe_size_cap_dlq` and `dfe_dlq_sink` for the records it holds back, on direct a `vector` sink dialling `bridge.from_vector` |
 | `99_observability.yaml` | `internal_metrics` into a `prometheus_exporter` on `metrics.vector_metrics_address` |
 | `.secrets/` | Owner-only files for a SASL credential given as text |
 
 Credentials appear only as references: `SECRET[dfe_source_sasl.username]` for a `secret_dir`, `SECRET[dfe_credentials.source_sasl_username]` for a credential given as text. The assembler refuses a `secret_dir` that lacks its `username` or `password` file.
 
-`dfe_size_cap` drops a record whose encoded length is over the producer's `message.max.bytes` less 128 bytes for the key, headers and framing. `message.max.bytes` is scalo's pipeline-wide record ceiling of 16 MiB unless the central profile or `sink.librdkafka_options` sets it. librdkafka's own default of 1,000,000 bytes would refuse records the rest of the chain carries.
+`dfe_size_cap` is a `route` that sends a record whose encoded length is over the producer's `message.max.bytes` less 128 bytes for the key, headers and framing out of its `_unmatched` output, and the rest out of `within_cap` to the sink. `message.max.bytes` is scalo's pipeline-wide record ceiling of 16 MiB unless the central profile or `sink.librdkafka_options` sets it. librdkafka's own default of 1,000,000 bytes would refuse records the rest of the chain carries.
+
+While `dlq.enabled` is true, `dfe_size_cap_dlq` remaps each record from `_unmatched` into scalo's DLQ entry and `dfe_dlq_sink` writes it to `sink.dlq_topic` (`dfe_transform_dlq`, the shared topic dfe-loader loads). The entry is `truncated`: `original_bytes` is the record's length, `reason` names it and the ceiling, `destination` is `sink.topic`, and `_raw` is the first bytes as base64 with `_raw_encoding: base64`. The `_org_id`, `_source`, `_timestamp_received` and `_tags` values that fit are copied beside it, and any that do not are named in `header_dropped`. The head and the copied values share `dlq.max_payload_bytes`, 512 KiB by default, held to half of what `message.max.bytes` leaves. `dfe_dlq_sink` uses the main sink's brokers, credentials and librdkafka options, writes JSON with no key, and holds in a 500-event memory buffer that blocks when full, so an unreachable broker back-pressures the source rather than dropping the entry. With `dlq.enabled: false` there is no remap or second sink, and `dfe_size_cap` is a `filter` that drops the record.
 
 The wiring follows these rules:
 
@@ -133,7 +135,8 @@ Metric names are bare unless `metrics.namespace` is set, and `dfe-transform-vect
 - `crashes_total`, `restarts_total` and `uptime_seconds`, since the service started.
 - `transform_vector_config_reloads_total{result}`, `config_reloads_total{result}` and `config_validation_errors_total`.
 - `transform_vector_scrape_failures_total` and `transform_vector_sink_errors_total`.
-- `records_received_total`, `records_processed_total`, `records_delivered_total` and `records_error_total`, derived from Vector's component counters on `dfe_source`, `dfe_sink` and `dfe_size_cap`.
+- `records_received_total`, `records_processed_total`, `records_delivered_total` and `records_error_total`, derived from Vector's component counters on `dfe_source`, `dfe_sink`, `dfe_size_cap` and `dfe_dlq_sink`.
+- `vector_component_sent_events_total{component_id="dfe_dlq_sink"}`, the records over the ceiling the DLQ topic holds, merged with the other `vector_*` series.
 
 The scrape reads Vector's exporter on scalo's metrics interval and re-registers every sample. A counter is set with `absolute` and carried across Vector restarts: a total that falls is a new Vector, and the old count becomes a base. A histogram arrives pre-aggregated, so each `_bucket` registers as a counter with its `le` label. A gauge Vector stops reporting is zeroed after `metrics.vector_metrics_expiry_ticks` scrapes, a counter is forgotten after 240, and at most 50,000 series merge.
 
@@ -143,7 +146,7 @@ The contract's ScaledObject scales on CPU and has no Kafka lag trigger. dfe-infr
 
 With `source.acknowledgements.enabled`, the default, delivery is at-least-once on both transports. On bus the sink's acknowledgements hold Vector's source offsets until delivery, so a crash redelivers from the last committed offset. On direct a push is answered once the next hop has it. With acknowledgements off, both happen at receipt.
 
-On direct a record over the next stage's message-size ceiling goes to scalo's file DLQ, NDJSON under `/var/spool/scalo/dlq` on the contract's `dlq` writable path. With `dlq.enabled: false` it is dropped and counted in `pipeline_dead_letters_dropped_total{reason="too_large"}`. A record Vector refuses for good is dropped and counted under `reason="rejected"`, whatever `dlq` says. On bus no DLQ runs: the size cap's drops count under `too_large` and the Kafka sink's under `rejected`. Off the image the DLQ directory is not writable, so a direct run logs `DLQ enabled but no backend started` and leaves dead letters unacknowledged at their source: point `dlq.file.path` at a directory you can write.
+On direct a record over the next stage's message-size ceiling goes to scalo's file DLQ, NDJSON under `/var/spool/scalo/dlq` on the contract's `dlq` writable path. With `dlq.enabled: false` it is dropped and counted in `pipeline_dead_letters_dropped_total{reason="too_large"}`. A record Vector refuses for good is dropped and counted under `reason="rejected"`, whatever `dlq` says. On bus a record over the producer's ceiling goes to `sink.dlq_topic` (see [The assembled directory](#the-assembled-directory)), counted in `vector_component_sent_events_total{component_id="dfe_dlq_sink"}` and in no drop counter. It counts under `too_large` only when the DLQ sink refuses it for good, or with `dlq.enabled: false`, and the Kafka sink's refusals count under `rejected`. Off the image the DLQ directory is not writable, so a direct run logs `DLQ enabled but no backend started` and leaves dead letters unacknowledged at their source: point `dlq.file.path` at a directory you can write.
 
 On direct both bridge listeners lease the bytes they hold on scalo's memory guard. On bus Vector holds the records, bounded by its `buffer` settings and the container's memory limit.
 

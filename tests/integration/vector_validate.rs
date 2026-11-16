@@ -607,3 +607,22 @@ fn vector_validate_routes_with_named_outputs() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// With `dlq.enabled` false the size cap stays the filter that drops, and
+/// Vector accepts that shape too.
+#[test]
+#[ignore] // requires Vector binary
+fn vector_validate_full_chain_with_the_dead_letter_queue_off() {
+    common::skip_if_no_vector!();
+
+    let (mut config, work_dir) = build_config(BufferConfig::default());
+    config.dlq.0.enabled = false;
+    let output = assemble_and_validate(&config, work_dir.path());
+
+    assert!(
+        output.status.success(),
+        "vector validate failed with dlq.enabled false:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
