@@ -13,6 +13,5 @@ cognitive-complexity-threshold = 25
 type-complexity-threshold = 350
 too-many-lines-threshold = 150
 
-# unwrap_used / expect_used stay denied in shipped code, not in #[test] or #[cfg(test)]
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
