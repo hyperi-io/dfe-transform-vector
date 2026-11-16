@@ -19,7 +19,7 @@ The config engine and the process manager run Vector inside the pod, the bridge 
 ```mermaid
 flowchart TB
     accTitle: L3 Components -- dfe-transform-vector
-    accDescr: The previous stage sends records into the pod and the config and transform files configure it. Inside, the config engine writes the Vector config that the process manager starts Vector on, and on the direct transport the bridge carries records in and out of Vector. Vector's metrics are merged into the supervisor's and served on the ops port. Records leave for the next stage and metrics go to the collector.
+    accDescr: The previous stage sends records into the pod and the config and transform files configure it. Inside, the config engine writes the Vector config that the process manager starts Vector on, and on the direct transport the bridge intake hands records to Vector and the bridge return takes them back. Vector's metrics are merged into the supervisor's and served on the ops port. Records leave for the next stage and metrics go to the collector.
 
     prev["Previous stage"]
     files[("Config files")]
@@ -28,12 +28,14 @@ flowchart TB
         direction LR
         cfg[["Config engine"]]
         proc["Process manager"]
-        bridge[["Direct bridge"]]
+        intake[["Bridge intake"]]
         vec[["Vector"]]
+        ret[["Bridge return"]]
         merge["Metrics merge"]
         cfg --> proc
         proc --> vec
-        bridge --> vec
+        intake --> vec
+        vec --> ret
         vec --> merge
     end
 

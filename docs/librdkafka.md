@@ -34,7 +34,7 @@ A few keys are derived from the big dials and written after the merge, so `librd
 | `sasl.mechanism` | `{source,sink}.sasl.mechanism` | SASL is on |
 | `enable.ssl.certificate.verification` | `{source,sink}.tls.skip_verify` | TLS is on and verification is skipped |
 
-`config-check` rejects a config that sets one of these in `librdkafka_options`, and names the big dial that owns the key. The conditions are part of the rule: with SASL off nothing derives `sasl.mechanism`, so setting it by hand there is allowed. Any other key can be set per instance, bar two checks. `config-check` rejects `enable.auto.offset.store: true` from any layer, because librdkafka would then store offsets at fetch rather than after the sink acknowledges. The client config built from each endpoint's brokers, SASL, TLS and `librdkafka_options` must pass scalo's Kafka security floor.
+`config-check` rejects a config that sets one of these in `librdkafka_options`, and names the big dial that owns the key. With SASL off nothing derives `sasl.mechanism`, so setting it by hand there is allowed. Any other key can be set per instance, bar two checks. `config-check` rejects `enable.auto.offset.store: true` in any layer of the source consumer's options, the central profile included, because librdkafka would then store offsets at fetch, before the sink acknowledges. The client config built from each endpoint's brokers, SASL, TLS and `librdkafka_options` must pass scalo's Kafka security floor.
 
 ```yaml
 source:
