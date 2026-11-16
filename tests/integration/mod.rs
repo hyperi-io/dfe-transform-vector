@@ -14,6 +14,7 @@ mod config_reach;
 #[allow(clippy::panic)]
 mod container_hygiene;
 mod credential_reassembly;
+mod dead_letter_vrl;
 mod deployment;
 mod direct_transport;
 mod fixtures;

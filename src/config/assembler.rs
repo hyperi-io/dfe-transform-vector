@@ -111,6 +111,7 @@ pub fn assemble_for(config: &Config, output_dir: &Path, published: &Path) -> Res
         &config.bridge,
         &wiring.sink_inputs,
         config.source.acknowledgements.enabled,
+        &config.dlq.0,
     );
     write_yaml(output_dir, "90_sink.yaml", &sink_yaml)?;
 

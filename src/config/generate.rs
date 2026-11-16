@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use scalo::dlq::{DEFAULT_MAX_PAYLOAD_BYTES, DlqConfig};
 use scalo::transport::kafka::MESSAGE_MAX_BYTES;
 use serde_json::{Map, Number, Value};
 use tracing::warn;
@@ -46,9 +47,36 @@ pub const SOURCE_LABEL: &str = "dfe_source";
 /// Canonical label for the generated sink component.
 pub const SINK_LABEL: &str = "dfe_sink";
 
-/// Label of the filter that keeps records over the producer's size ceiling off
-/// the Kafka sink.
+/// Label of the transform that keeps records over the producer's size ceiling
+/// off the Kafka sink: a `route` whose unmatched output is dead-lettered, or a
+/// `filter` that drops them while `dlq.enabled` is false.
 pub const SIZE_CAP_LABEL: &str = "dfe_size_cap";
+
+/// Label of the remap that turns a record over the ceiling into a DLQ entry.
+pub const SIZE_CAP_DLQ_LABEL: &str = "dfe_size_cap_dlq";
+
+/// Label of the Kafka sink that writes those entries to `sink.dlq_topic`.
+pub const DLQ_SINK_LABEL: &str = "dfe_dlq_sink";
+
+/// The size cap route's output for a record that fits.
+const WITHIN_CAP_OUTPUT: &str = "within_cap";
+
+/// Vector's output of a `route` for the events no route matched.
+const UNMATCHED_OUTPUT: &str = "_unmatched";
+
+/// `service` in a dead-letter entry, as scalo's DLQ names its producer.
+const DLQ_SERVICE: &str = env!("CARGO_PKG_NAME");
+
+/// The common-header fields scalo's DLQ copies from the original event beside
+/// its payload.
+const DLQ_HEADER_FIELDS: [&str; 4] = ["_org_id", "_source", "_timestamp_received", "_tags"];
+
+/// Bytes kept back from a dead letter's Kafka ceiling for its envelope, the
+/// key and the record framing.
+const DLQ_ENVELOPE_BYTES: u64 = 8192;
+
+/// Events the dead letter sink's memory buffer holds before it blocks.
+const DLQ_BUFFER_EVENTS: u64 = 500;
 
 /// Vector's `type` for a Kafka source or sink.
 pub const KAFKA_COMPONENT_TYPE: &str = "kafka";
@@ -221,18 +249,22 @@ fn section(name: &str, label: &str, component: Mapping) -> Mapping {
 ///
 /// On the bus that is a Kafka producer with production-tuned librdkafka
 /// options, Vector-level batching, buffer config and acknowledgements, behind
-/// a filter that holds back records over the producer's size ceiling. On
-/// direct it is Vector's own `vector` sink, dialling the supervisor's bridge,
-/// which pushes the records on to `sink.endpoint`.
+/// a size cap. A record over the producer's ceiling goes through a remap into
+/// a DLQ entry and a second Kafka sink on `sink.dlq_topic`, or is dropped while
+/// `dlq.enabled` is false. On direct it is Vector's own `vector` sink,
+/// dialling the supervisor's bridge, which pushes the records on to
+/// `sink.endpoint`.
 ///
 /// `acknowledged` is `source.acknowledgements.enabled`: the sink's end-to-end
-/// acknowledgement is what lets the source hold its own.
+/// acknowledgement is what lets the source hold its own. `dlq` is the app's
+/// `dlq` block, whose `enabled` and `max_payload_bytes` the size cap reads.
 #[must_use]
 pub fn generate_sink_yaml(
     sink: &SinkConfig,
     bridge: &BridgeConfig,
     inputs: &[String],
     acknowledged: bool,
+    dlq: &DlqConfig,
 ) -> Value {
     if sink.transport.is_direct() {
         return wrap(
@@ -242,16 +274,42 @@ pub fn generate_sink_yaml(
         );
     }
 
-    let mut root = section(
-        "sinks",
-        SINK_LABEL,
-        kafka_sink_component(sink, &[SIZE_CAP_LABEL.to_string()], acknowledged),
+    let dead_lettering = dlq.enabled;
+    let within_cap = if dead_lettering {
+        format!("{SIZE_CAP_LABEL}.{WITHIN_CAP_OUTPUT}")
+    } else {
+        SIZE_CAP_LABEL.to_string()
+    };
+
+    let mut sinks = Mapping::new();
+    sinks.insert(
+        key(SINK_LABEL),
+        Value::Object(kafka_sink_component(sink, &[within_cap], acknowledged)),
     );
-    root.extend(section(
-        "transforms",
-        SIZE_CAP_LABEL,
-        size_cap_component(sink, inputs),
-    ));
+    let mut transforms = Mapping::new();
+    if dead_lettering {
+        transforms.insert(
+            key(SIZE_CAP_LABEL),
+            Value::Object(size_cap_route_component(sink, inputs)),
+        );
+        transforms.insert(
+            key(SIZE_CAP_DLQ_LABEL),
+            Value::Object(dead_letter_remap_component(sink, dlq)),
+        );
+        sinks.insert(
+            key(DLQ_SINK_LABEL),
+            Value::Object(dead_letter_sink_component(sink, acknowledged)),
+        );
+    } else {
+        transforms.insert(
+            key(SIZE_CAP_LABEL),
+            Value::Object(size_cap_filter_component(sink, inputs)),
+        );
+    }
+
+    let mut root = Mapping::new();
+    root.insert(key("sinks"), Value::Object(sinks));
+    root.insert(key("transforms"), Value::Object(transforms));
     Value::Object(root)
 }
 
@@ -276,23 +334,155 @@ fn pipeline_message_max_bytes() -> u64 {
     u64::from(MESSAGE_MAX_BYTES.unsigned_abs())
 }
 
-/// The filter in front of the Kafka sink that drops a record over
-/// [`max_record_bytes`], counted in `component_discarded_events_total`.
-///
-/// Measures the record as the sink's codec encodes it: the JSON of the whole
-/// event, or the `message` field for `raw_bytes`.
-fn size_cap_component(sink: &SinkConfig, inputs: &[String]) -> Mapping {
-    let encoded = match sink.encoding.as_str() {
+/// The VRL expression for a record as the sink's codec encodes it: the JSON of
+/// the whole event, or the `message` field for `raw_bytes`.
+fn encoded_record(sink: &SinkConfig) -> &'static str {
+    match sink.encoding.as_str() {
         "raw_bytes" => r#"string(.message) ?? """#,
         _ => "encode_json(.)",
-    };
-    let condition = format!("length({encoded}) <= {}", max_record_bytes(sink));
+    }
+}
 
+/// The VRL condition that holds for a record within [`max_record_bytes`].
+fn within_cap_condition(sink: &SinkConfig) -> String {
+    format!(
+        "length({}) <= {}",
+        encoded_record(sink),
+        max_record_bytes(sink)
+    )
+}
+
+/// The route in front of the Kafka sink. A record over [`max_record_bytes`]
+/// leaves on `_unmatched`, which [`dead_letter_remap_component`] reads.
+fn size_cap_route_component(sink: &SinkConfig, inputs: &[String]) -> Mapping {
+    let mut routes = Mapping::new();
+    routes.insert(key(WITHIN_CAP_OUTPUT), val(&within_cap_condition(sink)));
+
+    let mut component = Mapping::new();
+    component.insert(key("type"), val("route"));
+    component.insert(key("inputs"), input_list(inputs));
+    component.insert(key("route"), Value::Object(routes));
+    component
+}
+
+/// The filter in front of the Kafka sink while `dlq.enabled` is false: it drops
+/// a record over [`max_record_bytes`], counted in
+/// `component_discarded_events_total`.
+fn size_cap_filter_component(sink: &SinkConfig, inputs: &[String]) -> Mapping {
     let mut component = Mapping::new();
     component.insert(key("type"), val("filter"));
     component.insert(key("inputs"), input_list(inputs));
-    component.insert(key("condition"), val(&condition));
+    component.insert(key("condition"), val(&within_cap_condition(sink)));
     component
+}
+
+/// The most bytes of a dead letter's payload and copied header: `dlq`'s
+/// `max_payload_bytes`, held to what the sink's Kafka ceiling takes once the
+/// payload is base64.
+#[must_use]
+pub fn dead_letter_payload_cap(sink: &SinkConfig, dlq: &DlqConfig) -> u64 {
+    let configured = dlq
+        .max_payload_bytes
+        .map_or(DEFAULT_MAX_PAYLOAD_BYTES as u64, |n| n as u64);
+    let kafka_fit = max_record_bytes(sink).saturating_sub(DLQ_ENVELOPE_BYTES) / 2;
+    configured.min(kafka_fit)
+}
+
+/// A VRL string literal for `text`.
+fn vrl_string(text: &str) -> String {
+    let mut literal = String::with_capacity(text.len() + 2);
+    literal.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => literal.push_str("\\\\"),
+            '"' => literal.push_str("\\\""),
+            '\n' => literal.push_str("\\n"),
+            '\r' => literal.push_str("\\r"),
+            '\t' => literal.push_str("\\t"),
+            other => literal.push(other),
+        }
+    }
+    literal.push('"');
+    literal
+}
+
+/// The VRL that builds a scalo DLQ entry from a record over the ceiling.
+///
+/// The entry is `truncated`: the record's first bytes in `_raw` as base64, its
+/// length in `original_bytes`, and the header fields scalo copies beside it. A
+/// header value that does not fit in the cap with the others is left out and
+/// named in `header_dropped`.
+fn dead_letter_source(sink: &SinkConfig, dlq: &DlqConfig) -> String {
+    let cap = dead_letter_payload_cap(sink, dlq);
+    let mut program = format!(
+        "body = {}\noriginal = length(body)\nheader = {{}}\nheader_bytes = 0\nheader_dropped = []\n",
+        encoded_record(sink),
+    );
+    for field in DLQ_HEADER_FIELDS {
+        program.push_str(&format!(
+            "if !is_null(.{field}) {{\n  size = length(encode_json(.{field}))\n  \
+             if header_bytes + size <= {cap} {{\n    header.{field} = .{field}\n    \
+             header_bytes = header_bytes + size\n  }} else {{\n    \
+             header_dropped = push(header_dropped, \"{field}\")\n  }}\n}}\n"
+        ));
+    }
+    program.push_str(&format!(
+        "head = slice!(body, 0, {cap} - header_bytes)\n\
+         . = header\n\
+         .timestamp = to_unix_timestamp(now(), unit: \"milliseconds\")\n\
+         .service = {service}\n\
+         .reason = \"record of \" + to_string(original) + \" bytes is over the sink's {ceiling}-byte ceiling\"\n\
+         .attempts = 0\n\
+         .truncated = true\n\
+         .original_bytes = original\n\
+         .destination = {destination}\n\
+         ._raw = encode_base64(head)\n\
+         ._raw_encoding = \"base64\"\n\
+         if length(header_dropped) > 0 {{\n  .header_dropped = header_dropped\n}}\n",
+        service = vrl_string(DLQ_SERVICE),
+        ceiling = max_record_bytes(sink),
+        destination = vrl_string(&sink.topic),
+    ));
+    program
+}
+
+/// The remap that turns what the size cap route left unmatched into a dead
+/// letter entry.
+fn dead_letter_remap_component(sink: &SinkConfig, dlq: &DlqConfig) -> Mapping {
+    let mut component = Mapping::new();
+    component.insert(key("type"), val("remap"));
+    component.insert(
+        key("inputs"),
+        input_list(&[format!("{SIZE_CAP_LABEL}.{UNMATCHED_OUTPUT}")]),
+    );
+    component.insert(key("source"), val(&dead_letter_source(sink, dlq)));
+    component
+}
+
+/// The Kafka sink for dead letter entries.
+///
+/// It takes the main sink's brokers, credentials, compression and librdkafka
+/// options, and writes `sink.dlq_topic` as JSON with no partition key, as
+/// scalo's DLQ does. Its buffer holds in memory and blocks when full: an entry
+/// the broker cannot take yet back-pressures the source rather than drops.
+fn dead_letter_sink_component(sink: &SinkConfig, acknowledged: bool) -> Mapping {
+    let dead_letters = SinkConfig {
+        topic: sink.dlq_topic.clone(),
+        key_field: String::new(),
+        encoding: "json".to_string(),
+        buffer: BufferConfig {
+            buffer_type: "memory".to_string(),
+            max_events: Some(DLQ_BUFFER_EVENTS),
+            max_size: None,
+            when_full: "block".to_string(),
+        },
+        ..sink.clone()
+    };
+    kafka_sink_component(
+        &dead_letters,
+        &[SIZE_CAP_DLQ_LABEL.to_string()],
+        acknowledged,
+    )
 }
 
 /// The `vector` sink that hands the transformed records back to the supervisor.
@@ -1010,6 +1200,7 @@ mod tests {
                 &BridgeConfig::default(),
                 &["src".into()],
                 true,
+                &scalo::dlq::DlqConfig::default(),
             ))
             .unwrap();
 
@@ -1048,6 +1239,7 @@ mod tests {
             &BridgeConfig::default(),
             &["src".into()],
             true,
+            &scalo::dlq::DlqConfig::default(),
         ))
         .unwrap();
         assert!(
@@ -1066,6 +1258,7 @@ mod tests {
             &BridgeConfig::default(),
             &["src".into()],
             true,
+            &scalo::dlq::DlqConfig::default(),
         ))
         .unwrap();
         assert!(text.contains("enable.idempotence: \"false\""));
@@ -1086,41 +1279,186 @@ mod tests {
             .and_then(Value::as_str)
     }
 
-    /// The size cap's filter condition.
+    /// The size cap's condition, on its route or its filter.
     fn size_cap_condition(yaml: &Value) -> Option<&str> {
-        yaml.get("transforms")
-            .and_then(|t| t.get(SIZE_CAP_LABEL))
-            .and_then(|c| c.get("condition"))
+        let cap = yaml.get("transforms").and_then(|t| t.get(SIZE_CAP_LABEL))?;
+        cap.get("route")
+            .and_then(|r| r.get(WITHIN_CAP_OUTPUT))
+            .or_else(|| cap.get("condition"))
             .and_then(Value::as_str)
     }
 
-    /// The Kafka sink reads from the size cap, and the cap from the wired
-    /// inputs.
+    /// A generated sink's `inputs`, as the labels they name.
+    fn inputs_of<'a>(yaml: &'a Value, section: &str, label: &str) -> Vec<&'a str> {
+        yaml.get(section)
+            .and_then(|s| s.get(label))
+            .and_then(|c| c.get("inputs"))
+            .and_then(Value::as_array)
+            .map(|inputs| inputs.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    fn bus_yaml(sink: &SinkConfig, dlq: &DlqConfig) -> Value {
+        generate_sink_yaml(sink, &BridgeConfig::default(), &["last".into()], true, dlq)
+    }
+
+    /// The Kafka sink reads the size cap's `within_cap` output, and the cap
+    /// reads the wired inputs.
     #[test]
     fn the_kafka_sink_sits_behind_the_size_cap() {
-        let yaml = generate_sink_yaml(
-            &SinkConfig::default(),
-            &BridgeConfig::default(),
-            &["last".into()],
-            true,
+        let yaml = bus_yaml(&SinkConfig::default(), &DlqConfig::default());
+        assert_eq!(
+            inputs_of(&yaml, "sinks", SINK_LABEL),
+            vec!["dfe_size_cap.within_cap"]
         );
-        let sink_inputs = yaml
-            .get("sinks")
-            .and_then(|s| s.get(SINK_LABEL))
-            .and_then(|s| s.get("inputs"))
-            .and_then(Value::as_array)
-            .expect("sink inputs");
-        assert_eq!(sink_inputs, &vec![val(SIZE_CAP_LABEL)]);
-
+        assert_eq!(inputs_of(&yaml, "transforms", SIZE_CAP_LABEL), vec!["last"]);
         let cap = yaml
             .get("transforms")
             .and_then(|t| t.get(SIZE_CAP_LABEL))
             .expect("the size cap transform");
-        assert_eq!(cap.get("type").and_then(Value::as_str), Some("filter"));
+        assert_eq!(cap.get("type").and_then(Value::as_str), Some("route"));
+    }
+
+    /// A record over the ceiling leaves the route on `_unmatched`, becomes an
+    /// entry in the remap and is written to `sink.dlq_topic` as JSON with no
+    /// key, whichever encoding the main sink uses.
+    #[test]
+    fn an_oversize_record_is_dead_lettered_whatever_the_encoding() {
+        for (encoding, encoded) in [
+            ("json", "body = encode_json(.)"),
+            ("raw_bytes", r#"body = string(.message) ?? """#),
+        ] {
+            let sink = SinkConfig {
+                encoding: encoding.into(),
+                key_field: ".org_id".into(),
+                topic: "syslog_load".into(),
+                ..Default::default()
+            };
+            let yaml = bus_yaml(&sink, &DlqConfig::default());
+
+            assert_eq!(
+                inputs_of(&yaml, "transforms", SIZE_CAP_DLQ_LABEL),
+                vec!["dfe_size_cap._unmatched"],
+                "{encoding}"
+            );
+            let source = yaml["transforms"][SIZE_CAP_DLQ_LABEL]["source"]
+                .as_str()
+                .expect("the remap source");
+            assert!(source.starts_with(encoded), "{encoding}: {source}");
+            assert!(
+                source.contains(r#"._raw_encoding = "base64""#),
+                "{encoding}: {source}"
+            );
+            assert!(
+                source.contains(r#".destination = "syslog_load""#),
+                "{encoding}: {source}"
+            );
+
+            let dlq = &yaml["sinks"][DLQ_SINK_LABEL];
+            assert_eq!(
+                inputs_of(&yaml, "sinks", DLQ_SINK_LABEL),
+                vec![SIZE_CAP_DLQ_LABEL]
+            );
+            assert_eq!(dlq["type"], "kafka", "{encoding}");
+            assert_eq!(dlq["topic"], "dfe_transform_dlq", "{encoding}");
+            assert_eq!(dlq["encoding"]["codec"], "json", "{encoding}");
+            assert!(dlq.get("key_field").is_none(), "{encoding}: {dlq:?}");
+            assert_eq!(dlq["buffer"]["type"], "memory", "{encoding}");
+            assert_eq!(dlq["buffer"]["when_full"], "block", "{encoding}");
+            assert_eq!(
+                yaml["sinks"][SINK_LABEL]["key_field"], ".org_id",
+                "the main sink keeps its key"
+            );
+        }
+    }
+
+    /// The dead letter sink reaches the broker as the main sink does: the same
+    /// credentials by reference, TLS, and `message.max.bytes`.
+    #[test]
+    fn the_dead_letter_sink_shares_the_main_sinks_broker_settings() {
+        let mut sink = SinkConfig {
+            sasl: SaslConfig {
+                enabled: true,
+                username: "kafka-user".into(),
+                password: "kafka-pass".into(),
+                ..SaslConfig::default()
+            },
+            tls: TlsConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            brokers: vec!["kafka-1:9093".into()],
+            ..Default::default()
+        };
+        sink.librdkafka_options
+            .insert("message.max.bytes".into(), "2000000".into());
+        let yaml = bus_yaml(&sink, &DlqConfig::default());
+        let (main, dead) = (&yaml["sinks"][SINK_LABEL], &yaml["sinks"][DLQ_SINK_LABEL]);
+        for field in [
+            "bootstrap_servers",
+            "sasl",
+            "tls",
+            "compression",
+            "librdkafka_options",
+        ] {
+            assert_eq!(main[field], dead[field], "{field}");
+        }
         assert_eq!(
-            cap.get("inputs").and_then(Value::as_array),
-            Some(&vec![val("last")])
+            dead["sasl"]["username"],
+            "SECRET[dfe_credentials.sink_sasl_username]"
         );
+        assert!(!yaml.to_string().contains("kafka-pass"));
+    }
+
+    /// With `dlq.enabled` false the cap is the filter that drops, and no remap
+    /// or second sink is written.
+    #[test]
+    fn a_disabled_dlq_leaves_the_size_cap_dropping() {
+        let dlq = DlqConfig {
+            enabled: false,
+            ..DlqConfig::default()
+        };
+        let yaml = bus_yaml(&SinkConfig::default(), &dlq);
+        assert_eq!(inputs_of(&yaml, "sinks", SINK_LABEL), vec![SIZE_CAP_LABEL]);
+        assert_eq!(yaml["transforms"][SIZE_CAP_LABEL]["type"], "filter");
+        assert!(yaml["transforms"].get(SIZE_CAP_DLQ_LABEL).is_none());
+        assert!(yaml["sinks"].get(DLQ_SINK_LABEL).is_none());
+    }
+
+    /// The dead letter keeps `dlq.max_payload_bytes`, held to what the sink's
+    /// Kafka ceiling takes once the payload is base64.
+    #[test]
+    fn the_dead_letter_payload_cap_follows_the_dlq_and_the_ceiling() {
+        // (message.max.bytes, dlq.max_payload_bytes, cap)
+        for (ceiling, configured, cap) in [
+            (None, Some(DEFAULT_MAX_PAYLOAD_BYTES), 524_288_u64),
+            (None, Some(1024), 1024),
+            (None, None, 524_288),
+            (Some("200000"), Some(DEFAULT_MAX_PAYLOAD_BYTES), 95_840),
+            (Some("8192"), Some(DEFAULT_MAX_PAYLOAD_BYTES), 0),
+        ] {
+            let mut sink = SinkConfig::default();
+            if let Some(ceiling) = ceiling {
+                sink.librdkafka_options
+                    .insert("message.max.bytes".into(), ceiling.into());
+            }
+            let dlq = DlqConfig {
+                max_payload_bytes: configured,
+                ..DlqConfig::default()
+            };
+            assert_eq!(
+                dead_letter_payload_cap(&sink, &dlq),
+                cap,
+                "{ceiling:?} {configured:?}"
+            );
+        }
+    }
+
+    /// A topic name is written as a VRL string, so a quote or backslash in it
+    /// cannot end the literal.
+    #[test]
+    fn vrl_strings_escape_quotes_and_backslashes() {
+        assert_eq!(vrl_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
     }
 
     /// A sink no deployment has tuned carries a 2 MiB record. librdkafka's own
@@ -1130,7 +1468,13 @@ mod tests {
     fn a_default_sink_carries_a_2_mib_record() {
         const TWO_MIB: u64 = 2 * 1024 * 1024;
         let sink = SinkConfig::default();
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
 
         assert_eq!(
             written_message_max_bytes(&yaml),
@@ -1161,7 +1505,13 @@ mod tests {
             sink.librdkafka_options
                 .insert("message.max.bytes".into(), configured.into());
             assert_eq!(max_record_bytes(&sink), cap, "{configured}");
-            let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+            let yaml = generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+                &scalo::dlq::DlqConfig::default(),
+            );
             assert_eq!(
                 written_message_max_bytes(&yaml),
                 Some(configured),
@@ -1180,7 +1530,13 @@ mod tests {
             transport: crate::config::Transport::Direct,
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         assert!(yaml.get("transforms").is_none());
     }
 
@@ -1195,11 +1551,17 @@ mod tests {
                 batch,
                 ..Default::default()
             };
-            generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true)
-                .get("sinks")
-                .and_then(|s| s.get(SINK_LABEL))
-                .and_then(|s| s.get("batch"))
-                .cloned()
+            generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+                &scalo::dlq::DlqConfig::default(),
+            )
+            .get("sinks")
+            .and_then(|s| s.get(SINK_LABEL))
+            .and_then(|s| s.get("batch"))
+            .cloned()
         };
         assert_eq!(
             batch_of(BatchConfig {
@@ -1229,12 +1591,18 @@ mod tests {
                 transport,
                 ..Default::default()
             };
-            generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true)
-                .get("sinks")
-                .and_then(|s| s.get(SINK_LABEL))
-                .and_then(|s| s.get("healthcheck"))
-                .and_then(|h| h.get("enabled"))
-                .and_then(Value::as_bool)
+            generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+                &scalo::dlq::DlqConfig::default(),
+            )
+            .get("sinks")
+            .and_then(|s| s.get(SINK_LABEL))
+            .and_then(|s| s.get("healthcheck"))
+            .and_then(|h| h.get("enabled"))
+            .and_then(Value::as_bool)
         };
         assert_eq!(healthcheck(crate::config::Transport::Direct), Some(false));
         assert_eq!(healthcheck(crate::config::Transport::Bus), Some(true));
@@ -1263,6 +1631,7 @@ mod tests {
             &BridgeConfig::default(),
             &["src".into()],
             false,
+            &scalo::dlq::DlqConfig::default(),
         );
         assert_eq!(
             yaml.get("sinks")
@@ -1349,7 +1718,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
         // Vector TLS block
@@ -1374,6 +1749,7 @@ mod tests {
             &BridgeConfig::default(),
             &["last_transform".into()],
             true,
+            &scalo::dlq::DlqConfig::default(),
         );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
@@ -1423,7 +1799,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: memory"));
@@ -1442,7 +1824,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("type: disk"));
@@ -1460,7 +1848,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("max_events: 5000"));
@@ -1536,6 +1930,7 @@ mod tests {
             &BridgeConfig::default(),
             &["src".into()],
             true,
+            &scalo::dlq::DlqConfig::default(),
         );
         let sink = yaml
             .get("sinks")
@@ -1559,7 +1954,13 @@ mod tests {
             compression: "none".into(),
             ..Default::default()
         };
-        let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+        let yaml = generate_sink_yaml(
+            &sink,
+            &BridgeConfig::default(),
+            &["src".into()],
+            true,
+            &scalo::dlq::DlqConfig::default(),
+        );
         let text = scalo::yaml::to_string(&yaml).unwrap();
 
         assert!(text.contains("\n    compression: none"));
@@ -1674,7 +2075,13 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+            let yaml = generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+                &scalo::dlq::DlqConfig::default(),
+            );
             let written = yaml
                 .get("sinks")
                 .and_then(|s| s.get(SINK_LABEL))
@@ -1826,7 +2233,13 @@ librdkafka_options:
                 },
                 ..Default::default()
             };
-            let yaml = generate_sink_yaml(&sink, &BridgeConfig::default(), &["src".into()], true);
+            let yaml = generate_sink_yaml(
+                &sink,
+                &BridgeConfig::default(),
+                &["src".into()],
+                true,
+                &scalo::dlq::DlqConfig::default(),
+            );
             let component = yaml
                 .get("sinks")
                 .and_then(|s| s.get(SINK_LABEL))

@@ -148,8 +148,8 @@ fn end_to_end_assembly_with_transforms() {
     assert!(source.contains("SECRET[dfe_credentials.source_sasl_username]"));
     assert!(source.contains("cooperative-sticky"));
 
-    // Verify sink YAML content — the size cap reads the last transform, and
-    // the sink reads the size cap
+    // Verify sink YAML content — the size cap reads the last transform, the
+    // sink reads what fits, and the dead letter sink reads what does not
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
     let sink_yaml: serde_json::Value =
         scalo::yaml::from_str(&sink, "config.yaml", scalo::yaml::Profile::Config).unwrap();
@@ -160,7 +160,15 @@ fn end_to_end_assembly_with_transforms() {
     );
     assert_eq!(
         sink_yaml["sinks"]["dfe_sink"]["inputs"][0].as_str(),
-        Some("dfe_size_cap")
+        Some("dfe_size_cap.within_cap")
+    );
+    assert_eq!(
+        sink_yaml["transforms"]["dfe_size_cap_dlq"]["inputs"][0].as_str(),
+        Some("dfe_size_cap._unmatched")
+    );
+    assert_eq!(
+        sink_yaml["sinks"]["dfe_dlq_sink"]["topic"].as_str(),
+        Some("dfe_transform_dlq")
     );
     assert!(sink.contains("enriched_syslog_land"));
 
@@ -315,6 +323,33 @@ fn config_validation_catches_missing_sink_topic() {
     let config = Config::default();
     let err = config.validate().unwrap_err();
     assert!(err.to_string().contains("sink.topic"));
+}
+
+/// A record over the ceiling needs a topic to go to while the DLQ is on, and
+/// needs none once it is off or the sink is direct.
+#[test]
+fn config_validation_needs_a_dlq_topic_only_where_one_is_written() {
+    for (dlq_enabled, direct, empty_topic_refused) in [
+        (true, false, true),
+        (false, false, false),
+        (true, true, false),
+    ] {
+        let mut config = full_config(None);
+        config.sink.dlq_topic = String::new();
+        config.dlq.0.enabled = dlq_enabled;
+        if direct {
+            config.sink.transport = Transport::Direct;
+        }
+        let verdict = config.validate();
+        assert_eq!(
+            verdict.is_err(),
+            empty_topic_refused,
+            "dlq.enabled {dlq_enabled}, direct {direct}: {verdict:?}"
+        );
+        if let Err(e) = verdict {
+            assert!(e.to_string().contains("sink.dlq_topic"), "{e}");
+        }
+    }
 }
 
 /// With the commit timer armed, handing offset-storing back to librdkafka
@@ -692,7 +727,13 @@ fn written_kafka_components(config: &Config) -> (String, String) {
     use dfe_transform_vector::config::generate;
 
     let source = generate::generate_source_yaml(&config.source, &config.bridge);
-    let sink = generate::generate_sink_yaml(&config.sink, &config.bridge, &["t".into()], true);
+    let sink = generate::generate_sink_yaml(
+        &config.sink,
+        &config.bridge,
+        &["t".into()],
+        true,
+        &scalo::dlq::DlqConfig::default(),
+    );
     (
         scalo::yaml::to_string(&source).unwrap(),
         scalo::yaml::to_string(&sink).unwrap(),
@@ -1388,6 +1429,7 @@ fn config_with_all_fields_populated_validates() {
             endpoint: "http://dfe-loader:6000".into(),
             brokers: vec!["kafka-1:9092".into()],
             topic: "enriched_load".into(),
+            dlq_topic: "enriched_dlq".into(),
             key_field: ".org_id".into(),
             encoding: "raw_bytes".into(),
             compression: "lz4".into(),

@@ -34,6 +34,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use dfe_transform_vector::config::assembler;
+use dfe_transform_vector::config::generate::dead_letter_payload_cap;
 use dfe_transform_vector::config::loader::{
     Config, DecodingConfig, MetricsConfig, PipelineConfig, SaslConfig, SinkConfig, SourceConfig,
     TlsConfig, TransformConfig, VectorConfig,
@@ -368,6 +369,115 @@ async fn e2e_a_scram_broker_passes_startup_validation_and_delivers() {
 /// `message.max.bytes` default of 1,000,000 bytes.
 const TWO_MIB: usize = 2 * 1024 * 1024;
 
+/// The dead letter on `dlq_topic` whose copied `_org_id` is `org`, waiting up to
+/// `wait` for it, and every entry's `_org_id` read on the way.
+async fn dead_letter_for(
+    kf_base: &KafkaConfig,
+    dlq_topic: &str,
+    group_id: &str,
+    org: &str,
+    wait: Duration,
+) -> Result<serde_json::Value, String> {
+    let mut consumer_cfg = kf_base.clone();
+    consumer_cfg.group = format!("{group_id}-dlq-consumer");
+    consumer_cfg.topics = vec![dlq_topic.to_string()];
+    consumer_cfg.auto_offset_reset = "earliest".into();
+    let consumer = KafkaTransport::new(&consumer_cfg)
+        .await
+        .map_err(|e| format!("dlq consumer transport: {e}"))?;
+    let deadline = Instant::now() + wait;
+    let mut seen: Vec<String> = Vec::new();
+    while Instant::now() < deadline {
+        match consumer.recv(10).await {
+            Ok(batch) => {
+                for record in &batch.records {
+                    let Ok(entry) = serde_json::from_slice::<serde_json::Value>(&record.payload)
+                    else {
+                        return Err(format!(
+                            "a dead letter that is not JSON: {} bytes",
+                            record.payload.len()
+                        ));
+                    };
+                    let found = entry["_org_id"].as_str().unwrap_or_default().to_string();
+                    if found == org {
+                        let _ = consumer.close().await;
+                        return Ok(entry);
+                    }
+                    seen.push(found);
+                }
+            }
+            Err(_) => sleep(Duration::from_millis(500)).await,
+        }
+    }
+    let _ = consumer.close().await;
+    Err(format!(
+        "no dead letter for {org} on {dlq_topic} within {wait:?}; saw {seen:?}"
+    ))
+}
+
+/// What a dead letter for a record whose size is in `original` must carry:
+/// scalo's DLQ envelope, truncated to `cap` bytes of payload and copied header.
+fn check_dead_letter(
+    entry: &serde_json::Value,
+    original: std::ops::RangeInclusive<usize>,
+    org: &str,
+    destination: &str,
+    cap: u64,
+) -> Result<(), String> {
+    let original = entry["original_bytes"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| original.contains(n))
+        .ok_or_else(|| {
+            format!(
+                "original_bytes should be in {original:?}, got {}",
+                entry["original_bytes"]
+            )
+        })?;
+    let expect = |field: &str, want: serde_json::Value| {
+        if entry[field] == want {
+            Ok(())
+        } else {
+            Err(format!("{field}: wanted {want}, got {}", entry[field]))
+        }
+    };
+    expect("service", "dfe-transform-vector".into())?;
+    expect("attempts", 0.into())?;
+    expect("truncated", true.into())?;
+    expect("original_bytes", original.into())?;
+    expect("destination", destination.into())?;
+    expect("_raw_encoding", "base64".into())?;
+    let reason = entry["reason"].as_str().unwrap_or_default();
+    if !reason.starts_with(&format!("record of {original} bytes is over the sink's ")) {
+        return Err(format!("reason does not name the record's size: {reason}"));
+    }
+    if entry["timestamp"].as_i64().unwrap_or_default() <= 0 {
+        return Err(format!(
+            "timestamp is not epoch milliseconds: {}",
+            entry["timestamp"]
+        ));
+    }
+    // The copied header takes its bytes from the cap, then the payload's head
+    // takes the rest, base64 encoded.
+    let header_bytes = serde_json::to_string(org).map(|t| t.len()).unwrap_or(0) as u64;
+    let head_bytes = cap - header_bytes;
+    let raw = entry["_raw"].as_str().unwrap_or_default();
+    if raw.len() as u64 != head_bytes.div_ceil(3) * 4 {
+        return Err(format!(
+            "_raw holds {} base64 characters, a {head_bytes}-byte head is {}",
+            raw.len(),
+            head_bytes.div_ceil(3) * 4
+        ));
+    }
+    if !raw.starts_with("eyJ") {
+        return Err(format!(
+            "_raw does not start with a JSON object: {}",
+            &raw[..8.min(raw.len())]
+        ));
+    }
+    Ok(())
+}
+
 /// The record the transform triples past the pipeline's 16 MiB ceiling. Under
 /// that ceiling itself, so the topic and the test producer both take it.
 const SIX_MIB: usize = 6 * 1024 * 1024;
@@ -396,7 +506,7 @@ fn write_growth_transform(dir: &std::path::Path) {
 
 /// A sink no deployment has tuned carries a 2 MiB record to the next topic,
 /// and a record the transform grows past the pipeline's ceiling is held back
-/// and counted once as too large.
+/// from it and dead-lettered once, to the DLQ topic, as scalo's envelope.
 ///
 /// Owns its broker, so it runs by default rather than opt-in.
 #[tokio::test]
@@ -419,6 +529,7 @@ async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_cei
     let suffix = unique_suffix();
     let source_topic = format!("dfe_e2e_ceiling_src_{suffix}");
     let sink_topic = format!("dfe_e2e_ceiling_sink_{suffix}");
+    let dlq_topic = format!("dfe_e2e_ceiling_dlq_{suffix}");
     let group_id = format!("dfe-e2e-ceiling-{suffix}");
 
     // scalo creates each topic with the pipeline's record ceiling, as a DFE
@@ -427,7 +538,11 @@ async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_cei
     admin_cfg.group = group_id.clone();
     let admin = KafkaAdmin::new(&admin_cfg).expect("admin");
     admin
-        .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+        .create_topics(&[
+            (&source_topic, 1, 1),
+            (&sink_topic, 1, 1),
+            (&dlq_topic, 1, 1),
+        ])
         .await
         .expect("create topics");
 
@@ -448,10 +563,12 @@ async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_cei
         &exporter_addr,
     );
     dfe_config.vector.binary = vector_bin.to_string_lossy().into_owned();
+    dfe_config.sink.dlq_topic = dlq_topic.clone();
     assert!(
         dfe_config.sink.librdkafka_options.is_empty(),
         "the case is a sink no deployment has tuned"
     );
+    let cap = dead_letter_payload_cap(&dfe_config.sink, &dfe_config.dlq.0);
     dfe_config.validate().expect("config validates");
     assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
 
@@ -468,18 +585,26 @@ async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_cei
 
     let outcome = run_ceiling_assertions(
         &kf_base,
-        &source_topic,
-        &sink_topic,
+        &CeilingTopics {
+            source: &source_topic,
+            sink: &sink_topic,
+            dlq: &dlq_topic,
+        },
         &group_id,
         &suffix,
         &exporter_addr,
+        cap,
     )
     .await;
 
     let _ = vector_child.start_kill();
     let _ = tokio::time::timeout(Duration::from_secs(3), vector_child.wait()).await;
     let _ = admin
-        .delete_topics(&[source_topic.as_str(), sink_topic.as_str()])
+        .delete_topics(&[
+            source_topic.as_str(),
+            sink_topic.as_str(),
+            dlq_topic.as_str(),
+        ])
         .await;
 
     if let Err(msg) = outcome {
@@ -487,17 +612,25 @@ async fn e2e_a_default_sink_carries_2_mib_and_counts_a_record_grown_past_the_cei
     }
 }
 
+/// The topics the record ceiling test reads and writes.
+struct CeilingTopics<'a> {
+    source: &'a str,
+    sink: &'a str,
+    dlq: &'a str,
+}
+
 /// Send a record the transform grows past the ceiling, then a 2 MiB one; wait
-/// for the 2 MiB record downstream, then check the grown one was held back and
-/// reached scalo's too-large count exactly once.
+/// for the 2 MiB record downstream, then check the grown one was kept off the
+/// sink topic and written once to the DLQ topic as scalo's envelope.
 async fn run_ceiling_assertions(
     kf_base: &KafkaConfig,
-    source_topic: &str,
-    sink_topic: &str,
+    topics: &CeilingTopics<'_>,
     group_id: &str,
     suffix: &str,
     exporter_addr: &str,
+    cap: u64,
 ) -> Result<(), String> {
+    let (source_topic, sink_topic) = (topics.source, topics.sink);
     sleep(Duration::from_secs(3)).await;
 
     let mut producer_cfg = kf_base.clone();
@@ -506,14 +639,18 @@ async fn run_ceiling_assertions(
     let producer = KafkaTransport::new(&producer_cfg)
         .await
         .map_err(|e| format!("producer transport: {e}"))?;
+    let org = format!("{suffix}-grow");
     let grown = format!(
-        r#"{{"id":"{suffix}-grow","grow":true,"blob":"{}"}}"#,
+        r#"{{"_org_id":"{org}","id":"{suffix}-grow","grow":true,"blob":"{}"}}"#,
         "g".repeat(SIX_MIB)
     );
     let two_mib = format!(
         r#"{{"id":"{suffix}-2mib","blob":"{}"}}"#,
         "y".repeat(TWO_MIB)
     );
+    // The transform adds `enriched` and two copies of `blob`.
+    let grown_after_transform =
+        grown.len() + r#","enriched":true"#.len() + 2 * (SIX_MIB + r#","copy_a":"""#.len());
     for payload in [grown, two_mib] {
         let sent = producer
             .send(source_topic, bytes::Bytes::from(payload.into_bytes()))
@@ -571,24 +708,33 @@ async fn run_ceiling_assertions(
         return Err("the record grown past the ceiling reached the sink topic".into());
     }
 
+    let entry =
+        dead_letter_for(kf_base, topics.dlq, group_id, &org, Duration::from_secs(60)).await?;
+    check_dead_letter(
+        &entry,
+        grown_after_transform..=grown_after_transform + KAFKA_SOURCE_FIELDS_MAX,
+        &org,
+        sink_topic,
+        cap,
+    )?;
+
     // Vector publishes internal metrics on its own flush interval.
     let mut merger = dfe_transform_vector::metrics::scrape::ExpositionMerger::default();
     let mut derived = dfe_transform_vector::metrics::scrape::Derived::default();
     let deadline = Instant::now() + Duration::from_secs(20);
-    while derived.oversize < 1.0 && Instant::now() < deadline {
+    while derived.dead_lettered < 1.0 && Instant::now() < deadline {
         if let Ok(body) =
             dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await
         {
             derived = merger.merge(&body);
         }
-        if derived.oversize < 1.0 {
+        if derived.dead_lettered < 1.0 {
             sleep(Duration::from_millis(500)).await;
         }
     }
-    if derived.oversize != 1.0 || derived.sink_discarded != 0.0 {
+    if derived.dead_lettered != 1.0 || derived.rejected() != 0.0 {
         return Err(format!(
-            "the size cap should hold back exactly the grown record and the sink \
-             refuse nothing: {derived:?}"
+            "the DLQ sink should hold exactly the grown record and nothing be lost: {derived:?}"
         ));
     }
 
@@ -597,9 +743,9 @@ async fn run_ceiling_assertions(
     let mut drops = DeadLetterDrops::too_large();
     metrics::with_local_recorder(&recorder, || drops.record(&derived));
     let counted = too_large_since(&snapshotter);
-    if counted != 1 {
+    if counted != 0 {
         return Err(format!(
-            "the grown record must count once as too large, counted {counted}"
+            "a dead-lettered record is not a drop, counted {counted} as too large"
         ));
     }
     Ok(())
@@ -609,15 +755,15 @@ async fn run_ceiling_assertions(
 /// oversize record is far under the broker's and the test producer's limits.
 const SMALL_MESSAGE_MAX_BYTES: &str = "200000";
 
-/// A record on the bus over the sink's ceiling is dropped by the size cap and
-/// counts once in `pipeline_dead_letters_dropped_total{reason="too_large"}`,
-/// however many times the exporter is scraped afterwards.
+/// A record on the bus over the sink's ceiling is dead-lettered once, to the
+/// DLQ topic, with the reason and its first bytes, however many times the
+/// exporter is scraped afterwards, and counts as no drop.
 #[tokio::test]
 #[ignore] // requires Vector binary + Kafka (live or Docker)
-async fn e2e_an_oversize_record_on_the_bus_counts_one_too_large_drop() {
+async fn e2e_an_oversize_record_on_the_bus_is_dead_lettered_once() {
     crate::common::skip_if_no_vector!();
 
-    let Some(fixture) = KafkaFixture::acquire("kafka-oversize-counts-once").await else {
+    let Some(fixture) = KafkaFixture::acquire("kafka-oversize-dead-letters").await else {
         crate::common::require_service_in_ci("Kafka", "live unreachable and no Docker");
         eprintln!("Skipping: no Kafka backend available (live unreachable AND no Docker)");
         return;
@@ -628,6 +774,7 @@ async fn e2e_an_oversize_record_on_the_bus_counts_one_too_large_drop() {
     let suffix = unique_suffix();
     let source_topic = format!("dfe_e2e_big_src_{suffix}");
     let sink_topic = format!("dfe_e2e_big_sink_{suffix}");
+    let dlq_topic = format!("dfe_e2e_big_dlq_{suffix}");
     let group_id = format!("dfe-e2e-big-{suffix}");
 
     let mut admin_cfg = kf_base.clone();
@@ -635,7 +782,11 @@ async fn e2e_an_oversize_record_on_the_bus_counts_one_too_large_drop() {
     admin_cfg.topics = vec![source_topic.clone()];
     let admin = KafkaAdmin::new(&admin_cfg).expect("admin");
     admin
-        .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+        .create_topics(&[
+            (&source_topic, 1, 1),
+            (&sink_topic, 1, 1),
+            (&dlq_topic, 1, 1),
+        ])
         .await
         .expect("create topics");
 
@@ -655,10 +806,12 @@ async fn e2e_an_oversize_record_on_the_bus_counts_one_too_large_drop() {
         &data_dir.to_string_lossy(),
         &exporter_addr,
     );
+    dfe_config.sink.dlq_topic = dlq_topic.clone();
     dfe_config
         .sink
         .librdkafka_options
         .insert("message.max.bytes".into(), SMALL_MESSAGE_MAX_BYTES.into());
+    let cap = dead_letter_payload_cap(&dfe_config.sink, &dfe_config.dlq.0);
     dfe_config.validate().expect("config validates");
     assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
 
@@ -675,18 +828,26 @@ async fn e2e_an_oversize_record_on_the_bus_counts_one_too_large_drop() {
 
     let outcome = run_oversize_assertions(
         &kf_base,
-        &source_topic,
-        &sink_topic,
+        &CeilingTopics {
+            source: &source_topic,
+            sink: &sink_topic,
+            dlq: &dlq_topic,
+        },
         &group_id,
         &suffix,
         &exporter_addr,
+        cap,
     )
     .await;
 
     let _ = vector_child.start_kill();
     let _ = tokio::time::timeout(Duration::from_secs(3), vector_child.wait()).await;
     let _ = admin
-        .delete_topics(&[source_topic.as_str(), sink_topic.as_str()])
+        .delete_topics(&[
+            source_topic.as_str(),
+            sink_topic.as_str(),
+            dlq_topic.as_str(),
+        ])
         .await;
 
     if let Err(msg) = outcome {
@@ -715,16 +876,28 @@ fn too_large_since(snapshotter: &metrics_util::debugging::Snapshotter) -> u64 {
         .sum()
 }
 
+/// Bytes of the fields Vector's Kafka source adds to an event (`topic`,
+/// `partition`, `offset`, `timestamp`, `source_type`, `message_key`), which
+/// the transforms and the sink then carry, and an upper bound for the
+/// transform's own additions.
+const KAFKA_SOURCE_FIELDS_MAX: usize = 512;
+
+/// The `blob` of the record the oversize test sends, which puts it over
+/// `SMALL_MESSAGE_MAX_BYTES`.
+const OVERSIZE_BLOB_BYTES: usize = 300_000;
+
 /// Send one oversize record then one marker, wait for the marker downstream,
-/// then check the size cap's drop reaches scalo's counter exactly once.
+/// then check the oversize record is on the DLQ topic as scalo's envelope, and
+/// that the exporter counts it once as a dead letter and never as a drop.
 async fn run_oversize_assertions(
     kf_base: &KafkaConfig,
-    source_topic: &str,
-    sink_topic: &str,
+    topics: &CeilingTopics<'_>,
     group_id: &str,
     suffix: &str,
     exporter_addr: &str,
+    cap: u64,
 ) -> Result<(), String> {
+    let (source_topic, sink_topic) = (topics.source, topics.sink);
     sleep(Duration::from_secs(3)).await;
 
     let mut producer_cfg = kf_base.clone();
@@ -734,10 +907,12 @@ async fn run_oversize_assertions(
         .await
         .map_err(|e| format!("producer transport: {e}"))?;
     // One partition, so the marker reaches the size cap after the oversize one.
+    let org = format!("{suffix}-big");
     let oversize = format!(
-        r#"{{"id":"{suffix}-big","blob":"{}"}}"#,
-        "x".repeat(300_000)
+        r#"{{"_org_id":"{org}","id":"{org}","blob":"{}"}}"#,
+        "x".repeat(OVERSIZE_BLOB_BYTES)
     );
+    let sent_bytes = oversize.len();
     let marker = format!(r#"{{"id":"{suffix}-marker"}}"#);
     for payload in [oversize, marker] {
         let sent = producer
@@ -782,23 +957,35 @@ async fn run_oversize_assertions(
         return Err("the oversize record reached the sink topic past the size cap".into());
     }
 
+    let entry =
+        dead_letter_for(kf_base, topics.dlq, group_id, &org, Duration::from_secs(30)).await?;
+    // The enrich transform adds `enriched` and a timestamp, and the Kafka
+    // source its own fields.
+    check_dead_letter(
+        &entry,
+        sent_bytes + 64..=sent_bytes + KAFKA_SOURCE_FIELDS_MAX,
+        &org,
+        sink_topic,
+        cap,
+    )?;
+
     // Vector publishes internal metrics on its own flush interval.
     let mut merger = dfe_transform_vector::metrics::scrape::ExpositionMerger::default();
     let mut derived = dfe_transform_vector::metrics::scrape::Derived::default();
     let deadline = Instant::now() + Duration::from_secs(20);
-    while derived.oversize < 1.0 && Instant::now() < deadline {
+    while derived.dead_lettered < 1.0 && Instant::now() < deadline {
         if let Ok(body) =
             dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr).await
         {
             derived = merger.merge(&body);
         }
-        if derived.oversize < 1.0 {
+        if derived.dead_lettered < 1.0 {
             sleep(Duration::from_millis(500)).await;
         }
     }
-    if derived.oversize != 1.0 {
+    if derived.dead_lettered != 1.0 || derived.rejected() != 0.0 {
         return Err(format!(
-            "the size cap should have dropped exactly one record: {derived:?}"
+            "the DLQ sink should hold exactly one dead letter and nothing be lost: {derived:?}"
         ));
     }
 
@@ -806,20 +993,18 @@ async fn run_oversize_assertions(
     let snapshotter = recorder.snapshotter();
     let mut drops = DeadLetterDrops::too_large();
     metrics::with_local_recorder(&recorder, || drops.record(&derived));
-    let first = too_large_since(&snapshotter);
-
-    // A second scrape of the same total must add nothing.
+    // A second scrape of the same totals must change nothing.
     let body = dfe_transform_vector::metrics::scrape::fetch_exposition(exporter_addr)
         .await
         .map_err(|e| format!("second scrape: {e}"))?;
     let again = merger.merge(&body);
     metrics::with_local_recorder(&recorder, || drops.record(&again));
-    let second = too_large_since(&snapshotter);
-
-    if (first, second) != (1, 0) {
+    let counted = too_large_since(&snapshotter);
+    if counted != 0 || again.dead_lettered != 1.0 {
         return Err(format!(
-            "too_large must rise by exactly one and not again on a rescrape: \
-             first scrape {first}, second {second}"
+            "a dead letter is not a drop and a rescrape adds none: counted {counted} as too \
+             large, {} dead-lettered after the second scrape",
+            again.dead_lettered
         ));
     }
     Ok(())

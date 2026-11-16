@@ -227,8 +227,9 @@ pub struct Config {
 /// The default writes NDJSON files under `/var/spool/scalo/dlq`, which the
 /// deployment contract declares writable. With `enabled: false` such a record
 /// is dropped and counted on `pipeline_dead_letters_dropped_total`. Only the
-/// direct transport's bridge has one: on the bus Vector's own Kafka sink
-/// delivers.
+/// direct transport's bridge writes through it. On the bus a record over the
+/// sink's size ceiling goes to `sink.dlq_topic`, and only `enabled` and
+/// `max_payload_bytes` apply.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct DeadLetterConfig(pub scalo::dlq::DlqConfig);
@@ -435,6 +436,10 @@ impl Default for SourceConfig {
     }
 }
 
+/// The fleet's shared dead-letter topic for the transforms, which a DFE
+/// bootstrap creates and the loader loads.
+pub const DEFAULT_DLQ_TOPIC: &str = "dfe_transform_dlq";
+
 /// Sink configuration: the bus topic to produce to, or the Push listener to
 /// send the transformed records on to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -449,6 +454,10 @@ pub struct SinkConfig {
     /// Output topic name. On the direct transport it is still the routing key
     /// the downstream stage picks its table by, so a source keeps its name.
     pub topic: String,
+    /// Topic a record over the producer's size ceiling is dead-lettered to on
+    /// the bus transport, as a DLQ envelope the loader reads. Unused on direct,
+    /// where the bridge's `dlq` holds it, and while `dlq.enabled` is false.
+    pub dlq_topic: String,
     /// Event field path for Kafka partition key (e.g., ".org_id").
     pub key_field: String,
     /// Encoding codec: json, raw_bytes.
@@ -482,6 +491,7 @@ impl Default for SinkConfig {
             endpoint: "http://dfe-loader:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topic: String::new(),
+            dlq_topic: DEFAULT_DLQ_TOPIC.to_string(),
             key_field: String::new(),
             encoding: "json".to_string(),
             compression: "zstd".to_string(),
@@ -892,6 +902,9 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env::flat_env_string(prefix, "SINK_TOPIC") {
             self.sink.topic = v;
         }
+        if let Some(v) = flat_env::flat_env_string(prefix, "SINK_DLQ_TOPIC") {
+            self.sink.dlq_topic = v;
+        }
         if let Some(v) = flat_env::flat_env_string(prefix, "SINK_KEY_FIELD") {
             self.sink.key_field = v;
         }
@@ -1228,6 +1241,11 @@ impl Config {
             if self.sink.topic.is_empty() {
                 return Err(crate::Error::Validation(
                     "sink.topic must not be empty".into(),
+                ));
+            }
+            if self.dlq.0.enabled && self.sink.dlq_topic.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.dlq_topic must not be empty while dlq.enabled is true".into(),
                 ));
             }
         }

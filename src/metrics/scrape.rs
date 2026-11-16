@@ -39,7 +39,7 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use super::{TOO_LARGE, WrapperMetrics, count_dropped_dead_letters};
-use crate::config::generate::{SINK_LABEL, SIZE_CAP_LABEL, SOURCE_LABEL};
+use crate::config::generate::{DLQ_SINK_LABEL, SINK_LABEL, SIZE_CAP_LABEL, SOURCE_LABEL};
 
 /// Vector's per-component counter of events read in.
 const VECTOR_RECEIVED: &str = "vector_component_received_events_total";
@@ -115,16 +115,29 @@ pub struct Derived {
     /// `vector_component_errors_total` on the wrapper's sink.
     pub sink_errors: f64,
     /// `vector_component_discarded_events_total` on the size cap: records over
-    /// the producer's ceiling, held back from the sink.
+    /// the producer's ceiling, dropped there while `dlq.enabled` is false.
     pub oversize: f64,
+    /// `vector_component_sent_events_total` on the dead letter sink: records
+    /// over the producer's ceiling that the DLQ topic holds.
+    pub dead_lettered: f64,
+    /// `vector_component_discarded_events_total` on the dead letter sink:
+    /// dead letters the broker refused for good.
+    pub dlq_discarded: f64,
 }
 
 impl Derived {
+    /// Records over the producer's ceiling that were lost: dropped by the size
+    /// cap, or refused by the dead letter sink.
+    #[must_use]
+    pub fn too_large_lost(&self) -> f64 {
+        self.oversize + self.dlq_discarded
+    }
+
     /// Records the pipeline lost after taking them in: rejected by the sink,
-    /// or held back by the size cap.
+    /// or over the ceiling and not dead-lettered.
     #[must_use]
     pub fn rejected(&self) -> f64 {
-        self.sink_discarded + self.oversize
+        self.sink_discarded + self.too_large_lost()
     }
 
     /// Records the sink has taken on and neither delivered nor dropped.
@@ -238,6 +251,8 @@ pub struct LifetimeTotals {
     sink_discarded: Rebased,
     sink_errors: Rebased,
     oversize: Rebased,
+    dead_lettered: Rebased,
+    dlq_discarded: Rebased,
 }
 
 impl LifetimeTotals {
@@ -250,6 +265,8 @@ impl LifetimeTotals {
             &mut self.sink_discarded,
             &mut self.sink_errors,
             &mut self.oversize,
+            &mut self.dead_lettered,
+            &mut self.dlq_discarded,
         ] {
             total.restart();
         }
@@ -264,6 +281,8 @@ impl LifetimeTotals {
             sink_discarded: self.sink_discarded.lifetime(derived.sink_discarded),
             sink_errors: self.sink_errors.lifetime(derived.sink_errors),
             oversize: self.oversize.lifetime(derived.oversize),
+            dead_lettered: self.dead_lettered.lifetime(derived.dead_lettered),
+            dlq_discarded: self.dlq_discarded.lifetime(derived.dlq_discarded),
         }
     }
 }
@@ -367,6 +386,8 @@ impl ExpositionMerger {
                     (VECTOR_DISCARDED, Some(SINK_LABEL)) => derived.sink_discarded += v,
                     (VECTOR_ERRORS, Some(SINK_LABEL)) => derived.sink_errors += v,
                     (VECTOR_DISCARDED, Some(SIZE_CAP_LABEL)) => derived.oversize += v,
+                    (VECTOR_SENT, Some(DLQ_SINK_LABEL)) => derived.dead_lettered += v,
+                    (VECTOR_DISCARDED, Some(DLQ_SINK_LABEL)) => derived.dlq_discarded += v,
                     _ => {}
                 }
             }
@@ -583,8 +604,8 @@ pub fn apply_derived(metrics: &WrapperMetrics, derived: &Derived) {
     // The platform's sink-side counter is the same number by another name and
     // reads 0 without this. ServiceMetrics only exposes an increment.
     metrics::counter!("records_delivered_total").absolute(to_u64(derived.sent));
-    // A record Vector rejected or the size cap held back is gone, so it counts
-    // where every other app counts a lost record.
+    // A record Vector rejected, or that went over the ceiling and no DLQ holds,
+    // is gone, so it counts where every other app counts a lost record.
     metrics
         .app
         .records_error
@@ -611,13 +632,14 @@ pub struct DeadLetterDrops {
 }
 
 impl DeadLetterDrops {
-    /// The size cap's drops, records over the producer's ceiling, under
-    /// `reason="too_large"`.
+    /// Records over the producer's ceiling that were lost, under
+    /// `reason="too_large"`: dropped by the size cap while `dlq.enabled` is
+    /// false, or refused by the dead letter sink.
     #[must_use]
     pub fn too_large() -> Self {
         Self {
             reason: TOO_LARGE,
-            total: |d| d.oversize,
+            total: Derived::too_large_lost,
             seen: 0.0,
         }
     }
@@ -974,6 +996,30 @@ vector_component_errors_total{component_id=\"dfe_sink\",error_type=\"request_fai
             "an operator's own filter is not a loss"
         );
         assert_eq!(derived.outstanding(), 6.0);
+    }
+
+    /// A record over the ceiling that the DLQ topic holds is a dead letter, not
+    /// a loss. Only the dead letter sink's own refusals, and the size cap's
+    /// drops while `dlq.enabled` is false, count as lost.
+    #[test]
+    fn dead_letters_are_counted_apart_from_the_records_lost_over_the_ceiling() {
+        let text = "\
+# TYPE vector_component_sent_events_total counter
+vector_component_sent_events_total{component_id=\"dfe_dlq_sink\",component_kind=\"sink\"} 5
+# TYPE vector_component_discarded_events_total counter
+vector_component_discarded_events_total{component_id=\"dfe_dlq_sink\",intentional=\"false\"} 2
+vector_component_discarded_events_total{component_id=\"dfe_sink\",intentional=\"false\"} 4
+vector_component_discarded_events_total{component_id=\"dfe_size_cap\",intentional=\"true\"} 1
+";
+        let derived = ExpositionMerger::default().merge(text);
+        assert_eq!(derived.dead_lettered, 5.0);
+        assert_eq!(derived.dlq_discarded, 2.0);
+        assert_eq!(derived.too_large_lost(), 3.0);
+        assert_eq!(
+            derived.rejected(),
+            7.0,
+            "the five dead letters are held, not lost"
+        );
     }
 
     /// The size cap's running total reaches scalo's drop counter once: each
