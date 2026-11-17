@@ -3,7 +3,10 @@
 How dfe-transform-vector is built and configured, and how to move a pipeline onto it from Vector.
 
 - [Architecture](architecture.md)
-- [Internals](internals.md)
+- [Config engine](internals.md)
+- [Vector](vector.md)
+- [Direct transport](direct-transport.md)
+- [Configuration](reference/configuration.md)
 - [librdkafka settings](librdkafka.md)
 - [Moving off the Vector chart](migration.md)
 - [config-schema.yaml](config-schema.yaml) -- the configuration as a JSON Schema (YAML)
