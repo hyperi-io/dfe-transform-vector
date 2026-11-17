@@ -94,6 +94,21 @@ In a chart deployment an edit to the config or a file set rolls the pods anyway,
 Vector is `Running` once it is alive 500 ms after spawn, and an exit nobody asked for is a crash, followed by a restart after the backoff.
 
 ```mermaid
+---
+config:
+  theme: base
+  look: neo
+  fontFamily: Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    primaryTextColor: "#0F172A"
+    clusterBorder: "#0072B2"
+    edgeLabelBackground: "#FFFFFF"
+    primaryColor: "#FFFFFF"
+    primaryBorderColor: "#94A3B8"
+    tertiaryColor: "#F4F6F8"
+---
 stateDiagram-v2
     direction LR
     accTitle: L4 Detail -- Vector lifecycle
@@ -110,7 +125,7 @@ stateDiagram-v2
     Crashed --> Starting: backoff
     Running --> ShuttingDown: SIGTERM
     ShuttingDown --> [*]
-    classDef error fill:#FBE3D6,stroke:#C2410C,stroke-width:1px,color:#4A1A05
+    classDef error fill:#FFFFFF,stroke:#C2410C,stroke-width:3px,color:#0F172A
     class Crashed error
 ```
 
