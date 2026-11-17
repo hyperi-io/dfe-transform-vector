@@ -120,7 +120,7 @@ A Rust supervisor that runs Vector as a child process so a Vector pipeline behav
 | `src/deployment.rs`, `src/vector-layer.dockerfile` | `contract()`, the source the Dockerfile and the released chart are generated from, and the two-binary image override spliced onto scalo's generated Dockerfile |
 | `templates/bus.yaml`, `templates/direct.yaml` | Whole runnable Vector topologies, one per transport, commented per field |
 | `pipelines/filebeat/` | The bundled filebeat pipeline. The image does not ship it |
-| `docs/` | `architecture.md` for why the service is built this way and the invariants, `internals.md` for field-by-field depth, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
+| `docs/` | `architecture.md` for the parts and why, a page per part (`internals.md` the config engine, `vector.md`, `direct-transport.md`), `reference/configuration.md`, `migration.md`, `librdkafka.md`, the generated `config-schema.*` and `capability-catalog.*` |
 | `tests/` | `integration`, `e2e`, `smoke`, and `TESTING.md` for how the broker and Vector binary are resolved |
 | `scripts/fetch-vector.sh`, `scripts/pgo-workload.sh` | Downloads the pinned Vector for tests, and drives the PGO/BOLT workload |
 
@@ -142,6 +142,10 @@ What a passing run does NOT mean:
 - `e2e::filebeat_kafka` runs by default and needs a dfe-transform-vrl checkout, for its cases and the bundled pipeline: beside this repo, or at `DFE_TRANSFORM_VRL_DIR`. Without one it skips locally and fails under CI, which checks the repo out beside this one.
 - A docs-only push runs no CI at all. `paths-ignore` for `docs/**` and `**.md` is on the `push` trigger but not on `pull_request`, so the PR is the only place a docs change is checked. A silent push is not a pass.
 
+To upgrade Vector, change `VECTOR_VERSION` and `VECTOR_SHA256_AMD64` and `VECTOR_SHA256_ARM64` in `src/deployment.rs` from Vector's published `SHA256SUMS`, then regenerate the Dockerfile. The Dockerfile, the default `vector.version`, the contract's `default_config` and `scripts/fetch-vector.sh` all read the constant. Move `services.vector` in dfe-infra's `versions.yaml` to the same release, tagged `<version>-alpine`, because dfe-fetcher's container Vector extractor runs that image. The full test tier runs the `vector_validate` cases against the new Vector.
+
+The image has two binaries, and scalo's contract builds only the supervisor. `src/deployment.rs::emit_dockerfile()` splices `src/vector-layer.dockerfile` in before the generated `USER` line, with the version and checksums substituted. The fragment is a Dockerfile, not a Rust string, so hadolint and shellcheck read it.
+
 ### What tends to bite
 
 | Don't | Do | Why |
@@ -156,6 +160,7 @@ What a passing run does NOT mean:
 | Assume a config key you added is wired because it parses and validates | Test that it changes behaviour, and keep `every_committed_config_file_loads_and_validates` passing over each committed config file | A key can parse, validate and reach nothing, so a deployment that moves a port on it keeps the old port and loses every probe |
 | Set `enable.auto.commit: false` here, as the shared DFE consumer baseline does | Leave auto-commit on | Vector's kafka source only stores offsets and leaves librdkafka's commit timer to flush them, and that timer is armed only when auto-commit is on, so with it off the stored offsets reach the broker only on a rebalance or a clean shutdown |
 | Read `/readyz` as "carrying traffic" | Read it as "Vector survived 500 ms after spawn, and the sink is not stalled" | A pod with an unreachable broker and nothing held stays Ready with no record moving |
+| Replace the Vector licence files in the image with a separate download | Keep shipping `LICENSE`, `NOTICE` and the `licenses` tree from the release archive | Vector is redistributed unmodified under MPL-2.0, which needs the licence text and the source location shipped. Taking them from the archive keeps the attribution matched to the exact binary |
 | Swap the reload poller for inotify | Keep polling | S3-backed mounts -- s3fs, goofys, Mountpoint for S3 -- generate no filesystem notification events, so inotify works on every laptop and stops reloading in production with nothing logged |
 | Add or rename a credential field without a schema marker | Schema it as `scalo::SensitiveString` with `#[schemars(with = ...)]`, as `SaslConfig::password` is | That puts `x-scalo-secret` and `writeOnly` on the field in the emitted config-schema, which is what tells a console to mask it. Without it only dfe-engine's name-based fallback can mask it, so a name that fallback does not read as a credential returns an operator's Kafka password in the clear |
 

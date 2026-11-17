@@ -64,33 +64,55 @@ config:
 ---
 flowchart TB
     accTitle: L3 Components -- dfe-transform-vector
-    accDescr: The previous stage sends records into the pod and the config and transform files configure it. Inside, the config engine writes the Vector config that the process manager starts Vector on, and on the direct transport the bridge intake hands records to Vector and the bridge return takes them back. Vector's metrics are merged into the supervisor's and served on the ops port. Records leave for the next stage and metrics go to the collector.
+    accDescr: The previous stage sends records into the pod and the config and transform files configure it. Inside, the config engine writes the Vector config that the process manager starts Vector on. On the direct transport the bridge intake hands records to Vector and the bridge return takes them back. Vector's metrics are merged into the supervisor's. Records leave for the next stage and metrics go to the collector.
 
-    prev["<b>Previous stage</b>"]
-    files[("<b>Config files</b>")]
-
-    subgraph pod["dfe-transform-vector"]
+    subgraph PREV["Previous stage"]
         direction LR
-        cfg[["<b>Config engine</b>"]]
-        proc["<b>Process manager</b>"]
-        intake[["<b>Bridge intake</b>"]]
-        vec[["<b>Vector</b>"]]
-        ret[["<b>Bridge return</b>"]]
-        merge["<b>Metrics merge</b>"]
-        cfg --> proc
-        proc --> vec
-        intake --> vec
-        vec --> ret
-        vec --> merge
+        prev("<b>Records in</b><br/><span>*_land topic or Push</span>")
     end
 
-    next["<b>Next stage</b>"]
-    collector["<b>Metrics collector</b>"]
+    subgraph CFGIN["Config"]
+        direction LR
+        files[("<b>Config files</b><br/><span>config and transforms</span>")]
+    end
 
-    prev -->|records| pod
-    files -->|config| pod
-    pod -->|records| next
-    pod -->|metrics| collector
+    subgraph POD["dfe-transform-vector"]
+        direction TB
+        subgraph SUP["Supervisor"]
+            direction LR
+            cfg("<b>Config engine</b><br/><span>writes Vector's config</span>")
+            proc("<b>Process manager</b><br/><span>spawns, restarts</span>")
+            merge("<b>Metrics merge</b><br/><span>vector_* into ours</span>")
+            cfg --> proc
+        end
+        subgraph DATA["Records"]
+            direction LR
+            intake("<b>Bridge intake</b><br/><span>direct only</span>")
+            vec("<b>Vector</b><br/><span>the transform</span>")
+            ret("<b>Bridge return</b><br/><span>direct only</span>")
+            intake -.-> vec -.-> ret
+        end
+        SUP -->|starts, scrapes| DATA
+    end
+
+    subgraph NEXT["Next stage"]
+        direction LR
+        next("<b>Records out</b><br/><span>*_load topic or Push</span>")
+    end
+
+    subgraph COL["Telemetry"]
+        direction LR
+        collector("<b>Metrics collector</b><br/><span>scrape or OTLP</span>")
+    end
+
+    PREV -->|records| POD
+    CFGIN -->|config| POD
+    POD -->|records| NEXT
+    POD -->|metrics| COL
+  class prev,next bus
+  class collector ext
+  class files store
+  class cfg,proc,intake,vec,ret,merge part
   classDef ext fill:#F4F6F8,stroke:#94A3B8,stroke-width:1.5px,stroke-dasharray:5 4,color:#0F172A
   classDef ingest fill:#FFFFFF,stroke:#0E8A7D,stroke-width:3px,color:#0F172A
   classDef xform fill:#FFFFFF,stroke:#7B4FB0,stroke-width:3px,color:#0F172A
@@ -102,13 +124,16 @@ flowchart TB
   classDef error fill:#FFFFFF,stroke:#C2410C,stroke-width:3px,color:#0F172A
   classDef control fill:#FFFFFF,stroke:#334155,stroke-width:3px,color:#0F172A
   classDef part fill:#FFFFFF,stroke:#94A3B8,stroke-width:1.5px,color:#0F172A
-  class prev,next,collector ext
-  class files store
-  class cfg,proc,intake,vec,ret,merge part
-  style pod fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style PREV fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style CFGIN fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style POD fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style SUP fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style DATA fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style NEXT fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style COL fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
 ```
 
-*Figure 1. L3 Components -- dfe-transform-vector. Dashed boxes are external.* Up: top of dfe-transform-vector. Down: [L4 Detail -- Config assembly](docs/architecture.md#config-assembly), [L4 Detail -- Direct transport bridge](docs/architecture.md#where-the-transports-differ), [L4 Detail -- Vector lifecycle](docs/internals.md#the-vector-subprocess).
+*Figure 1. L3 Components -- dfe-transform-vector. Dotted arrows are the direct transport. On the bus Vector reads and writes Kafka itself.* Up: top of dfe-transform-vector. Down: [dfe-transform-vector architecture](docs/architecture.md).
 
 On `bus` Vector reads and writes Kafka itself and the bridge does nothing. On `direct` the bridge takes records from the previous stage's Push client and hands Vector's output to the next stage's Push listener.
 
@@ -136,12 +161,15 @@ One port, 9090 by default, serves the ops surface: `/livez`, `/readyz` and `/met
 
 The config file (`--config`, else `config.yaml` or `config.yml` in the working directory) sits over the defaults, and `DFE_TRANSFORM_VECTOR_*` environment variables sit over the file. The working directory's `.env` is read into the environment first, and a variable set before it wins. The flat names take a single underscore and a comma list (`DFE_TRANSFORM_VECTOR_SOURCE_BROKERS=a:9092,b:9092`, `_SINK_TOPIC`, `_TRANSFORMS_DIR`, the SASL pairs) and beat the double-underscore form. That form reaches any key and takes a list in brackets (`DFE_TRANSFORM_VECTOR_SOURCE__BROKERS='[a:9092,b:9092]'`), and a bare comma list there fails to load. `--log-level`, `--log-format` and `--metrics-addr`, or `LOG_LEVEL`, `LOG_FORMAT` and `METRICS_ADDR`, outrank `logging.*` and `metrics.address`. [docs/config-schema.yaml](docs/config-schema.yaml) lists the app's keys with their types and defaults.
 
-With reload on, the default, a transform file change applies once it validates, with no restart. Any other change to the app's keys, `dfe_source`, `pipeline.name` and `scaling.pressure_threshold` included, is logged as needing a pod restart, and no later transform change applies until the pod restarts or the edit is reverted. scalo's sections in the file, such as `version_check`, `scaling.enabled` and `metrics.namespace`, are read once at startup, so an edit there needs a restart, and the watcher logs a successful reload without applying it. In a chart deployment a config or file set change rolls the pods anyway, because the chart hashes both into the pod template. The reload path, the readiness rules, the metrics merge and the Kafka settings are in [docs/internals.md](docs/internals.md) and [docs/librdkafka.md](docs/librdkafka.md).
+With reload on, the default, a transform file change applies once it validates, with no restart. Any other change to the app's keys, `dfe_source`, `pipeline.name` and `scaling.pressure_threshold` included, is logged as needing a pod restart, and no later transform change applies until the pod restarts or the edit is reverted. scalo's sections in the file, such as `version_check`, `scaling.enabled` and `metrics.namespace`, are read once at startup, so an edit there needs a restart, and the watcher logs a successful reload without applying it. In a chart deployment a config or file set change rolls the pods anyway, because the chart hashes both into the pod template. The reload path is in [docs/internals.md](docs/internals.md), the readiness rules and the metrics merge in [docs/vector.md](docs/vector.md), and the Kafka settings in [docs/librdkafka.md](docs/librdkafka.md).
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md): the problem, the ownership boundary and the invariants.
-- [docs/internals.md](docs/internals.md): the config engine, hot reload, the Vector subprocess, health and metrics, dead letters, the Vector version pin, the chart.
+- [docs/architecture.md](docs/architecture.md): the parts, how data flows and why it is built this way.
+- [docs/internals.md](docs/internals.md): the config engine and hot reload.
+- [docs/vector.md](docs/vector.md): the Vector subprocess, health and metrics, and dead letters.
+- [docs/direct-transport.md](docs/direct-transport.md): the bridge on the direct transport.
+- [docs/reference/configuration.md](docs/reference/configuration.md): the config layers and the chart.
 - [docs/migration.md](docs/migration.md): moving a pipeline off the official Vector chart.
 - [docs/librdkafka.md](docs/librdkafka.md): the librdkafka settings Vector's Kafka source and sink are given.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers, and the e2e cases that need Docker and a Vector binary.
