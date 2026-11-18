@@ -1,7 +1,9 @@
 # Run: cargo deny check
 
 [advisories]
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable, and no patched release exists. It arrives through scalo, cel, file-rotate and prometheus-parse. Drop when the lock no longer resolves chrono." },
+]
 
 [licenses]
 allow = [
