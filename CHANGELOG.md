@@ -3,6 +3,19 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.66](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.65...v1.0.66) (2026-11-19)
+
+### Bug Fixes
+
+* **filebeat:** drop the pipeline and its vrl checkout ([#168](https://github.com/hyperi-io/dfe-transform-vector/issues/168)) ([689d977](https://github.com/hyperi-io/dfe-transform-vector/commit/689d977b90e19ea37ad5291dfc196614cecc9a79))
+* **filebeat:** restore the bundled pipeline and its e2e test ([fb97889](https://github.com/hyperi-io/dfe-transform-vector/commit/fb978892fac66ae1fd01b004075e77b5823909e5))
+* **kafka:** set the producer batching delay once ([#166](https://github.com/hyperi-io/dfe-transform-vector/issues/166)) ([0a80701](https://github.com/hyperi-io/dfe-transform-vector/commit/0a80701472522aaf53016e869043641147f490dc))
+* **kafka:** set the producer compression codec once ([#167](https://github.com/hyperi-io/dfe-transform-vector/issues/167)) ([3f83b17](https://github.com/hyperi-io/dfe-transform-vector/commit/3f83b170ef8228ff67e5ba3033e7cfceefb3a0ea))
+* **security:** bump libz-sys to 1.1.33 ([9a5c451](https://github.com/hyperi-io/dfe-transform-vector/commit/9a5c451d8bb19aad66b81dac9b507ec71c62b068))
+* **sink:** dead-letter records over the producer ceiling on bus ([#173](https://github.com/hyperi-io/dfe-transform-vector/issues/173)) ([e32c648](https://github.com/hyperi-io/dfe-transform-vector/commit/e32c6486df97c4b312c539285f11b40b1db22a77))
+* **tests:** replay dfe-transform-vrl's synthetic filebeat cases ([#165](https://github.com/hyperi-io/dfe-transform-vector/issues/165)) ([6578941](https://github.com/hyperi-io/dfe-transform-vector/commit/65789419b2e617861adae6d46c9858e4e4e2bb83))
+* **vector:** rebuild on scalo 2.14.32 ([6cab1cb](https://github.com/hyperi-io/dfe-transform-vector/commit/6cab1cb81d77ba473e9b7adf8815467f5eb1987c)), closes [#151](https://github.com/hyperi-io/dfe-transform-vector/issues/151)
+
 ## [1.0.65](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.64...v1.0.65) (2026-11-15)
 
 ### Bug Fixes
