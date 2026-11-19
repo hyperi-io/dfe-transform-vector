@@ -1537,7 +1537,7 @@ impl Config {
     /// Hold the direct sink's batching inside what the bridge allows it.
     ///
     /// The bridge's hold deadlines leave Vector's sink one second of batching
-    /// (see [`crate::bridge::RETURN_HOLD`]), and the return listener decodes
+    /// (see [`crate::bridge::return_hold`]), and the return listener decodes
     /// at most its gRPC message size per push.
     fn validate_direct_batch(batch: &BatchConfig) -> Result<()> {
         if batch.timeout_secs > 1 {
