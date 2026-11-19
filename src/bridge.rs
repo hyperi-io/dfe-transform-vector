@@ -61,12 +61,12 @@
 //! The deadlines nest, outermost first, so an inner hop is always answered
 //! while the hop around it can still answer its own sender:
 //!
-//! - [`INTAKE_HOLD`] (18 s): the longest the intake listener holds a push,
+//! - [`intake_hold`] (18 s, the hold of the ladder's depth-1 rung): the longest the intake listener holds a push,
 //!   under the deadline of the stage pushing in.
-//! - [`RETURN_HOLD`] (16.5 s): the longest the listener Vector's sink pushes
+//! - [`return_hold`] (16.5 s): the longest the listener Vector's sink pushes
 //!   into holds a push. On direct to direct that hold sits inside the intake
 //!   one, with room for Vector's own sink batching.
-//! - [`SEND_TIMEOUT_MS`] (15 s): each send to the next stage, and each dial to
+//! - [`send_timeout_ms`] (15 s, that rung's next-hop deadline): each send to the next stage, and each dial to
 //!   Vector, gives up after this, so a hung hop is retried inside the hold.
 //!
 //! ## Pressure and memory
@@ -85,12 +85,13 @@ use scalo::dlq::Dlq;
 use scalo::governor::UnifiedPressure;
 use scalo::memory::MemoryGuard;
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
+use scalo::transport::hold::{HoldLadder, Rung};
 use scalo::transport::vector_compat::VectorCompatClient;
 use scalo::transport::{
     AcknowledgementsConfig, DEAD_LETTER_REJECTED, DeliveryStatus, Record, SendResult,
     SinkConfirmation, TransportError, TransportSender, WorkBatch,
 };
-use scalo::worker::engine::{BatchProcessingConfig, BlockPieces};
+use scalo::worker::engine::{BatchProcessingConfig, BlockPieces, Refusals};
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, EngineError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -99,18 +100,38 @@ use crate::config::Config;
 use crate::metrics::count_dropped_dead_letters;
 use crate::{Error, Result};
 
+/// The room the return hold leaves inside the intake hold for Vector's
+/// one-second sink batching.
+pub const SINK_BATCHING_MARGIN: Duration = Duration::from_millis(1_500);
+
+/// A transform's rung on scalo's hold ladder: one hop behind the receiver.
+#[allow(clippy::expect_used)]
+fn rung() -> Rung {
+    HoldLadder::DEFAULT
+        .rung(1)
+        .expect("the default hold ladder has a depth-1 rung")
+}
+
 /// The longest the intake listener holds a push: under the upstream stage's
-/// send deadline, over [`RETURN_HOLD`].
-pub const INTAKE_HOLD: Duration = Duration::from_secs(18);
+/// send deadline, over [`return_hold`].
+#[must_use]
+pub fn intake_hold() -> Duration {
+    rung().hold
+}
 
 /// The longest the listener Vector's sink pushes into holds a push: inside
-/// [`INTAKE_HOLD`] by more than Vector's one-second sink batching, over
-/// [`SEND_TIMEOUT_MS`].
-pub const RETURN_HOLD: Duration = Duration::from_millis(16_500);
+/// [`intake_hold`] by [`SINK_BATCHING_MARGIN`], over [`send_timeout_ms`].
+#[must_use]
+pub fn return_hold() -> Duration {
+    intake_hold().saturating_sub(SINK_BATCHING_MARGIN)
+}
 
 /// Each send to the next stage, and each dial to Vector, gives up after this,
-/// inside [`RETURN_HOLD`], so the hold can still retry it.
-pub const SEND_TIMEOUT_MS: u64 = 15_000;
+/// inside [`return_hold`], so the hold can still retry it.
+#[must_use]
+pub fn send_timeout_ms() -> u64 {
+    u64::try_from(rung().next_hop_deadline.as_millis()).unwrap_or(u64::MAX)
+}
 
 /// Payload bytes one `PushEvents` to Vector carries at most, bar a single
 /// record over it, which goes alone.
@@ -186,7 +207,7 @@ impl Bridge {
                 &GrpcConfig::server(&config.source.listen),
                 acknowledgements,
                 Hold {
-                    max: INTAKE_HOLD,
+                    max: intake_hold(),
                     pressure: runtime.pressure.clone(),
                     memory_guard: runtime.memory_guard.clone(),
                 },
@@ -195,7 +216,7 @@ impl Bridge {
             .await?;
             let to_vector = VectorCompatClient::connect_lazy_within(
                 &format!("http://{}", bridge.to_vector),
-                SEND_TIMEOUT_MS,
+                send_timeout_ms(),
             )
             .map_err(|e| {
                 Error::Transport(format!(
@@ -225,7 +246,7 @@ impl Bridge {
                 &GrpcConfig::server(&bridge.from_vector).with_vector_compat(),
                 acknowledgements,
                 Hold {
-                    max: RETURN_HOLD,
+                    max: return_hold(),
                     pressure: None,
                     memory_guard: runtime.memory_guard.clone(),
                 },
@@ -348,7 +369,7 @@ fn leg_ended(
 /// The client for the next stage's Push listener.
 fn downstream_config(endpoint: &str) -> GrpcConfig {
     let mut config = GrpcConfig::client(endpoint);
-    config.send_timeout_ms = SEND_TIMEOUT_MS;
+    config.send_timeout_ms = send_timeout_ms();
     config
 }
 
@@ -510,55 +531,60 @@ async fn run_outbound(
             |batch: &WorkBatch<GrpcToken>, pieces: &BlockPieces<'_>| {
                 let records: Vec<Record> = batch.records.clone();
                 let downstream = Arc::clone(downstream);
-                // Carries only what the send left out; the pipeline's own piece
-                // carries whether the batch was delivered.
-                let left_out = pieces.piece();
-                async move {
-                    match sent(downstream.send_batch(&records).await, records.len()) {
-                        Ok(status) => {
-                            left_out.report(status);
-                            Ok(())
-                        }
-                        Err(e) => {
-                            // Delivered is the merge's identity, so a failed
-                            // attempt adds nothing to the block's status.
-                            left_out.report(DeliveryStatus::Delivered);
-                            Err(e)
-                        }
-                    }
-                }
+                let refusals = pieces.refusals();
+                async move { send_to_next_stage(&downstream, &records, &refusals).await }
             },
         )
         .await
 }
 
-/// What one send to the next stage adds to its block's status, or the refusal
-/// the pipeline retries.
-fn sent(result: SendResult, records: usize) -> std::result::Result<DeliveryStatus, EngineError> {
-    match result {
-        SendResult::Ok => Ok(DeliveryStatus::Delivered),
-        // Every record was over the next stage's size ceiling, which the screen
-        // should have caught: released dropped, never delivered, never resent.
-        SendResult::FilteredDlq => {
-            warn!(
-                records,
-                "next stage could take none of the batch -- releasing it as dropped"
-            );
-            Ok(DeliveryStatus::Dropped)
-        }
-        SendResult::Backpressured => {
-            debug!(records, "next stage is backpressured -- holding the batch");
-            Err(retry_later())
-        }
-        SendResult::Fatal(e) => {
-            error!(
-                error = %e,
-                records,
-                "next stage refused the batch -- holding it and retrying"
-            );
-            Err(retry_later())
+/// Send `records` to the next stage, or return the refusal the pipeline
+/// retries.
+///
+/// A `FilteredDlq` answer to a batch names no record, so the batch is sent
+/// again one record at a time. A record the stage dead-letters goes back to
+/// the pipeline through `refusals`, which writes it to the DLQ before the
+/// source is released. Records already sent go out twice: a duplicate, never
+/// a loss.
+async fn send_to_next_stage(
+    downstream: &GrpcTransport,
+    records: &[Record],
+    refusals: &Refusals,
+) -> std::result::Result<(), EngineError> {
+    match downstream.send_batch(records).await {
+        SendResult::Ok => return Ok(()),
+        SendResult::FilteredDlq => {}
+        refused => return Err(refusal(refused, records.len())),
+    }
+    for record in records {
+        let one = if records.len() == 1 {
+            SendResult::FilteredDlq
+        } else {
+            downstream.send_batch(std::slice::from_ref(record)).await
+        };
+        match one {
+            SendResult::Ok => {}
+            SendResult::FilteredDlq => {
+                warn!("next stage dead-lettered a record -- handing it to the DLQ");
+                refusals.dead_letter(record, "the next stage dead-lettered the record");
+            }
+            refused => return Err(refusal(refused, 1)),
         }
     }
+    Ok(())
+}
+
+/// The retry for a send to the next stage that was not taken.
+fn refusal(result: SendResult, records: usize) -> EngineError {
+    match result {
+        SendResult::Fatal(e) => error!(
+            error = %e,
+            records,
+            "next stage refused the batch -- holding it and retrying"
+        ),
+        _ => debug!(records, "next stage is backpressured -- holding the batch"),
+    }
+    retry_later()
 }
 
 /// A payload as the JSON event Vector's protocol carries.
@@ -641,25 +667,16 @@ mod tests {
         ));
     }
 
-    /// A batch the next stage took none of is released dropped, so its source
-    /// is answered and it is counted, but never as delivered.
+    /// A send the next stage did not take is held and retried, never dropped.
     #[test]
-    fn a_send_that_left_every_record_out_is_dropped_never_delivered() {
+    fn a_send_not_taken_is_retried() {
         assert!(matches!(
-            sent(SendResult::FilteredDlq, 3),
-            Ok(DeliveryStatus::Dropped)
+            refusal(SendResult::Backpressured, 3),
+            EngineError::Transport(ref e) if e.is_recoverable()
         ));
         assert!(matches!(
-            sent(SendResult::Ok, 3),
-            Ok(DeliveryStatus::Delivered)
-        ));
-        assert!(matches!(
-            sent(SendResult::Backpressured, 3),
-            Err(EngineError::Transport(ref e)) if e.is_recoverable()
-        ));
-        assert!(matches!(
-            sent(SendResult::Fatal(TransportError::Send("refused".into())), 3),
-            Err(EngineError::Transport(ref e)) if e.is_recoverable()
+            refusal(SendResult::Fatal(TransportError::Send("refused".into())), 3),
+            EngineError::Transport(ref e) if e.is_recoverable()
         ));
     }
 
@@ -670,15 +687,23 @@ mod tests {
     #[test]
     fn the_deadlines_nest_intake_over_return_over_send() {
         let send = Duration::from_millis(downstream_config("http://127.0.0.1:1").send_timeout_ms);
-        assert_eq!(send, Duration::from_millis(SEND_TIMEOUT_MS));
-        assert!(
-            INTAKE_HOLD > RETURN_HOLD + Duration::from_secs(1),
-            "the {RETURN_HOLD:?} return hold leaves Vector no room inside the {INTAKE_HOLD:?} \
-             intake hold"
+        let (intake, ret) = (intake_hold(), return_hold());
+        assert_eq!(send, Duration::from_millis(send_timeout_ms()));
+        assert_eq!(
+            (intake, ret, send),
+            (
+                Duration::from_secs(18),
+                Duration::from_millis(16_500),
+                Duration::from_secs(15)
+            )
         );
         assert!(
-            RETURN_HOLD > send,
-            "a {send:?} send outlives the {RETURN_HOLD:?} return hold"
+            intake > ret + Duration::from_secs(1),
+            "the {ret:?} return hold leaves Vector no room inside the {intake:?} intake hold"
+        );
+        assert!(
+            ret > send,
+            "a {send:?} send outlives the {ret:?} return hold"
         );
     }
 

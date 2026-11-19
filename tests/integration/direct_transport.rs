@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use dfe_transform_vector::bridge::{
-    Bridge, BridgeRuntime, INTAKE_HOLD, RETURN_HOLD, SEND_TIMEOUT_MS,
+    Bridge, BridgeRuntime, intake_hold, return_hold, send_timeout_ms,
 };
 use dfe_transform_vector::config::assembler;
 use dfe_transform_vector::config::loader::{
@@ -519,12 +519,14 @@ async fn vectors_push_is_not_answered_ok_before_the_next_stage_takes_it() {
 }
 
 /// The outbound leg keeps the stage's deadlines: Vector's push is given up at
-/// `RETURN_HOLD`, inside the intake's hold, and inside that a next stage that
-/// never answers is abandoned at `SEND_TIMEOUT_MS` and tried again. On scalo's
+/// `return_hold`, inside the intake's hold, and inside that a next stage that
+/// never answers is abandoned at `send_timeout_ms` and tried again. On scalo's
 /// defaults, a 25 s hold and a 30 s send, the push is held to 25 s and the next
 /// stage is tried once.
 #[tokio::test]
 async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
+    let (intake_hold, return_hold, send_timeout_ms) =
+        (intake_hold(), return_hold(), send_timeout_ms());
     let work = TempDir::new().expect("work dir");
     let mut config = direct_config(&work, "/nonexistent/vector");
     config.source.transport = Transport::Bus;
@@ -588,14 +590,14 @@ async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
     );
     // The upper bound sits below where the intake's hold would have answered.
     assert!(
-        held_for >= RETURN_HOLD - Duration::from_secs(1)
-            && held_for < RETURN_HOLD + Duration::from_secs(1),
-        "Vector's push must be held for the {RETURN_HOLD:?} return hold, not the intake's \
-         {INTAKE_HOLD:?} or scalo's 25 s default; it was held {held_for:?}"
+        held_for >= return_hold - Duration::from_secs(1)
+            && held_for < return_hold + Duration::from_secs(1),
+        "Vector's push must be held for the {return_hold:?} return hold, not the intake's \
+         {intake_hold:?} or scalo's 25 s default; it was held {held_for:?}"
     );
     assert!(
         attempts >= 2,
-        "a next stage that never answers must be given up after {SEND_TIMEOUT_MS} ms and tried \
+        "a next stage that never answers must be given up after {send_timeout_ms} ms and tried \
          again inside the hold; it saw {attempts} attempt(s)"
     );
 }
@@ -604,6 +606,7 @@ async fn the_outbound_leg_gives_a_hung_next_stage_up_inside_the_hold() {
 /// Vector holds its own, so on direct to direct the inner answer lands first.
 #[tokio::test]
 async fn the_intake_holds_a_push_for_the_outer_hold() {
+    let intake_hold = intake_hold();
     let work = TempDir::new().expect("work dir");
     let mut config = direct_config(&work, "/nonexistent/vector");
     // Inbound only, towards a Vector that is not running.
@@ -635,9 +638,9 @@ async fn the_intake_holds_a_push_for_the_outer_hold() {
         "a push Vector never took must not be acknowledged: {result:?}"
     );
     assert!(
-        held_for >= INTAKE_HOLD - Duration::from_secs(1)
-            && held_for < INTAKE_HOLD + Duration::from_secs(1),
-        "the intake must hold a push for its {INTAKE_HOLD:?} hold; it was held {held_for:?}"
+        held_for >= intake_hold - Duration::from_secs(1)
+            && held_for < intake_hold + Duration::from_secs(1),
+        "the intake must hold a push for its {intake_hold:?} hold; it was held {held_for:?}"
     );
 }
 
