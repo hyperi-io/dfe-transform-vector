@@ -159,7 +159,7 @@ You write the `transforms:` and `enrichment_tables:` blocks. The supervisor gene
 | Docker `single` | On by default. One instance per source that binds a Vector transform |
 | Kubernetes, every profile | When a deployment asks for it. One deployment per source config, KEDA sets replicas |
 
-One Vector runs per pod, and replicas scale out. The released chart scales on CPU. dfe-infra's values add a pressure trigger in `single`, `scale` and `mesh`. Lag isn't a trigger, because it rises when a downstream stage breaks and more pods can't fix that.
+One Vector runs per pod, and replicas scale out. The released chart scales on CPU. dfe-infra's values add a pressure trigger in `single`, `scale` and `mesh`, but the gauge it reads stays 0 when Vector runs, so that trigger never scales a pod out and CPU does the scaling. Feeding it is tracked in <https://github.com/hyperi-io/dfe-transform-vector/issues/117>. Lag isn't a trigger, because it rises when a downstream stage breaks and more pods can't fix that.
 
 The chart mounts the config and transform files, and an edit to either rolls the pods. Outside a chart, a transform change hot-reloads. [reference/configuration.md](reference/configuration.md) has the config layers and what the chart fixes.
 
