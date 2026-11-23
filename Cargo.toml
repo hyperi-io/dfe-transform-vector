@@ -38,7 +38,7 @@ tokio-util = { version = ">=0.7.20, <0.8", features = ["rt"] }
 # `health` is REQUIRED for a truthful `/readyz`. `transport-kafka` is for its
 # config only: the image ships no librdkafka, so nothing may build an rdkafka
 # client. The floor moves with `release.helm.library` in .hyperi-ci.yaml.
-scalo = { version = ">=2.14.32, <3", features = [
+scalo = { version = ">=2.14.33, <3", features = [
     "cli-service",
     "config-reload",
     "config-schema",
@@ -82,7 +82,7 @@ metrics = ">=0.24.6, <0.25"
 
 # Unix signals (sending SIGTERM/SIGHUP to child process), and renameat2 to
 # swap a reload's staged config in whole
-nix = { version = ">=0.31.3, <0.32", features = ["signal", "process", "fs"] }
+nix = { version = ">=0.32.0, <0.33", features = ["signal", "process", "fs"] }
 
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 prometheus-parse = ">=0.2.5, <0.3"
@@ -95,7 +95,7 @@ pgo-driver = []
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
 tokio-test = ">=0.4.6, <0.5"
-scalo = { version = ">=2.14.32, <3", features = [
+scalo = { version = ">=2.14.33, <3", features = [
     "transport-kafka",
     "transport-kafka-test-support",
 ] }
