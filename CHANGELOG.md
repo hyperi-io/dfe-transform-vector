@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.67](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.66...v1.0.67) (2026-11-23)
+
+### What's Changed
+* docs(architecture): fix the pressure trigger docs by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/178
+* fix(ci): default main releases to candidates by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/179
+* fix: rebuild on scalo 2.14.33 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/180
+* fix(deps): url 2.5.9 for RUSTSEC-2026-0592 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/181
+
 ## [1.0.66](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.65...v1.0.66) (2026-11-19)
 
 ### Bug Fixes
