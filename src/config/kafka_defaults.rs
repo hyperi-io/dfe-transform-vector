@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use scalo::kafka_config;
+use scalo::transport::kafka::{KafkaSizingConfig, SelfRegulationProfile};
 use tracing::{debug, warn};
 
 /// Parsed librdkafka profiles from the central config file.
@@ -166,18 +167,51 @@ pub fn producer_profile(profile_name: &str) -> HashMap<String, String> {
 
     // Fallback to scalo constants
     match profile_name {
-        "production" => profile_to_map(kafka_config::PRODUCER_PRODUCTION),
-        "exactly_once" => profile_to_map(kafka_config::PRODUCER_EXACTLY_ONCE),
-        "low_latency" => profile_to_map(kafka_config::PRODUCER_LOW_LATENCY),
+        "production" => with_sizing(
+            kafka_config::PRODUCER_PRODUCTION,
+            SelfRegulationProfile::Throughput,
+        ),
+        "exactly_once" => with_sizing(
+            kafka_config::PRODUCER_EXACTLY_ONCE,
+            SelfRegulationProfile::Throughput,
+        ),
+        "low_latency" => with_sizing(
+            kafka_config::PRODUCER_LOW_LATENCY,
+            SelfRegulationProfile::LowLatency,
+        ),
         "devtest" => profile_to_map(kafka_config::PRODUCER_DEVTEST),
         _ => {
             warn!(
                 profile = profile_name,
                 "Unknown producer profile, using production"
             );
-            profile_to_map(kafka_config::PRODUCER_PRODUCTION)
+            with_sizing(
+                kafka_config::PRODUCER_PRODUCTION,
+                SelfRegulationProfile::Throughput,
+            )
         }
     }
+}
+
+/// The batching and codec keys scalo's own producers take from `sizing`. No
+/// level: `sink.compression` may pick a codec a zstd level is invalid for.
+const SIZING_PRODUCER_KEYS: &[&str] = &["linger.ms", "compression.type"];
+
+/// A scalo producer profile with the batching delay and codec of `sizing`,
+/// which scalo's profiles leave to the sizing surface.
+fn with_sizing(profile: &[(&str, &str)], sizing: SelfRegulationProfile) -> HashMap<String, String> {
+    let mut map = profile_to_map(profile);
+    let resolved = KafkaSizingConfig {
+        profile: sizing,
+        ..KafkaSizingConfig::default()
+    }
+    .resolved_producer_map();
+    for key in SIZING_PRODUCER_KEYS {
+        if let Some(value) = resolved.get(*key) {
+            map.insert((*key).to_string(), value.clone());
+        }
+    }
+    map
 }
 
 /// Settings librdkafka accepts under two spellings and stores as one. A client
@@ -261,12 +295,26 @@ mod tests {
         assert_eq!(profile.len(), kafka_config::CONSUMER_PRODUCTION.len());
     }
 
+    /// Each fallback producer profile batches and compresses as the scalo
+    /// producer of the same sizing profile does.
     #[test]
-    fn fallback_producer_production() {
-        let profile = producer_profile("production");
-        assert_eq!(profile["linger.ms"], "100");
-        assert_eq!(profile["compression.type"], "zstd");
-        assert_eq!(profile.len(), kafka_config::PRODUCER_PRODUCTION.len());
+    fn fallback_producer_profiles_take_scalo_sizing() {
+        for (name, linger, len) in [
+            ("production", "20", kafka_config::PRODUCER_PRODUCTION.len()),
+            (
+                "exactly_once",
+                "20",
+                kafka_config::PRODUCER_EXACTLY_ONCE.len(),
+            ),
+            ("low_latency", "0", kafka_config::PRODUCER_LOW_LATENCY.len()),
+            ("unknown", "20", kafka_config::PRODUCER_PRODUCTION.len()),
+        ] {
+            let profile = producer_profile(name);
+            assert_eq!(profile["linger.ms"], linger, "{name}");
+            assert_eq!(profile["compression.type"], "zstd", "{name}");
+            assert_eq!(profile.len(), len + SIZING_PRODUCER_KEYS.len(), "{name}");
+        }
+        assert!(!producer_profile("devtest").contains_key("linger.ms"));
     }
 
     #[test]
@@ -280,7 +328,7 @@ mod tests {
 
     #[test]
     fn merge_layers_user_wins() {
-        let base = profile_to_map(kafka_config::PRODUCER_PRODUCTION);
+        let base = producer_profile("production");
         let service = &[("queue.buffering.max.kbytes", "262144")];
         let mut user = HashMap::new();
         user.insert("linger.ms".to_string(), "50".to_string());
