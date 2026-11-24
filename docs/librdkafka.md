@@ -67,8 +67,8 @@ This app reads `CONSUMER_PRODUCTION` for the source and `PRODUCER_PRODUCTION` fo
 
 | Producer setting | Value | librdkafka default | Justification |
 |---------|-------|--------------------|---------------|
-| `linger.ms` | `100` | `5` | Larger batches -- 100 ms of latency for higher throughput. This is the delay the sink uses, in place of `sink.batch.timeout_secs`. See Layers. |
-| `compression.type` | `zstd` | `none` | Best compression ratio with acceptable CPU cost. `sink.compression` replaces it on every sink. |
+| `linger.ms` | `20` | `5` | scalo's `throughput` sizing, as every scalo producer batches. This is the delay the sink uses, in place of `sink.batch.timeout_secs`. See Layers. |
+| `compression.type` | `zstd` | `none` | scalo's codec on every sizing profile. `sink.compression` replaces it on every sink. |
 | `socket.nagle.disable` | `true` | `true` | librdkafka's default as well. The profile states it. |
 | `statistics.interval.ms` | `1000` | `0` | librdkafka metrics. |
 
@@ -108,7 +108,7 @@ consumer:
 
 producer:
   production:
-    linger.ms: "100"
+    linger.ms: "20"
     compression.type: zstd
     # ...
 ```

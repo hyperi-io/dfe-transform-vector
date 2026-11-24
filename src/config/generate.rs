@@ -1784,7 +1784,7 @@ mod tests {
         assert!(text.contains("max_events: 10000"));
         // The production profile's `linger.ms` is the batching delay, in
         // Vector's field.
-        assert!(text.contains("timeout_secs: 0.1"));
+        assert!(text.contains("timeout_secs: 0.02"));
         assert!(!text.contains("linger.ms"));
     }
 
@@ -1860,7 +1860,7 @@ mod tests {
         assert!(text.contains("max_events: 5000"));
         assert!(text.contains("max_bytes: 8388608"));
         // The production profile's `linger.ms` replaces `timeout_secs` on the bus.
-        assert!(text.contains("timeout_secs: 0.1"));
+        assert!(text.contains("timeout_secs: 0.02"));
     }
 
     /// A Kafka sink states its batching delay once, as `batch.timeout_secs`.
@@ -1875,7 +1875,7 @@ mod tests {
         };
 
         for (case, sink, seconds) in [
-            ("profile only", SinkConfig::default(), 0.1),
+            ("profile only", SinkConfig::default(), 0.02),
             ("user linger.ms", with_option("linger.ms", "20"), 0.02),
             (
                 "user queue.buffering.max.ms",
