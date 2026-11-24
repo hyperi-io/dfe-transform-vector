@@ -185,7 +185,9 @@
           "path": "/var/spool/scalo/dlq",
           "rotation": "hourly",
           "max_age_days": 30,
-          "compress_rotated": true,
+          "compress_rotated": {
+            "codec": "gzip"
+          },
           "max_bytes": null,
           "max_files": null,
           "durable": false,
@@ -862,7 +864,9 @@
             "path": "/var/spool/scalo/dlq",
             "rotation": "hourly",
             "max_age_days": 30,
-            "compress_rotated": true,
+            "compress_rotated": {
+              "codec": "gzip"
+            },
             "max_bytes": null,
             "max_files": null,
             "durable": false,
@@ -924,9 +928,35 @@
           "default": 30
         },
         "compress_rotated": {
-          "description": "Gzip rotated files, keeping the six newest uncompressed.",
-          "type": "boolean",
-          "default": true
+          "description": "Codec for rotated files past the six newest: `none`, `gzip` or `zstd`.\nDefault gzip.",
+          "type": "object",
+          "properties": {
+            "codec": {
+              "description": "Codec for compress_rotated.",
+              "type": "string",
+              "enum": [
+                "none",
+                "gzip",
+                "zstd"
+              ]
+            },
+            "level": {
+              "description": "Level, by codec: gzip 1-9, zstd 1-22. Unset, the codec's default.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 22
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "codec"
+          ],
+          "default": {
+            "codec": "gzip"
+          }
         },
         "max_bytes": {
           "description": "Rotate before a write that would take the file past this many bytes.\nA write into an empty file always lands, however large. Unset: no size\nrotation. Works beside the time rotation: either rotates.",
