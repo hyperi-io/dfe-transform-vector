@@ -1067,6 +1067,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link 0.2.1",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2002,6 +2013,24 @@ dependencies = [
  "tonic",
  "tonic-prost",
 ]
+
+[[package]]
+name = "opentelemetry-resource-detectors"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfe8108824d824e717166f131c9d3d7e23fa268bc3b989dbf48343da9bde54a3"
+dependencies = [
+ "hostname",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+]
+
+[[package]]
+name = "opentelemetry-semantic-conventions"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a3cf639fefd3e852869114f9925b578da6dd8e99281a2089bb0e773ead46962"
 
 [[package]]
 name = "opentelemetry_sdk"
@@ -2941,9 +2970,9 @@ dependencies = [
 
 [[package]]
 name = "scalo"
-version = "2.14.37"
+version = "2.14.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed5e60d0ac38c27ce9700ce8126a0772291c94e9ed5c103677405518f2cb103"
+checksum = "ef4a9620a07645c5fe06c21ea41d14e3157e685fec1582ea0479f1e0e0e746fa"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -2969,6 +2998,7 @@ dependencies = [
  "metrics-util",
  "opentelemetry",
  "opentelemetry-otlp",
+ "opentelemetry-resource-detectors",
  "opentelemetry_sdk",
  "owo-colors",
  "parking_lot 0.13.0",
