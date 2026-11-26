@@ -180,6 +180,8 @@ pub fn contract() -> DeploymentContract {
             WritablePath::new("run", "/var/run/vector"),
         ],
         termination_grace_seconds: 90,
+        // No rdkafka client runs here, and the Vector child must not inherit an OpenSSL floor.
+        openssl_conf: String::new(),
         resources: ResourcesContract {
             requests: ResourceList {
                 cpu: "100m".into(),
@@ -392,6 +394,14 @@ mod tests {
         assert_eq!(c.oci_labels.title, c.app_name);
         assert_eq!(c.oci_labels.description, c.description);
         assert_ne!(c.oci_labels.description, "");
+    }
+
+    /// No rdkafka client runs here, so the image sets no OpenSSL floor for the
+    /// Vector child to inherit.
+    #[test]
+    fn the_image_sets_no_openssl_conf() {
+        assert_eq!(contract().openssl_conf, "");
+        assert!(!emit_dockerfile().unwrap().contains("OPENSSL_CONF"));
     }
 
     #[test]
