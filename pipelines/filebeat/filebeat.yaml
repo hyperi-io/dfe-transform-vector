@@ -17,7 +17,7 @@
 # path or points `path` at its own copy; startup validation names the path when
 # the file is not there.
 #
-# The VRL body is dfe-transform-vrl pipelines/filebeat/filebeat.vrl @ e0b7087,
+# The VRL body is dfe-transform-vrl pipelines/filebeat/filebeat.vrl @ 82db334,
 # bar two lines of its header comment, and that repo maintains it. Refresh by copying
 # that file again rather than editing the copy here, so the two transform apps
 # keep passing the same cases.
