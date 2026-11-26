@@ -27,4 +27,4 @@ The wrapper writes each transform file into Vector's config dir with its wired `
 
 Events hold the DFE 2.1 Kafka fields (`{message, tags, timestamp}`), and the optional `._conf.tz_offset` / `._conf.tz_map` fields drive the ios and meraki timezone handling.
 
-`filebeat.yaml` embeds dfe-transform-vrl `pipelines/filebeat/filebeat.vrl` @ `e0b7087`, the same program bar two lines of its header comment, and `timezones.csv` is that repo's table copied. Refresh by copying both again rather than editing here -- the two transform apps grade against the same cases (`tests/e2e/filebeat_kafka.rs` in each), and that means something as long as the program is the same one.
+`filebeat.yaml` embeds dfe-transform-vrl `pipelines/filebeat/filebeat.vrl` @ `82db334`, the same program bar two lines of its header comment, and `timezones.csv` is that repo's table copied. Refresh by copying both again rather than editing here -- the two transform apps grade against the same cases (`tests/e2e/filebeat_kafka.rs` in each), and that means something as long as the program is the same one.
