@@ -14,7 +14,7 @@
 #
 # The `path` below is where the dfe-docker compose stack mounts the table. The
 # image does not ship timezones.csv, so any other deployment mounts it at that
-# path or points `path` at its own copy; startup validation names the path when
+# path or points `path` at its own copy. Startup validation names the path when
 # the file is not there.
 #
 # The VRL body is dfe-transform-vrl pipelines/filebeat/filebeat.vrl @ 82db334,

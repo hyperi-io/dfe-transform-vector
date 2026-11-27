@@ -77,7 +77,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cap on one exposition, headers included.
 ///
 /// `READ_TIMEOUT` bounds how long a scrape may take, not how much it may
-/// return. Vector's own exposition is well under a megabyte; anything past
+/// return. Vector's own exposition is well under a megabyte. Anything past
 /// this cap is a runaway exporter, not metrics.
 const MAX_EXPOSITION_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -330,7 +330,7 @@ pub struct ExpositionMerger {
     /// Merged series by hash of name plus sorted labels.
     series: HashMap<u64, Tracked>,
     expiry_ticks: u32,
-    /// The ceiling on `series`; a series past it is not merged.
+    /// The ceiling on `series`. A series past it is not merged.
     max_series: usize,
     /// Whether the ceiling has turned a series away since the last time it
     /// had room, so the warning logs once per episode.
@@ -424,7 +424,7 @@ impl ExpositionMerger {
                     }
                 }
                 // No TYPE line, which is also where a histogram's _sum and
-                // _count land. Integral totals stay counters; anything else is
+                // _count land. Integral totals stay counters. Anything else is
                 // a gauge so a fractional _sum keeps its precision.
                 Value::Untyped(v) => {
                     if sample.metric.ends_with("_total") || sample.metric.ends_with("_count") {
@@ -711,7 +711,7 @@ impl SinkProgress {
         }
     }
 
-    /// Record one exposition's totals; `true` when the sink is stalled.
+    /// Record one exposition's totals, returning `true` when the sink is stalled.
     pub fn observe(&mut self, derived: &Derived, now: Instant) -> bool {
         // A restarted Vector starts its counters again from zero.
         if derived.sent < self.delivered || derived.sink_discarded < self.refused {
@@ -744,7 +744,7 @@ impl SinkProgress {
 ///
 /// Spawns a background task and returns immediately. A scrape that fails bumps
 /// `transform_vector_scrape_failures_total` and warns at most once every five
-/// minutes; it never aborts the loop and leaves `stalled` as it was. A gauge
+/// minutes. It never aborts the loop and leaves `stalled` as it was. A gauge
 /// unseen for `expiry_ticks` ticks is zeroed.
 ///
 /// `stalled` is set while the sink has records waiting and has delivered none
@@ -892,7 +892,7 @@ pub struct ReloadCounts {
 }
 
 impl ReloadCounts {
-    /// Read the reload counters out of an exposition; `None` when it does not
+    /// Read the reload counters out of an exposition, or `None` when it does not
     /// parse. A counter Vector has not incremented yet is absent, and reads 0.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
@@ -970,7 +970,7 @@ vector_buffer_events 7
     }
 
     /// A record Vector rejected, or the size cap held back, is counted as
-    /// lost; the samples are the shapes Vector 0.58 exports.
+    /// lost. The samples are the shapes Vector 0.58 exports.
     #[test]
     fn rejected_records_come_from_the_sink_and_the_size_cap() {
         let text = "\
@@ -1481,7 +1481,8 @@ vector_rtt_seconds_count 9
         assert_eq!(to_u64(12.9), 12);
     }
 
-    /// A counter, a gauge and a 6-bucket histogram per group, ~3000 lines.
+    /// A counter, a gauge and a 6-bucket histogram per group, over enough
+    /// groups to stand for a large topology.
     fn large_exposition() -> String {
         use std::fmt::Write as _;
 

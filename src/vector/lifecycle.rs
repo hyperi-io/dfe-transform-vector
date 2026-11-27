@@ -9,8 +9,8 @@
 //! Vector subprocess lifecycle states.
 //!
 //! Tracks the current state of the Vector child process through its
-//! lifecycle: initialising → validating → starting → running →
-//! reloading → shutting down → crashed.
+//! lifecycle: initialising -> validating -> starting -> running ->
+//! reloading -> shutting down -> crashed.
 
 use std::sync::Arc;
 
@@ -167,7 +167,7 @@ mod tests {
         assert!(lc.set_if(State::Running, State::Reloading));
         assert_eq!(lc.state(), State::Reloading);
 
-        // The supervisor has since recorded a crash; the reload loop's
+        // The supervisor has since recorded a crash. The reload loop's
         // hand-back must not resurrect it.
         lc.set(State::Crashed);
         assert!(!lc.set_if(State::Reloading, State::Running));

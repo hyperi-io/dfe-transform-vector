@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      src/deployment.rs
-// Purpose:   Deployment contract — Dockerfile, Helm chart, Compose generation
+// Purpose:   Deployment contract -- Dockerfile, Helm chart, Compose generation
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -127,7 +127,7 @@ pub fn contract() -> DeploymentContract {
         depends_on: vec!["kafka".into()],
         // `KedaContract` is `#[non_exhaustive]`, so it cannot be built via a
         // struct literal. Build the app's real KEDA
-        // values into a `KedaConfig` and convert; the `scaling_pressure_*`
+        // values into a `KedaConfig` and convert. The `scaling_pressure_*`
         // trigger fields stay at their defaults (OFF -- the Prometheus
         // serverAddress is cluster-specific and must be set before enabling).
         keda: Some(
@@ -273,7 +273,7 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
 
 /// Vector.dev version bundled into the published image.
 ///
-/// Pinned. Update deliberately — Vector minor versions can change CLI
+/// Pinned. Update deliberately -- Vector minor versions can change CLI
 /// flags and config schema. The `vector.version` default in
 /// [`crate::config::loader::VectorConfig`] and the contract's own
 /// `default_config` both read this constant, so a deployment's expected
@@ -294,7 +294,7 @@ const VECTOR_SHA256_ARM64: &str =
 
 /// The Vector install layer, spliced into the generated Dockerfile.
 ///
-/// A real Dockerfile so hadolint and shellcheck can lint it; see
+/// A real Dockerfile so hadolint and shellcheck can lint it. See
 /// [`emit_dockerfile`].
 const VECTOR_LAYER_TEMPLATE: &str = include_str!("vector-layer.dockerfile");
 
@@ -312,11 +312,11 @@ const SHA256_ARM64_PLACEHOLDER: &str = "@VECTOR_SHA256_ARM64@";
 /// Wraps `scalo::deployment::generate_dockerfile` and inserts
 /// the Vector binary download + data-directory setup before `USER appuser`.
 ///
-/// dfe-transform-vector ships TWO binaries in its runtime image — its own
+/// dfe-transform-vector ships TWO binaries in its runtime image -- its own
 /// Rust wrapper (autobuilt by cargo, handled by scalo's contract) AND
 /// the upstream `vector` binary (downloaded inside the build at the
 /// version pinned by [`VECTOR_VERSION`]). The other DFE Rust apps
-/// are single-binary images; this consumer-side override exists because
+/// are single-binary images. This consumer-side override exists because
 /// scalo's deployment contract has no slot for an add-on native binary.
 ///
 /// When `hyperi-ci` grows an overlay framework this override moves into

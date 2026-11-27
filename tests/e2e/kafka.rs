@@ -11,21 +11,21 @@
 //! Produces a message, lets Vector process it through our assembled config
 //! with a remap transform, consumes from the sink topic, and verifies the
 //! transform was applied. Validates the full generated Vector YAML against
-//! a real Kafka broker — including librdkafka options, security protocol
+//! a real Kafka broker -- including librdkafka options, security protocol
 //! auto-injection, and DAG wiring.
 //!
-//! **Backend selection** (automatic — see `tests/common/mod.rs`):
-//! 1. Live cluster from `.env` (preferred — realistic multi-broker setup, faster).
+//! **Backend selection** (automatic -- see `tests/common/mod.rs`):
+//! 1. Live cluster from `.env` (preferred -- realistic multi-broker setup, faster).
 //! 2. The run's shared Apache Kafka broker (fallback when live is unavailable).
 //! 3. Skipped entirely if neither is available.
 //!
 //! Requires Vector binary. Skips gracefully if not found.
 //!
-//! **Cleanup:** Vector subprocess uses `kill_on_drop(true)` — guaranteed
+//! **Cleanup:** Vector subprocess uses `kill_on_drop(true)` -- guaranteed
 //! termination on any exit path. scalo removes the broker containers when the
 //! run ends.
 //! Topics have unique nanosecond suffixes so residuals do not affect repeat
-//! runs; explicit delete runs on the happy path.
+//! runs. Explicit delete runs on the happy path.
 //!
 //! Run with: `cargo nextest run --test e2e --run-ignored all`
 
@@ -191,7 +191,7 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
 
     let vector_bin = vector_binary_path().expect("vector binary");
 
-    // Unique topic names per run — residuals on panic are harmless.
+    // Unique topic names per run -- residuals on panic are harmless.
     let suffix = unique_suffix();
     let source_topic = format!("dfe_e2e_src_{suffix}");
     let sink_topic = format!("dfe_e2e_sink_{suffix}");
@@ -229,8 +229,8 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
     assembler::assemble(&dfe_config, &config_dir).expect("assemble config");
 
     // Spawn Vector against real Kafka. kill_on_drop(true) ensures the
-    // subprocess is SIGKILLed on any exit path — panic, assertion failure,
-    // or normal return — so we never leak Vector processes.
+    // subprocess is SIGKILLed on any exit path -- panic, assertion failure,
+    // or normal return -- so we never leak Vector processes.
     let mut vector_cmd = Command::new(vector_bin);
     vector_cmd
         .arg("--config-dir")
@@ -257,7 +257,7 @@ async fn e2e_kafka_pipeline_produces_consumes_with_transform() {
     )
     .await;
 
-    // Ensure Vector is reaped before topic cleanup — avoids races where
+    // Ensure Vector is reaped before topic cleanup -- avoids races where
     // Vector is still holding consumer group membership.
     let _ = vector_child.start_kill();
     let _ = tokio::time::timeout(Duration::from_secs(3), vector_child.wait()).await;
@@ -619,7 +619,7 @@ struct CeilingTopics<'a> {
     dlq: &'a str,
 }
 
-/// Send a record the transform grows past the ceiling, then a 2 MiB one; wait
+/// Send a record the transform grows past the ceiling, then a 2 MiB one. Wait
 /// for the 2 MiB record downstream, then check the grown one was kept off the
 /// sink topic and written once to the DLQ topic as scalo's envelope.
 async fn run_ceiling_assertions(
@@ -1011,7 +1011,7 @@ async fn run_oversize_assertions(
 }
 
 /// Returns `Ok(())` if the pipeline delivered the transformed message.
-/// Returns `Err(msg)` with context on any assertion failure — this is so
+/// Returns `Err(msg)` with context on any assertion failure -- this is so
 /// the caller can run cleanup before panicking.
 async fn run_pipeline_assertions(
     kf_base: &KafkaConfig,
@@ -1084,14 +1084,14 @@ async fn run_pipeline_assertions(
 
     let payload = seen_payload.ok_or_else(|| {
         "did not receive enriched message on sink topic within 30s \
-         — pipeline did not deliver"
+         -- pipeline did not deliver"
             .to_string()
     })?;
 
     // Verify the transform was actually applied.
     if !payload.contains("\"enriched\":true") && !payload.contains("enriched\":true") {
         return Err(format!(
-            "transform did not apply — payload missing `enriched`: {payload}"
+            "transform did not apply -- payload missing `enriched`: {payload}"
         ));
     }
     if !payload.contains("processed_at") {
@@ -1101,7 +1101,7 @@ async fn run_pipeline_assertions(
     }
     if !payload.contains(suffix) {
         return Err(format!(
-            "payload id does not match — received wrong message: {payload}"
+            "payload id does not match -- received wrong message: {payload}"
         ));
     }
 

@@ -3,7 +3,7 @@
 # Parse a JSON payload from the `message` field into structured fields.
 # Errors are surfaced as `.parse_error` rather than dropping the event.
 #
-# Position: first in chain — inputs auto-wired to dfe_source
+# Position: first in chain -- inputs auto-wired to dfe_source
 
 transforms:
   parse_message:

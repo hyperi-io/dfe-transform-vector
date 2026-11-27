@@ -222,7 +222,7 @@ fn kafka_source_component(source: &SourceConfig) -> Mapping {
         component.insert(key("tls"), build_tls_block(&source.tls));
     }
 
-    // librdkafka options — production defaults + user overrides
+    // librdkafka options -- production defaults + user overrides
     let rdkafka = build_source_librdkafka(source);
     component.insert(key("librdkafka_options"), Value::Object(rdkafka));
 
@@ -488,7 +488,7 @@ fn dead_letter_sink_component(sink: &SinkConfig, acknowledged: bool) -> Mapping 
 /// The `vector` sink that hands the transformed records back to the supervisor.
 ///
 /// The buffer is the operator's dial on both transports, so it is carried here
-/// too; `acknowledgements` completes the hold-rather-than-drop chain the
+/// too. `acknowledgements` completes the hold-rather-than-drop chain the
 /// `vector` source starts.
 fn direct_sink_component(
     sink: &SinkConfig,
@@ -543,7 +543,7 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
     // so `build_sink_librdkafka` keeps that spelling out.
     component.insert(key("compression"), val(&sink.compression));
 
-    // Acknowledgements — on the sink (not source) per Vector 0.53+ guidance
+    // Acknowledgements -- on the sink (not source) per Vector 0.53+ guidance
     component.insert(key("acknowledgements"), enabled_block(acknowledged));
 
     // Healthcheck
@@ -559,7 +559,7 @@ fn kafka_sink_component(sink: &SinkConfig, inputs: &[String], acknowledged: bool
         Value::Number(sink.socket_timeout_ms.into()),
     );
 
-    // librdkafka options — production defaults + user overrides
+    // librdkafka options -- production defaults + user overrides
     let mut rdkafka = build_sink_librdkafka(sink);
 
     // Vector always writes `batch.timeout_secs` as `queue.buffering.max.ms`,
@@ -638,7 +638,7 @@ fn input_list(inputs: &[String]) -> Value {
 
 /// Generate Vector observability YAML (internal_metrics + prometheus_exporter).
 ///
-/// `address` is `metrics.vector_metrics_address`; the wrapper scrapes the same
+/// `address` is `metrics.vector_metrics_address`. The wrapper scrapes the same
 /// address and merges the samples into the scalo registry, so it stays on
 /// loopback rather than being published. Hard-coding it here instead left that
 /// config key accepted, validated and inert.
@@ -1133,7 +1133,7 @@ mod tests {
         // SERVICE_CONSUMER_OVERRIDES.
         assert!(text.contains("enable.auto.commit: \"true\""));
         assert!(text.contains("statistics.interval.ms: \"1000\""));
-        // Removed settings — back to librdkafka defaults
+        // Removed settings -- back to librdkafka defaults
         assert!(!text.contains("queued.max.messages.kbytes"));
         assert!(!text.contains("socket.receive.buffer.bytes"));
         assert!(!text.contains("fetch.max.bytes"));
@@ -1143,7 +1143,7 @@ mod tests {
         assert!(text.contains("auto_offset_reset: largest"));
         // Consumer lag metric enabled
         assert!(text.contains("topic_lag_metric: true"));
-        // SASL disabled by default — no security.protocol
+        // SASL disabled by default -- no security.protocol
         assert!(!text.contains("security.protocol"));
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
         assert_eq!(healthcheck(crate::config::Transport::Bus), Some(true));
     }
 
-    /// Vector deprecates acknowledgements set on a source; the direct source
+    /// Vector deprecates acknowledgements set on a source. The direct source
     /// takes them from its sink.
     #[test]
     fn the_direct_source_takes_acknowledgements_from_its_sink() {
@@ -1766,7 +1766,7 @@ mod tests {
         assert!(text.contains("statistics.interval.ms: \"1000\""));
         // Service-specific override: producer queue cap
         assert!(text.contains("queue.buffering.max.kbytes: \"262144\""));
-        // Removed settings — back to librdkafka defaults
+        // Removed settings -- back to librdkafka defaults
         assert!(!text.contains("batch.size"));
         assert!(!text.contains("batch.num.messages"));
         // The pipeline's record ceiling, not librdkafka's 1,000,000 default.

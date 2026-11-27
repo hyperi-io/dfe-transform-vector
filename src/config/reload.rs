@@ -54,9 +54,9 @@ const RELOAD_CONFIRM_POLL: Duration = Duration::from_secs(1);
 pub enum ChangeKind {
     /// No changes detected.
     None,
-    /// Only transform files changed — safe for hot-reload via SIGHUP.
+    /// Only transform files changed -- safe for hot-reload via SIGHUP.
     TransformsOnly,
-    /// Source, sink, or other infrastructure changed — requires full restart.
+    /// Source, sink, or other infrastructure changed -- requires full restart.
     Unsafe,
 }
 
@@ -65,13 +65,8 @@ pub enum ChangeKind {
 /// Only `transforms` changes are safe for hot-reload. Everything else is bound
 /// at startup (servers, connections, labels) and needs a pod restart.
 ///
-/// Asks "is this the old config with a new `transforms` block?" rather than
-/// listing the siblings that must match. The list was the bug: it named the
-/// eight sibling structs and never mentioned `dfe_source`, so a `dfe_source`
-/// edit passed as transforms-only and the loop logged "config hot-reload
-/// completed successfully" for a change it had not applied. A field added to
-/// [`Config`] later joins the comparison for free, which is what the old
-/// comment claimed and the old code did the opposite of.
+/// Compares the whole config with `transforms` swapped for the old one, so a
+/// field added to [`Config`] joins the comparison without an edit here.
 pub fn classify_change(old: &Config, new: &Config) -> ChangeKind {
     if old == new {
         return ChangeKind::None;
@@ -152,7 +147,7 @@ fn main_config_files(config_path: Option<&str>) -> Vec<PathBuf> {
     )
 }
 
-/// Reload trigger — either from the file watcher or a manual SIGHUP.
+/// Reload trigger -- either from the file watcher or a manual SIGHUP.
 #[derive(Debug)]
 pub enum ReloadTrigger {
     /// File changes detected by the poll-based watcher.
@@ -830,7 +825,7 @@ mod tests {
     }
 
     /// A failure on unchanged files is retried after the poll interval, then
-    /// at double the wait each time to the cap; a change goes at once, and a
+    /// at double the wait each time to the cap. A change goes at once, and a
     /// success or a change needing a restart stops the retries.
     #[test]
     fn a_failed_reload_is_retried_with_backoff_until_it_succeeds() {

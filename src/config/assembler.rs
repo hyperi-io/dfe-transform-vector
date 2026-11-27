@@ -98,7 +98,6 @@ pub fn assemble_for(config: &Config, output_dir: &Path, published: &Path) -> Res
     let components = extract_components(&transforms)?;
     let wiring = auto_wire(components)?;
 
-    // Validate the DAG
     validate_dag(&wiring)?;
     debug!("DAG validation passed");
 
@@ -165,7 +164,7 @@ fn write_transforms(
         return Ok(());
     }
 
-    // Build a lookup from component label → wired inputs
+    // Build a lookup from component label -> wired inputs
     let mut wired_inputs: std::collections::HashMap<&str, &[String]> =
         std::collections::HashMap::new();
     for c in &wiring.components {
@@ -231,12 +230,47 @@ fn credential_paths(config: &Config, published: &Path, output_dir: &Path) -> Vec
     paths
 }
 
+/// What a refused VRL function that reads a file does.
+const READS_A_FILE: &str = "reads the file the program names";
+
+/// What a refused VRL decompression function does.
+const INFLATES: &str = "inflates a record with no bound on its size";
+
+/// What a refused VRL network function does.
+const REACHES_THE_NETWORK: &str = "reaches the network";
+
+/// VRL functions a transform may not call, with what each does that the pod
+/// cannot allow.
+///
+/// The functions dfe-transform-vrl's compiler leaves out: its `REFUSED_FUNCTIONS`
+/// and the network functions it builds without.
+const REFUSED_VRL_CALLS: [(&str, &str); 12] = [
+    ("get_hostname", "reads the host's name"),
+    ("http_request", REACHES_THE_NETWORK),
+    ("dns_lookup", REACHES_THE_NETWORK),
+    ("reverse_dns", REACHES_THE_NETWORK),
+    ("parse_proto", READS_A_FILE),
+    ("encode_proto", READS_A_FILE),
+    ("validate_json_schema", READS_A_FILE),
+    ("decode_gzip", INFLATES),
+    ("decode_zlib", INFLATES),
+    ("decode_zstd", INFLATES),
+    ("decode_lz4", INFLATES),
+    ("decode_snappy", INFLATES),
+];
+
+/// VRL arguments that name a file to read, each with the function taking it.
+const REFUSED_VRL_ARGUMENTS: [(&str, &str); 2] =
+    [("parse_etld", "psl"), ("parse_groks", "alias_sources")];
+
 /// Refuse a transform file that declares more than transforms and enrichment
-/// tables loading from `data_dir`.
+/// tables loading from `data_dir`, or a transform that reads a file or
+/// inflates a record without a bound.
 ///
 /// Vector runs whatever the file declares with its own reach, so a source,
-/// sink, secret backend or out-of-dir table could read the Kafka credentials
-/// under any of `credentials`, which may sit inside `data_dir` too.
+/// sink, secret backend, out-of-dir table or file-reading transform could read
+/// the Kafka credentials under any of `credentials`, which may sit inside
+/// `data_dir` too.
 fn refuse_out_of_scope_keys(
     lt: &LoadedTransform,
     data_dir: &Path,
@@ -254,19 +288,10 @@ fn refuse_out_of_scope_keys(
     for (key, value) in document {
         match key.as_str() {
             "transforms" => {
-                // Lua is the one transform type with file and process access.
-                let lua = value
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .find(|(_, component)| {
-                        component.get("type").and_then(serde_json::Value::as_str) == Some("lua")
-                    });
-                if let Some((label, _)) = lua {
-                    return refuse(format!(
-                        "declares transform '{label}' of type 'lua', which can read any file \
-                         Vector can"
-                    ));
+                for (label, component) in value.as_object().into_iter().flatten() {
+                    if let Some(why) = refused_transform(component) {
+                        return refuse(format!("declares transform '{label}' {why}"));
+                    }
                 }
             }
             "enrichment_tables" => {
@@ -320,6 +345,97 @@ fn refuse_out_of_scope_keys(
         }
     }
     Ok(())
+}
+
+/// Why Vector may not run `component`, or `None` when it may.
+fn refused_transform(component: &serde_json::Value) -> Option<String> {
+    // Lua is the one transform type with file and process access.
+    if component.get("type").and_then(serde_json::Value::as_str) == Some("lua") {
+        return Some("of type 'lua', which can read any file Vector can".into());
+    }
+    // A `remap` loads its VRL from these, and Vector quotes a file it cannot
+    // compile in its validate report.
+    if let Some(key) = ["file", "files"]
+        .into_iter()
+        .find(|key| component.get(key).is_some())
+    {
+        return Some(format!(
+            "that sets '{key}', which loads a file Vector can read, credentials included"
+        ));
+    }
+    // VRL can sit in any string a transform holds: a `source`, a `condition`, a route.
+    let mut texts = Vec::new();
+    collect_strings(component, &mut texts);
+    texts.into_iter().find_map(refused_vrl)
+}
+
+/// Push every string in `value`, at any depth, onto `out`.
+fn collect_strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+    match value {
+        serde_json::Value::String(text) => out.push(text),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_strings(item, out);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for field in fields.values() {
+                collect_strings(field, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Why `vrl` may not run: a refused call or a file argument, or `None`.
+fn refused_vrl(vrl: &str) -> Option<String> {
+    if let Some((function, does)) = REFUSED_VRL_CALLS
+        .iter()
+        .find(|(function, _)| calls(vrl, function))
+    {
+        return Some(format!(
+            "that calls the VRL function '{function}', which {does}"
+        ));
+    }
+    REFUSED_VRL_ARGUMENTS
+        .iter()
+        .find(|(function, argument)| calls(vrl, function) && passes(vrl, argument))
+        .map(|(function, argument)| {
+            format!(
+                "that passes '{argument}' to the VRL function '{function}', which reads the \
+                 file it names"
+            )
+        })
+}
+
+/// Whether `vrl` calls `function`: its name, an optional `!`, then `(`.
+///
+/// VRL builds no call from a string, so the text is the program. A match in a
+/// comment, or with a space VRL rejects before the `(`, refuses needlessly
+/// rather than miss a call.
+fn calls(vrl: &str, function: &str) -> bool {
+    identifier_followed_by(vrl, function, |rest| {
+        let rest = rest.trim_start();
+        rest.strip_prefix('!')
+            .unwrap_or(rest)
+            .trim_start()
+            .starts_with('(')
+    })
+}
+
+/// Whether `vrl` passes the named argument `argument`: its name, then `:`.
+fn passes(vrl: &str, argument: &str) -> bool {
+    identifier_followed_by(vrl, argument, |rest| rest.trim_start().starts_with(':'))
+}
+
+/// Whether `name` stands in `vrl` as a whole identifier with `rest_matches`
+/// true of the text after it.
+fn identifier_followed_by(vrl: &str, name: &str, rest_matches: impl Fn(&str) -> bool) -> bool {
+    let identifier = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    vrl.match_indices(name).any(|(at, _)| {
+        !vrl[..at].chars().next_back().is_some_and(identifier)
+            && rest_matches(&vrl[at + name.len()..])
+    })
 }
 
 /// `path` as the OS resolves it, `..` and symlinks included, or with `.` and
@@ -460,7 +576,8 @@ mod tests {
 
     /// Vector runs a transform file with its own reach and substitutes
     /// `SECRET[...]` in VRL text too, so any route to the Kafka credentials in
-    /// the config dir is refused, YAML escapes and symlinks included.
+    /// the config dir is refused, YAML escapes and symlinks included. So is VRL,
+    /// in any transform, that reads a file or inflates a record.
     #[test]
     fn a_transform_file_reaching_the_credentials_is_refused() {
         const REMAP: &str =
@@ -514,6 +631,66 @@ mod tests {
                     .into(),
                 Some("type 'lua'"),
             ),
+            (
+                "transforms:\n  f:\n    type: remap\n    inputs: [dfe_source]\n    \
+                 file: '{config}/.secrets/sink_sasl_password'\n"
+                    .into(),
+                Some("sets 'file'"),
+            ),
+            (
+                "transforms:\n  f:\n    type: remap\n    inputs: [dfe_source]\n    \
+                 files: ['{config}/.secrets/sink_sasl_password']\n"
+                    .into(),
+                Some("sets 'files'"),
+            ),
+            (
+                "transforms:\n  f:\n    type: reduce\n    inputs: [dfe_source]\n    \
+                 file: '{config}/.secrets/sink_sasl_password'\n"
+                    .into(),
+                Some("sets 'file'"),
+            ),
+            (remap(r#"'.h = get_hostname!()'"#), Some("'get_hostname'")),
+            (
+                remap(r#"'.r = http_request("http://x")'"#),
+                Some("'http_request'"),
+            ),
+            (remap(r#"'.a = dns_lookup!(.h)'"#), Some("'dns_lookup'")),
+            (remap(r#"'.h = reverse_dns!(.ip)'"#), Some("'reverse_dns'")),
+            (
+                remap(r#"'. = parse_proto!(.m, "/x.desc", "a.B")'"#),
+                Some("'parse_proto'"),
+            ),
+            (
+                remap(r#"'.m = encode_proto!(., "/x.desc", "a.B")'"#),
+                Some("'encode_proto'"),
+            ),
+            (
+                remap(r#"'.ok = validate_json_schema!(.m, "/x.json")'"#),
+                Some("'validate_json_schema'"),
+            ),
+            (remap(r#"'.m = decode_gzip!(.m)'"#), Some("'decode_gzip'")),
+            (remap(r#"'.m = decode_zlib(.m) ?? .m'"#), Some("'decode_zlib'")),
+            (remap(r#"'.m = decode_zstd! (.m)'"#), Some("'decode_zstd'")),
+            (remap(r#"'.m = decode_lz4!(.m)'"#), Some("'decode_lz4'")),
+            (remap(r#"'.m = decode_snappy!(.m)'"#), Some("'decode_snappy'")),
+            (
+                "transforms:\n  f:\n    type: filter\n    inputs: [dfe_source]\n    \
+                 condition: 'length(decode_gzip!(.m)) > 0'\n"
+                    .into(),
+                Some("'decode_gzip'"),
+            ),
+            (
+                remap(r#"'.d = parse_etld!(.host, psl: "/x.dat")'"#),
+                Some("'psl'"),
+            ),
+            (
+                remap(r#"'. = parse_groks!(.m, patterns: ["%{x}"], alias_sources: ["/x"])'"#),
+                Some("'alias_sources'"),
+            ),
+            (remap(r#"'.d = parse_etld!(.host)'"#), None),
+            (remap(r#"'.note = "decode_gzip"'"#), None),
+            (remap(r#"'.x = encode_gzip(.m)'"#), None),
+            (remap(r#"'.p = get_env_var("DFE_PIPELINE_NAME") ?? "x"'"#), None),
             (
                 table("{data}/../config/.secrets/sink_sasl_password"),
                 Some("holds a Kafka credential"),

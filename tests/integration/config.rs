@@ -8,8 +8,8 @@
 
 //! Integration tests for the full config assembly pipeline.
 //!
-//! Tests the end-to-end flow: big-dial config → YAML generation →
-//! transform loading → DAG wiring → config directory assembly.
+//! Tests the end-to-end flow: big-dial config -> YAML generation ->
+//! transform loading -> DAG wiring -> config directory assembly.
 
 use std::fs;
 
@@ -148,7 +148,7 @@ fn end_to_end_assembly_with_transforms() {
     assert!(source.contains("SECRET[dfe_credentials.source_sasl_username]"));
     assert!(source.contains("cooperative-sticky"));
 
-    // Verify sink YAML content — the size cap reads the last transform, the
+    // Verify sink YAML content -- the size cap reads the last transform, the
     // sink reads what fits, and the dead letter sink reads what does not
     let sink = fs::read_to_string(output_dir.path().join("90_sink.yaml")).unwrap();
     let sink_yaml: serde_json::Value =
@@ -259,7 +259,7 @@ fn assembly_rejects_broken_dag() {
 fn assembly_rejects_cyclic_dag() {
     let transforms_dir = TempDir::new().unwrap();
 
-    // a depends on dfe_source + b, b depends on a → cycle
+    // a depends on dfe_source + b, b depends on a -> cycle
     fs::write(
         transforms_dir.path().join("01_cycle.yaml"),
         r#"transforms:
@@ -1383,7 +1383,7 @@ fn config_minimal_valid_passes_validation() {
 
 #[test]
 fn config_with_all_fields_populated_validates() {
-    // Everything set to non-default values — tests that maximal configs pass
+    // Everything set to non-default values -- tests that maximal configs pass
     let config = Config {
         dfe_source: Some("syslog".into()),
         pipeline: PipelineConfig {
@@ -1505,7 +1505,7 @@ fn config_with_all_fields_populated_validates() {
 
 #[test]
 fn config_multiple_validation_errors_reports_first() {
-    // Multiple invalid fields — verify we get a clear first error, not a confusing cascade
+    // Multiple invalid fields -- verify we get a clear first error, not a confusing cascade
     let config = Config {
         pipeline: PipelineConfig {
             name: String::new(), // Invalid: empty
@@ -1557,7 +1557,7 @@ fn config_empty_file_loads_defaults() {
     let path = dir.path().join("empty.yaml");
     fs::write(&path, "").unwrap();
 
-    // Empty YAML is valid — deserialises as null, which should either
+    // Empty YAML is valid -- deserialises as null, which should either
     // produce defaults or an error (both acceptable)
     let _ = load_config(Some(path.to_str().unwrap()));
 }
@@ -1585,7 +1585,7 @@ sink:
 
     // serde strict mode should reject unknown fields
     let result = load_config(Some(path.to_str().unwrap()));
-    // If serde is not in deny_unknown_fields mode, this passes — that's a finding
+    // If serde is not in deny_unknown_fields mode, this passes -- that's a finding
     // Either way, the test documents the current behaviour
     if let Ok(config) = result {
         // At minimum the known fields should be correct
@@ -1601,15 +1601,15 @@ fn config_reloading_state_keeps_readiness() {
 
     let lc = Lifecycle::new();
 
-    // Running → ready
+    // Running -> ready
     lc.set(State::Running);
     assert!(lc.state().is_ready());
 
-    // Reloading → still ready (critical: traffic keeps flowing during reload)
+    // Reloading -> still ready (critical: traffic keeps flowing during reload)
     lc.set(State::Reloading);
     assert!(
         lc.state().is_ready(),
-        "Reloading state must maintain readiness — traffic should keep flowing"
+        "Reloading state must maintain readiness -- traffic should keep flowing"
     );
     assert!(lc.state().is_alive(), "Reloading state must be alive");
 }
@@ -1911,7 +1911,7 @@ fn config_shutting_down_is_not_ready() {
     lc.set(State::ShuttingDown);
     assert!(
         !lc.state().is_ready(),
-        "ShuttingDown must not be ready — K8s should stop routing traffic"
+        "ShuttingDown must not be ready -- K8s should stop routing traffic"
     );
     // ShuttingDown should still be alive (process is draining, not dead)
     assert!(

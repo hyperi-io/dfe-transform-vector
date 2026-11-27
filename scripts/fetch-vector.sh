@@ -56,10 +56,8 @@ esac
 
 # Desired version: env override, else the version this image ships.
 #
-# It used to default to whatever GitHub called `latest`, which meant tests ran
-# against a different Vector to the one we deploy -- and drifted apart silently
-# as upstream released. That is the wrong direction for a dependency whose CLI
-# flags and config schema move between minors.
+# Never `latest`: tests run against the Vector the image ships, whose CLI flags
+# and config schema move between minors.
 #
 # The single source is the const in src/deployment.rs, which also drives the
 # Dockerfile ARG and the runtime version check. Read rather than duplicated, so
@@ -88,7 +86,7 @@ fi
 mkdir -p "${CACHE_DIR}"
 
 # mkdir is atomic on POSIX: exactly one concurrent run creates the lock and
-# downloads; the rest wait for the binary to appear.
+# downloads. The rest wait for the binary to appear.
 if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
     echo "Another run is fetching Vector ${VECTOR_VERSION}; waiting..." >&2
     for _ in $(seq 1 300); do

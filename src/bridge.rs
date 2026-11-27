@@ -25,7 +25,7 @@
 //! outside it may reach them.
 //!
 //! The two halves are independent. A stage that consumes a topic and pushes
-//! onward runs the lower leg alone; a stage that receives pushes and produces to
+//! onward runs the lower leg alone. A stage that receives pushes and produces to
 //! a topic runs the upper one. Vector's own component follows the same split --
 //! `kafka` on the bus end, `vector` on the direct one.
 //!
@@ -188,7 +188,7 @@ struct Outbound {
 pub struct Bridge {
     inbound: Option<Inbound>,
     outbound: Option<Outbound>,
-    /// Runs both legs; its `max_chunk_size` is the records moved per hop.
+    /// Runs both legs. Its `max_chunk_size` is the records moved per hop.
     engine: BatchEngine,
 }
 
@@ -428,35 +428,38 @@ async fn run_inbound(
         .run_with_pieces(
             Ok,
             |batch: &WorkBatch<GrpcToken>, pieces: &BlockPieces<'_>| {
-                let sizes: Vec<usize> = batch.records.iter().map(|r| r.payload.len()).collect();
-                let events: Vec<serde_json::Value> =
-                    batch.records.iter().map(|r| as_event(&r.payload)).collect();
+                // Shares the payload buffers. Each run is parsed only when it is
+                // sent, so one run's events are held at a time, not the batch's.
+                let payloads: Vec<Bytes> =
+                    batch.records.iter().map(|r| r.payload.clone()).collect();
                 let to_vector = Arc::clone(to_vector);
-                // Carries only what Vector rejected for good; the pipeline's
+                // Carries only what Vector rejected for good. The pipeline's
                 // own piece carries whether the batch was delivered.
                 let rejected_piece = pieces.piece();
                 async move {
                     let mut rejected = 0_usize;
+                    let sizes: Vec<usize> = payloads.iter().map(Bytes::len).collect();
                     // A push that can clear retries the whole batch, so a run
                     // Vector already took is sent again: duplicated, never lost.
                     for run in runs_within(&sizes, VECTOR_PUSH_BYTES) {
-                        let run = &events[run];
-                        match to_vector.send_events_status(run).await {
+                        let events: Vec<serde_json::Value> =
+                            payloads[run].iter().map(as_event).collect();
+                        match to_vector.send_events_status(&events).await {
                             Ok(()) => {}
                             Err(status) if VectorCompatClient::is_permanent_rejection(&status) => {
                                 warn!(
                                     code = ?status.code(),
                                     message = status.message(),
-                                    records = run.len(),
+                                    records = events.len(),
                                     "Vector rejected the records for good -- releasing them \
                                      as dropped"
                                 );
-                                rejected += run.len();
+                                rejected += events.len();
                             }
                             Err(status) => {
                                 warn!(
                                     error = %status,
-                                    records = events.len(),
+                                    records = payloads.len(),
                                     "Vector would not take the batch -- holding it and retrying"
                                 );
                                 // Delivered is the merge's identity, so a
@@ -792,7 +795,7 @@ mod tests {
     }
 
     /// Records Vector rejected for good release their block `Dropped` and are
-    /// counted; an attempt with none adds nothing.
+    /// counted. An attempt with none adds nothing.
     #[test]
     fn records_vector_rejected_are_dropped_and_counted() {
         let recorder = metrics_util::debugging::DebuggingRecorder::new();
@@ -808,7 +811,7 @@ mod tests {
         );
     }
 
-    /// A leg that stops on its own takes the service down with it; one that
+    /// A leg that stops on its own takes the service down with it. One that
     /// stops cleanly does not.
     #[test]
     fn a_failed_leg_signals_the_service_and_returns_its_error() {

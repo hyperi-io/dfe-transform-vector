@@ -85,33 +85,58 @@ pub async fn vector_validate(vector_config: &VectorConfig, config_dir: &Path) ->
         .await
         .map_err(|e| crate::Error::Vector(format!("failed to run '{binary} validate': {e}")))?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
     if output.status.success() {
         debug!("vector validate passed");
         return Ok(());
     }
 
     let exit_code = output.status.code().unwrap_or(-1);
+    let refused = refusal_summary(&String::from_utf8_lossy(&output.stdout));
 
     if exit_code == VECTOR_CONFIG_ERROR_EXIT {
-        error!(exit_code, stderr = %stderr, "vector config validation failed");
+        error!(exit_code, refused = %refused, "vector config validation failed");
         return Err(crate::Error::Validation(format!(
-            "Vector config validation failed (exit {exit_code}): {stderr}"
+            "Vector config validation failed (exit {exit_code}): {refused}"
         )));
     }
 
-    // Unexpected exit code
     error!(
         exit_code,
-        stderr = %stderr,
-        stdout = %stdout,
+        refused = %refused,
         "vector validate exited with unexpected code"
     );
     Err(crate::Error::Vector(format!(
-        "vector validate exited with code {exit_code}: {stderr}"
+        "vector validate exited with code {exit_code}: {refused}"
     )))
+}
+
+/// The components `vector validate` refused, each with its VRL error codes,
+/// read from the report it writes to stdout.
+///
+/// Only these lines leave the process. Vector quotes the source under each VRL
+/// error, and its stderr warnings name identifiers from it, so a program loaded
+/// from a credential file would print the credential.
+fn refusal_summary(stdout: &str) -> String {
+    let mut refused: Vec<String> = Vec::new();
+    for line in stdout.lines().map(str::trim) {
+        if let Some(component) = line.strip_prefix("x ") {
+            refused.push(component.to_string());
+        } else if line.starts_with("error[") {
+            match refused.last_mut() {
+                Some(component) => {
+                    component.push(' ');
+                    component.push_str(line);
+                }
+                None => refused.push(line.to_string()),
+            }
+        }
+    }
+    if refused.is_empty() {
+        return "Vector named no component. Run `vector validate --no-environment --config-dir \
+                <dir>` in the pod for its full report"
+            .into();
+    }
+    refused.join("\n")
 }
 
 /// Check the Vector binary version against the configured pin.
@@ -206,7 +231,7 @@ pub enum DataDirBacking {
 ///
 /// Only what is visible from WITHIN the container: whether the path falls on a
 /// mount of its own, or on the container's root filesystem. A k8s volume and a
-/// docker bind both appear as their own mount point; the writable layer does
+/// docker bind both appear as their own mount point. The writable layer does
 /// not. That distinction is the whole question, and it does not require knowing
 /// anything about the orchestrator.
 ///
@@ -572,7 +597,7 @@ mod tests {
 
     #[test]
     fn longest_matching_mount_point_wins() {
-        // `/` also prefixes the path; the more specific mount must win or every
+        // `/` also prefixes the path. The more specific mount must win or every
         // external mount would read as the writable layer.
         assert_eq!(
             classify_data_dir(
@@ -755,6 +780,61 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
             .expect("make the fake binary executable");
         path
+    }
+
+    /// Vector's report on stdout quotes the failing source, and its stderr
+    /// names identifiers from it, so only the refused components and their
+    /// error codes reach the log and the error.
+    #[tokio::test]
+    async fn a_refusal_names_the_component_and_never_the_source() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const QUOTED: &str = "\u{221a} Loaded [\"cfg\"]\n\nTransform errors\n----------------\n\
+             x Transform \"t\": \nerror[E701]: call to undefined variable\n  \u{250c}\u{2500} \
+             :1:1\n  \u{2502}\n1 \u{2502} hunter2\n  \u{2502} ^^^^^^^\n  \u{2502} undefined \
+             variable\n\nx Input \"missing\" for transform \"w\" doesn't match any components.\n";
+        for (report, named, exit) in [
+            (
+                QUOTED,
+                "Transform \"t\": error[E701]: call to undefined variable\n\
+                 Input \"missing\" for transform \"w\" doesn't match any components.",
+                78,
+            ),
+            (
+                "thread 'main' panicked at hunter2\n",
+                "Vector named no component",
+                101,
+            ),
+        ] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let config_dir = tmp.path().join("config");
+            std::fs::create_dir(&config_dir).expect("config dir");
+            let report_file = tmp.path().join("report.txt");
+            std::fs::write(&report_file, report).expect("write the report");
+            let binary = tmp.path().join("vector-that-refuses");
+            std::fs::write(
+                &binary,
+                format!(
+                    "#!/bin/sh\ncat '{}'\necho 'WARN unexpected identifier `hunter2`' >&2\nexit {exit}\n",
+                    report_file.display()
+                ),
+            )
+            .expect("write the fake binary");
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+                .expect("make the fake binary executable");
+            let vector_config = VectorConfig {
+                binary: binary.to_string_lossy().into_owned(),
+                data_dir: String::new(),
+                ..VectorConfig::default()
+            };
+
+            let message = vector_validate(&vector_config, &config_dir)
+                .await
+                .expect_err("a refused config must fail validation")
+                .to_string();
+            assert!(message.contains(named), "{message}");
+            assert!(!message.contains("hunter2"), "{message}");
+        }
     }
 
     /// Startup and reload both validate through `vector_validate`, so a table

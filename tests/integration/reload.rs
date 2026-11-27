@@ -1,12 +1,12 @@
 // Project:   dfe-transform-vector
 // File:      tests/integration/reload.rs
-// Purpose:   Hot-reload integration tests — file change detection and classification
+// Purpose:   Hot-reload integration tests -- file change detection and classification
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Reload integration — file change detection triggers re-assembly, and a
+//! Reload integration -- file change detection triggers re-assembly, and a
 //! reload never manufactures readiness the subprocess has not earned.
 
 use crate::integration::config_env::load_config;
@@ -93,7 +93,7 @@ transforms:
     // Classify this as a transform-only change (re-load config to pick up new file)
     let new_config = load_config(Some(config_path.to_str().unwrap())).unwrap();
     // The Config structs are identical (same YAML), but the transforms dir has new files
-    // classify_change compares Config fields, not filesystem — so it returns None
+    // classify_change compares Config fields, not filesystem -- so it returns None
     let change = classify_change(&config, &new_config);
     assert_eq!(change, ChangeKind::None, "config struct unchanged");
 
@@ -127,7 +127,7 @@ fn write_always_ok_binary(dir: &std::path::Path) -> std::path::PathBuf {
 ///
 /// The failure it guards: Vector crash-loops with the backoff grown to 60s, a
 /// ConfigMap edit lands during the backoff, and the reload marks the lifecycle
-/// `Reloading` (which counts as ready) and then `Running` — so `/readyz`
+/// `Reloading` (which counts as ready) and then `Running` -- so `/readyz`
 /// answers 200 for the rest of the backoff with no subprocess at all, and KEDA
 /// and Argo both read the pod as healthy.
 #[tokio::test]
@@ -295,7 +295,7 @@ fn validation_failures_counted() -> f64 {
     counted("dfe_config_validation_errors_total", "")
 }
 
-/// Poll `done` until it holds or `limit` passes; `true` if it held.
+/// Poll `done` until it holds or `limit` passes, returning `true` if it held.
 async fn eventually(limit: std::time::Duration, done: impl Fn() -> bool) -> bool {
     let deadline = std::time::Instant::now() + limit;
     while !done() {
@@ -447,7 +447,7 @@ async fn a_transform_edit_alone_is_reassembled_and_applied() {
     let starting = load_config(Some(config_path.to_str().unwrap())).unwrap();
     let rig = ReloadRig::start(starting, &config_path, dir.path().join("vector-config"));
     assert!(assembled_parse(&rig.config_dir).contains(".before = true"));
-    // The loop takes its file snapshot when it first runs; the edit must come after.
+    // The loop takes its file snapshot when it first runs. The edit must come after.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     std::fs::write(
@@ -1034,7 +1034,7 @@ fn reload_classify_multi_field_change_is_unsafe() {
     let old = load_config(Some("tests/fixtures/configs/minimal.yaml")).unwrap();
     let mut new = old.clone();
 
-    // Change both transforms AND source — should be unsafe (not transforms-only)
+    // Change both transforms AND source -- should be unsafe (not transforms-only)
     new.transforms.dir = Some("/new/transforms".into());
     new.source.brokers = vec!["different:9092".into()];
 

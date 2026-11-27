@@ -1,12 +1,12 @@
 // Project:   dfe-transform-vector
 // File:      tests/e2e/filebeat_kafka.rs
-// Purpose:   WS21 parity: the filebeat cases through the app, Vector and a broker
+// Purpose:   Parity: the filebeat cases through the app, Vector and a broker
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! The transform hop of the WS21 chain, with Vector doing the transforming.
+//! The transform hop of the filebeat chain, with Vector doing the transforming.
 //!
 //! ```text
 //! filebeat cases -> filebeat_land -> dfe-transform-vector -> filebeat_load
@@ -15,7 +15,7 @@
 //! This is the parity half of the acceptance case: the same cases, the same
 //! bundled filebeat VRL, and the same assertions as
 //! `dfe-transform-vrl/tests/e2e/filebeat_kafka.rs`. Only the transform app
-//! differs, which is what makes WS21 a test of the transform LAYER rather
+//! differs, which is what makes the chain a test of the transform LAYER rather
 //! than of one app.
 //!
 //! What it exercises that a config test cannot:
@@ -396,7 +396,7 @@ async fn filebeat_cases_round_trip_through_vector() {
     // all served here, and it is the only health surface the app has.
     let probe_port = free_port();
 
-    // kill_on_drop is the backstop for an assertion failure; the happy path
+    // kill_on_drop is the backstop for an assertion failure. The happy path
     // stops the app with SIGTERM instead, because SIGKILL leaves the Vector
     // grandchild orphaned and still holding this test's stderr.
     let mut app = tokio::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vector"))

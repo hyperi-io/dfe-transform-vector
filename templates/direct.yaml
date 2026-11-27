@@ -11,12 +11,12 @@
 # ============================================================================
 #
 # The same pipeline as bus.yaml with no broker anywhere. The transform step is
-# identical; only who hands the record over changes.
+# identical. Only who hands the record over changes.
 #
 # HOW THE RECORD GETS HERE. Vector does not speak scalo's `Transport/Push`, so
 # the supervisor translates. It runs the Push listener the receiver and the
 # fetcher send to, and hands each record to the `dfe_source` below over Vector's
-# own protocol; `dfe_sink` hands the transformed record back, and the supervisor
+# own protocol. `dfe_sink` hands the transformed record back, and the supervisor
 # pushes it on to the next stage. Both addresses below are therefore LOOPBACK --
 # the two legs live inside one pod and nothing outside it may reach them:
 #
@@ -68,7 +68,7 @@ transforms:
     inputs:
       - dfe_source
     source: |
-      # Replace this with the transform. `.` is the record; whatever `.` holds
+      # Replace this with the transform. `.` is the record. Whatever `.` holds
       # at the end is what goes downstream. For example:
       #   .severity = downcase(string!(.severity))
       #   .parsed_at = now()

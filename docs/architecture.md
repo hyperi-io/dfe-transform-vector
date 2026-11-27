@@ -165,7 +165,7 @@ The chart mounts the config and transform files, and an edit to either rolls the
 
 ## Design considerations
 
-**Security.** Vector runs whatever a transform file declares, with read access to the Kafka credentials. So a transform file may declare `transforms` (never `lua`) and `enrichment_tables` alone, and a table must resolve inside `transforms.data_dir` and outside every credential path. Credentials reach Vector as `SECRET[...]` file references, never as values in its config. Vector runs without the `DFE_TRANSFORM_VECTOR_*` variables.
+**Security.** Vector runs whatever a transform file declares, with read access to the Kafka credentials. So a transform file may declare `transforms` (never `lua`) and `enrichment_tables` alone, and a table must resolve inside `transforms.data_dir` and outside every credential path. A transform can't read a file, reach the network or inflate a record: no transform may set `file` or `files`, and the VRL host, network, file and decompression functions are refused before Vector sees them. A failed validate is logged as the components and error codes alone, never the source Vector quotes. Credentials reach Vector as `SECRET[...]` file references, never as values in its config. Vector runs without the `DFE_TRANSFORM_VECTOR_*` variables.
 
 **Reliability.** Delivery is at least once on both transports. A crashed Vector restarts on an exponential backoff capped at a minute, with no crash limit. A failed bridge leg stops the process, because its senders would otherwise retry forever against a live pod.
 

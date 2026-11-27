@@ -418,7 +418,7 @@ transforms:
         let components = vec![Component {
             label: "parse".into(),
             kind: "transform".into(),
-            inputs: vec![], // No inputs — should be auto-wired
+            inputs: vec![], // No inputs -- should be auto-wired
             outputs: vec![],
         }];
         let result = auto_wire(components).unwrap();
@@ -431,7 +431,7 @@ transforms:
         let components = vec![Component {
             label: "parse".into(),
             kind: "transform".into(),
-            inputs: vec!["source".into()], // "source" → "dfe_source"
+            inputs: vec!["source".into()], // "source" -> "dfe_source"
             outputs: vec![],
         }];
         let result = auto_wire(components).unwrap();
@@ -498,14 +498,14 @@ transforms:
                 },
             ],
         };
-        // orphan_input is not defined — this should fail on undefined input
+        // orphan_input is not defined -- this should fail on undefined input
         let err = validate_dag(&result).unwrap_err();
         assert!(err.to_string().contains("undefined input"));
     }
 
     #[test]
     fn validate_dag_catches_cycle() {
-        // a takes from dfe_source and b, b takes from a → cycle between a and b
+        // a takes from dfe_source and b, b takes from a -> cycle between a and b
         let result = WiringResult {
             sink_inputs: vec!["b".into()],
             components: vec![

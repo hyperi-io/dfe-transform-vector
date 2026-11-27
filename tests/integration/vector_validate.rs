@@ -111,7 +111,7 @@ fn assemble_and_validate(config: &Config, work_dir: &Path) -> std::process::Outp
 }
 
 #[test]
-#[ignore] // requires Vector binary — run with: cargo nextest run -E 'test(vector_validate)' --run-ignored all
+#[ignore] // requires Vector binary -- run with: cargo nextest run -E 'test(vector_validate)' --run-ignored all
 fn vector_validate_full_chain_memory_buffer() {
     common::skip_if_no_vector!();
 

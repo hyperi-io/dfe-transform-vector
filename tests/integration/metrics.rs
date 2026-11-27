@@ -11,9 +11,9 @@
 //! Note: the wrapper no longer runs its own metrics HTTP server. The
 //! scalo `ServiceRuntime` owns `/metrics`. These tests register
 //! `WrapperMetrics` against the process-wide `MetricsManager` from
-//! `common::metrics_fixture` and exercise the `render()` output directly —
+//! `common::metrics_fixture` and exercise the `render()` output directly --
 //! what shows up on the live `/metrics` endpoint in production. Building a
-//! manager per test instead renders empty; see that helper for why.
+//! manager per test instead renders empty. See that helper for why.
 //!
 //! The fixture namespace there is `"dfe"` (the platform namespace -- rule:
 //! group by platform + app via LABEL, scalo emits BARE names and the
@@ -29,7 +29,7 @@ use dfe_transform_vector::vector::lifecycle::State;
 use crate::common::metrics_fixture::metrics_manager;
 
 // ---------------------------------------------------------------------------
-// Metrics completeness — every expected metric name must appear in output
+// Metrics completeness -- every expected metric name must appear in output
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -107,7 +107,7 @@ fn metrics_lifecycle_state_labels_are_correct() {
 }
 
 // ---------------------------------------------------------------------------
-// Double-init regression — WrapperMetrics must NOT create its own
+// Double-init regression -- WrapperMetrics must NOT create its own
 // MetricsManager. The whole point of the May 2026 refactor was to use
 // the runtime's manager so we have exactly one /metrics endpoint, one
 // global recorder, and no port-bind collision.
@@ -118,14 +118,14 @@ fn wrapper_metrics_does_not_own_a_metrics_manager() {
     // WrapperMetrics only carries metric *handles* (Counter, Gauge) +
     // AppMetrics / ServiceMetrics. If a future refactor adds a
     // `manager: MetricsManager` field back, this test fails at compile
-    // time — std::mem::size_of catches the layout change.
+    // time -- std::mem::size_of catches the layout change.
     let size = std::mem::size_of::<WrapperMetrics>();
     // Sanity bound: a handful of Counter/Gauge handles + two structs.
     // A full MetricsManager would push this over 200 bytes. The exact
-    // bound is conservative; the goal is "didn't quietly regrow".
+    // bound is conservative. The goal is "didn't quietly regrow".
     assert!(
         size < 256,
-        "WrapperMetrics grew to {size} bytes — did a MetricsManager creep back in?"
+        "WrapperMetrics grew to {size} bytes -- did a MetricsManager creep back in?"
     );
 }
 
@@ -141,8 +141,8 @@ fn wrapper_metrics_register_is_idempotent_on_shared_manager() {
 }
 
 // ---------------------------------------------------------------------------
-// Scaling circuit gate — driven by Vector lifecycle. A down subprocess
-// opens the circuit (scaling_pressure pins to 0); healthy closes it.
+// Scaling circuit gate -- driven by Vector lifecycle. A down subprocess
+// opens the circuit (scaling_pressure pins to 0). Healthy closes it.
 // Circuit state is idempotent, so the watch channel is the right source.
 // ---------------------------------------------------------------------------
 
@@ -151,7 +151,7 @@ async fn circuit_gate_tracks_vector_health() {
     use scalo::scaling::{ScalingComponent, ScalingPressure, ScalingPressureConfig};
 
     let lifecycle = Lifecycle::new(); // starts Initialising -> not ready
-    // The supervisor only drives the circuit breaker gate; a single CPU-ish
+    // The supervisor only drives the circuit breaker gate. A single CPU-ish
     // component keeps the pressure calculator well-formed.
     let pressure = Arc::new(ScalingPressure::new(
         ScalingPressureConfig::default(),
@@ -196,7 +196,7 @@ async fn circuit_gate_tracks_vector_health() {
 }
 
 // ---------------------------------------------------------------------------
-// Crash / restart counters — incremented at the source in run_lifecycle.
+// Crash / restart counters -- incremented at the source in run_lifecycle.
 // Driving a non-existent binary forces the spawn-failure crash path, which
 // loops crash -> backoff -> restart deterministically until shutdown.
 // ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ async fn run_lifecycle_increments_crash_and_restart_counters() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector metrics merge — the wrapper scrapes Vector's prometheus_exporter on
+// Vector metrics merge -- the wrapper scrapes Vector's prometheus_exporter on
 // loopback and registers the samples on the SAME registry, so `vector_*` rides
 // /metrics and the OTLP push and the app's throughput counters stop reading 0.
 // ---------------------------------------------------------------------------
@@ -539,7 +539,7 @@ mod _suppress_unused {
     use super::Arc;
 }
 
-// Marker: the old serve_metrics tests have been deleted — the wrapper no
+// Marker: the old serve_metrics tests have been deleted -- the wrapper no
 // longer runs a second HTTP server. Vector's own prometheus_exporter stays on
 // loopback and is merged into this registry by the scrape task above.
 

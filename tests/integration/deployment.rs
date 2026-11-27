@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      tests/integration/deployment.rs
-// Purpose:   Deployment contract tests — catch broken CI artefacts
+// Purpose:   Deployment contract tests -- catch broken CI artefacts
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -39,7 +39,7 @@ fn contract_produces_valid_structure() {
     assert_eq!(c.health.readiness_path, "/readyz");
     assert_eq!(c.health.metrics_path, "/metrics");
 
-    // The probe paths above are all served on metrics_port; the one extra port
+    // The probe paths above are all served on metrics_port. The one extra port
     // is the direct transport's Push listener, and it listens only there.
     let port_names: Vec<&str> = c.extra_ports.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(port_names, vec!["push"]);
@@ -167,10 +167,10 @@ fn emit_dockerfile_produces_valid_output() {
         "missing wrapper binary COPY in Dockerfile"
     );
 
-    // Vector binary install (Issue #13 — published image was missing this).
+    // Vector binary install (Issue #13 -- published image was missing this).
     assert!(
         dockerfile.contains("ARG VECTOR_VERSION"),
-        "Dockerfile missing Vector version ARG — Vector binary install absent"
+        "Dockerfile missing Vector version ARG -- Vector binary install absent"
     );
     assert!(
         dockerfile.contains("github.com/vectordotdev/vector/releases/download/"),
@@ -178,7 +178,7 @@ fn emit_dockerfile_produces_valid_output() {
     );
     assert!(
         dockerfile.contains("/usr/local/bin/vector --version"),
-        "Dockerfile missing build-time `vector --version` smoke check — \
+        "Dockerfile missing build-time `vector --version` smoke check -- \
          a broken/missing binary would not be caught at image build time"
     );
     assert!(
@@ -225,7 +225,7 @@ fn emit_dockerfile_produces_valid_output() {
     );
     assert!(
         !dockerfile.contains("/etc/dfe/config.yaml"),
-        "Dockerfile must NOT reference legacy /etc/dfe/config.yaml — \
+        "Dockerfile must NOT reference legacy /etc/dfe/config.yaml -- \
          that path is inconsistent with sibling components"
     );
 }
@@ -241,7 +241,7 @@ fn checked_in_dockerfile_matches_emit_dockerfile() {
     assert_eq!(
         on_disk.trim(),
         emitted.trim(),
-        "Dockerfile on disk does not match emit_dockerfile() output — \
+        "Dockerfile on disk does not match emit_dockerfile() output -- \
          regenerate with: `cargo run -- emit-dockerfile > Dockerfile`"
     );
 }

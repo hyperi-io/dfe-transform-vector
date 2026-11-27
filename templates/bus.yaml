@@ -54,7 +54,7 @@ sources:
     decoding:
       # DFE records are JSON on the wire.
       codec: json
-    # Offsets are committed on this interval rather than per record; a rebalance
+    # Offsets are committed on this interval rather than per record. A rebalance
     # replays at most this much, which is the at-least-once trade DFE takes.
     session_timeout_ms: 30000
     commit_interval_ms: 5000
@@ -74,7 +74,7 @@ transforms:
     inputs:
       - dfe_source
     source: |
-      # Replace this with the transform. `.` is the record; whatever `.` holds
+      # Replace this with the transform. `.` is the record. Whatever `.` holds
       # at the end is what goes downstream. For example:
       #   .severity = downcase(string!(.severity))
       #   .parsed_at = now()

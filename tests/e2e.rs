@@ -7,7 +7,7 @@
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! End-to-end tests — single binary with submodules.
+//! End-to-end tests -- single binary with submodules.
 
 mod common;
 

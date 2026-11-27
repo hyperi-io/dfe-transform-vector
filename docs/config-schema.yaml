@@ -11,11 +11,11 @@ description: |-
   - `transforms.files` -- watcher switches to new file list after successful reload
 
   **Requires pod restart:**
-  - `source.*` — the consumer or the Push listener is established at startup
-  - `sink.*` — the producer or the Push client is established at startup
-  - `bridge.*` — the two supervisor-to-Vector legs bind at startup
-  - `pipeline.name` — used in consumer group_id and metrics labels at startup
-  - `vector.*` — binary path, data_dir, config_dir, API switch and address,
+  - `source.*` -- the consumer or the Push listener is established at startup
+  - `sink.*` -- the producer or the Push client is established at startup
+  - `bridge.*` -- the two supervisor-to-Vector legs bind at startup
+  - `pipeline.name` -- used in consumer group_id and metrics labels at startup
+  - `vector.*` -- binary path, data_dir, config_dir, API switch and address,
     log level set at Vector spawn
   - `metrics.address` -- the HTTP server binds at startup
   - `logging.*` -- tracing subscriber configured at startup
@@ -35,9 +35,9 @@ properties:
       DFE source name (e.g. `"syslog"`, `"netflow"`).
 
       When set, derives defaults for fields not explicitly configured:
-      - `source.topics` → `["{dfe_source}_land"]`
-      - `sink.topic` → `"{dfe_source}_load"`
-      - `source.group_id` → `"dfe-transform-vector-{dfe_source}"`
+      - `source.topics` -> `["{dfe_source}_land"]`
+      - `sink.topic` -> `"{dfe_source}_load"`
+      - `source.group_id` -> `"dfe-transform-vector-{dfe_source}"`
 
       Explicit values always override the derived defaults.
       See [`KafkaSource`] for the platform topic naming convention.
@@ -215,7 +215,7 @@ $defs:
     type: object
     properties:
       transport:
-        description: "`bus` consumes `topics`; `direct` accepts pushes on `listen`."
+        description: "`bus` consumes `topics`. `direct` accepts pushes on `listen`."
         $ref: "#/$defs/Transport"
         default: bus
       listen:
@@ -281,7 +281,7 @@ $defs:
         default: 5000
       drain_timeout_ms:
         description: |-
-          Drain timeout (ms) — max wait for pending acks during shutdown/rebalance.
+          Drain timeout (ms) -- max wait for pending acks during shutdown/rebalance.
           Must be less than session_timeout_ms. Default: half of session_timeout_ms.
         type:
         - integer
@@ -380,7 +380,7 @@ $defs:
         description: |-
           Directory holding the credentials as files named `username` and
           `password`, such as a mounted Kubernetes Secret. Vector reads them
-          itself; replaces `username` and `password`.
+          itself, in place of `username` and `password`.
         type:
         - string
         - "null"
@@ -446,7 +446,7 @@ $defs:
     type: object
     properties:
       transport:
-        description: "`bus` produces to `topic`; `direct` pushes to `endpoint`."
+        description: "`bus` produces to `topic`. `direct` pushes to `endpoint`."
         $ref: "#/$defs/Transport"
         default: bus
       endpoint:
@@ -800,7 +800,7 @@ $defs:
     type: object
     properties:
       pressure_threshold:
-        description: Scaling pressure threshold (0.0–1.0). Range-checked, not consumed.
+        description: Scaling pressure threshold (0.0-1.0). Range-checked, not consumed.
         type: number
         format: double
         default: 0.8
