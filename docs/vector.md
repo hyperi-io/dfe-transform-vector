@@ -27,6 +27,9 @@ config:
     actorLineColor: "#64748B"
     signalColor: "#64748B"
     signalTextColor: "#0F172A"
+    noteBkgColor: "#FFFFFF"
+    noteBorderColor: "#94A3B8"
+    noteTextColor: "#0F172A"
   themeCSS: >-
     .messageText{paint-order:stroke;stroke:#FFFFFF;stroke-width:3px;stroke-linejoin:round}
 ---
