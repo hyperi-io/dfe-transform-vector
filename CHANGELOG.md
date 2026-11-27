@@ -3,6 +3,18 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.0.68](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.67...v1.0.68) (2026-11-27)
+
+### What's Changed
+* fix(deps): update rust-dependencies by @renovate[bot] in https://github.com/hyperi-io/dfe-transform-vector/pull/182
+* fix: rebuild on scalo 2.14.34 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/183
+* fix: rebuild on scalo 2.14.36 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/184
+* fix: rebuild on scalo 2.14.37 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/185
+* fix: rebuild on scalo 2.14.39 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/186
+* fix: rebuild on scalo 2.14.40 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/187
+* fix(pipelines): update the filebeat VRL commit by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/188
+* fix: reject file, network and inflate VRL by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vector/pull/189
+
 ## [1.0.67](https://github.com/hyperi-io/dfe-transform-vector/compare/v1.0.66...v1.0.67) (2026-11-23)
 
 ### What's Changed
