@@ -34,7 +34,7 @@ static VECTOR_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// How long a freshly spawned Vector must survive before it counts as running.
 ///
-/// A successful spawn only means fork/exec worked; a bad argv or an unreadable
+/// A successful spawn only means fork/exec worked. A bad argv or an unreadable
 /// config exits within milliseconds, and without this window every such crash
 /// is advertised as a healthy start.
 pub const SPAWN_SETTLE: Duration = Duration::from_millis(500);
@@ -134,7 +134,7 @@ pub fn spawn_vector(vector_config: &VectorConfig, config_dir: &Path) -> Result<C
         cmd.env("VECTOR_LOG", &vector_config.log_level);
     }
 
-    // Data directory (Vector has no --data-dir CLI flag; env var only)
+    // Data directory (Vector has no --data-dir CLI flag, only the env var)
     if !vector_config.data_dir.is_empty() {
         cmd.env("VECTOR_DATA_DIR", &vector_config.data_dir);
     }
@@ -197,7 +197,7 @@ pub fn reload_vector(child: &Child) -> Result<()> {
 /// restart. (The scaling circuit gate, which only cares about the LATEST
 /// state, drives off the watch channel -- see `spawn_circuit_gate_task`.)
 ///
-/// Uses `std::sync::Mutex` intentionally — the lock is held for sub-microsecond
+/// Uses `std::sync::Mutex` intentionally -- the lock is held for sub-microsecond
 /// reads/writes of a `u32` and is never held across an `.await` point.
 /// `tokio::sync::Mutex` is unnecessary overhead for this pattern.
 ///
@@ -257,7 +257,7 @@ pub async fn run_lifecycle(
         let started_at = Instant::now();
 
         // Promote to Running only once the child has survived the settle
-        // window; a child that is already gone stays Starting and falls
+        // window. A child that is already gone stays Starting and falls
         // through to the single crash path below.
         tokio::time::sleep(SPAWN_SETTLE).await;
         match child.try_wait() {
@@ -305,7 +305,7 @@ pub async fn run_lifecycle(
                 }
             }
             _ = shutdown.changed() => {
-                // Shutdown requested — forward SIGTERM to Vector
+                // Shutdown requested -- forward SIGTERM to Vector
                 *vector_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 lifecycle.set(State::ShuttingDown);
                 log_state_change(&VECTOR_RUNNING, false);
@@ -350,7 +350,7 @@ pub async fn run_lifecycle(
             );
         }
 
-        // Security audit trail: deliberately NOT debounced — every crash
+        // Security audit trail: deliberately NOT debounced -- every crash
         // is a security-relevant event for the audit log
         SecurityEvent::new("process.crash", "vector_subprocess", SecurityOutcome::Error)
             .reason(&format!("exit_code={exit_code}"))

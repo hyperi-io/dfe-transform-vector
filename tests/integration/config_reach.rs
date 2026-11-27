@@ -213,17 +213,21 @@ fn a_misspelt_logging_value_is_named_as_a_config_error() {
     }
 }
 
-/// `librdkafka_options` is documented as the layer above everything, and for
-/// the keys the generator derives from the big dials it is the opposite: those
-/// are written after the merge. Setting `compression.type: lz4` next to
-/// `sink.compression: zstd` produced zstd and logged nothing.
+/// The generator writes the keys it derives from the big dials after merging
+/// `librdkafka_options`, so setting one there would do nothing. A credential
+/// there would be written into the Vector config as plain text.
 #[test]
-fn a_librdkafka_option_the_generator_overwrites_is_refused() {
-    let cases: [(&str, &str, &str); 4] = [
+fn a_librdkafka_option_the_generator_overwrites_or_a_credential_is_refused() {
+    let cases: [(&str, &str, &str); 9] = [
         ("sink", "compression.type", "sink.compression"),
         ("sink", "compression.codec", "sink.compression"),
         ("sink", "security.protocol", "sink.sasl.enabled"),
         ("source", "sasl.mechanism", "source.sasl.mechanism"),
+        ("sink", "sasl.password", "sink.sasl"),
+        ("source", "ssl.key.password", "source.sasl"),
+        ("sink", "ssl.key.pem", "sink.sasl"),
+        ("source", "sasl.oauthbearer.client.secret", "source.sasl"),
+        ("sink", "sasl.oauthbearer.config", "sink.sasl"),
     ];
 
     for (side, key, owner) in cases {
@@ -306,7 +310,7 @@ fn every_committed_config_file_loads_and_validates() {
                 continue;
             }
             // The repo root holds one config file and a pile of unrelated
-            // YAML; the fixtures directory is all config.
+            // YAML. The fixtures directory is all config.
             if dir == root && !name.starts_with("config") {
                 continue;
             }

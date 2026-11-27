@@ -10,7 +10,7 @@
 //!
 //! All metrics are registered on the `MetricsManager` owned by
 //! `scalo::cli::ServiceRuntime`. The runtime serves `/metrics`,
-//! `/livez`, and `/readyz` on `args.metrics_addr` — this module no
+//! `/livez`, and `/readyz` on `args.metrics_addr` -- this module no
 //! longer runs its own HTTP server, eliminating the previous double-bind
 //! against the same port.
 //!
@@ -79,16 +79,16 @@ pub(crate) fn dropped_since(
 
 /// Wrapper-specific metrics, registered on a shared `MetricsManager`.
 ///
-/// Metric names are emitted BARE here; the manager's namespace prepends
+/// Metric names are emitted BARE here. The manager's namespace prepends
 /// the app prefix once (so `transform_vector_lifecycle_state` is exported
 /// as `<namespace>_transform_vector_lifecycle_state`). The
 /// `pipeline_ready` gauge follows the DFE platform standard via
 /// `ServiceMetrics`.
 ///
-/// This struct does NOT own a `MetricsManager` — it borrows the one
+/// This struct does NOT own a `MetricsManager` -- it borrows the one
 /// created by `scalo::cli::ServiceRuntime` and registers its
 /// counters/gauges against it. The runtime owns the `/metrics` HTTP
-/// server; this module only feeds metric values into it.
+/// server. This module only feeds metric values into it.
 pub struct WrapperMetrics {
     pub crashes_total: Counter,
     pub restarts_total: Counter,
@@ -112,7 +112,7 @@ impl WrapperMetrics {
     ///
     /// Pass the runtime's manager, never a second one. `MetricsManager::new`
     /// installs the global recorder via `metrics::set_global_recorder`, which
-    /// succeeds at most once per process — a later manager keeps a Prometheus
+    /// succeeds at most once per process -- a later manager keeps a Prometheus
     /// handle over a registry nothing writes to, so its `render()` is empty
     /// and `/metrics` silently serves nothing.
     pub fn register(manager: &MetricsManager, commit: &str) -> Self {

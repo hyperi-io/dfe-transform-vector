@@ -91,15 +91,15 @@ enum AppCommand {
         dir: Option<String>,
     },
 
-    /// Generate Dockerfile to stdout (legacy shortcut; prefer `generate-artefacts`).
+    /// Generate Dockerfile to stdout (legacy shortcut, prefer `generate-artefacts`).
     #[command(name = "emit-dockerfile")]
     EmitDockerfile,
 
-    /// Generate Docker Compose fragment to stdout (legacy shortcut; prefer `generate-artefacts`).
+    /// Generate Docker Compose fragment to stdout (legacy shortcut, prefer `generate-artefacts`).
     #[command(name = "emit-compose")]
     EmitCompose,
 
-    /// Print deployment contract as JSON to stdout (legacy shortcut; prefer `generate-artefacts`).
+    /// Print deployment contract as JSON to stdout (legacy shortcut, prefer `generate-artefacts`).
     #[command(name = "emit-contract")]
     EmitContract,
 }
@@ -245,7 +245,7 @@ async fn main() {
     // and builds the logger from `effective_log_level()`/`effective_log_format()`.
     // Unset, those fall through to scalo's config cascade, which reads `logger.*`
     // rather than this app's `logging.*` and none of the flat `DFE_TRANSFORM_VECTOR_*`
-    // overrides. Fill the args from the loaded config first; the flags and
+    // overrides. Fill the args from the loaded config first. The flags and
     // their env vars are already set by then, so they still win.
     //
     // A load error is swallowed here on purpose: `run_app` loads the same config
@@ -254,14 +254,14 @@ async fn main() {
         config.fill_common_args(&mut app.common);
     }
 
-    // Delegate to standard ServiceApp lifecycle (logging → config → run_service)
+    // Delegate to standard ServiceApp lifecycle (logging -> config -> run_service)
     if let Err(e) = scalo::cli::run_app(app).await {
         eprintln!("fatal: {e}");
         std::process::exit(1);
     }
 }
 
-/// Main service loop — called by the `ServiceApp` lifecycle after logging and config.
+/// Main service loop -- called by the `ServiceApp` lifecycle after logging and config.
 async fn run_transform_service(
     common: &CommonArgs,
     config: Config,
@@ -273,18 +273,18 @@ async fn run_transform_service(
         "starting dfe-transform-vector"
     );
 
-    // Log startup config at debug level for diagnostics
+    let backoff = BackoffConfig::default();
     debug!(
         vector_binary = %config.vector.binary,
         vector_data_dir = %config.vector.data_dir,
         vector_api_enabled = config.vector.api_enabled,
         vector_api_address = %config.vector.api_address,
         vector_log_level = %config.vector.log_level,
-        config_path = ?config.reload.enabled.then_some("reload enabled"),
-        restart_initial_secs = 1,
-        restart_max_secs = 60,
-        restart_backoff_multiplier = 2.0,
-        restart_reset_after_secs = 300,
+        reload_enabled = config.reload.enabled,
+        restart_initial_secs = backoff.initial.as_secs_f64(),
+        restart_max_secs = backoff.max.as_secs_f64(),
+        restart_backoff_multiplier = backoff.multiplier,
+        restart_reset_after_secs = backoff.reset_after.as_secs_f64(),
         "startup config"
     );
 
@@ -316,7 +316,7 @@ async fn run_transform_service(
     // Helm-time guard only knows about our own sink.buffer.
     warn_if_disk_buffer_is_ephemeral(&config_dir, &config.vector);
 
-    // Wrapper metrics register on the runtime's MetricsManager — the
+    // Wrapper metrics register on the runtime's MetricsManager -- the
     // runtime already owns the global recorder and the /metrics HTTP
     // server. We do NOT create a second MetricsManager or HTTP server
     // here (previous double-init bound the same port twice and split
@@ -372,32 +372,22 @@ async fn run_transform_service(
     // Reload channel: SIGHUP handler and file watcher send triggers
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(4);
 
-    // Signal handler: SIGTERM/SIGINT → shutdown, SIGHUP → manual reload
+    // scalo cancels `runtime.shutdown` on SIGTERM or SIGINT once its Kubernetes
+    // pre-stop delay has passed, so the pod leaves its Service endpoints before
+    // intake stops. SIGHUP is a manual reload.
     let shutdown_tx_signal = shutdown_tx.clone();
     let reload_tx_signal = reload_tx.clone();
+    let stop = runtime.shutdown.clone();
     #[allow(clippy::unwrap_used)]
     tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-        let mut sigint =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
         let mut sighup =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).unwrap();
 
         loop {
             tokio::select! {
-                _ = sigterm.recv() => {
-                    info!("received SIGTERM");
-                    SecurityEvent::new("process.shutdown", "SIGTERM", SecurityOutcome::Success)
-                        .actor("system")
-                        .detail("graceful shutdown initiated")
-                        .emit();
-                    let _ = shutdown_tx_signal.send(true);
-                    return;
-                }
-                _ = sigint.recv() => {
-                    info!("received SIGINT");
-                    SecurityEvent::new("process.shutdown", "SIGINT", SecurityOutcome::Success)
+                () = stop.cancelled() => {
+                    info!("shutdown requested");
+                    SecurityEvent::new("process.shutdown", "signal", SecurityOutcome::Success)
                         .actor("system")
                         .detail("graceful shutdown initiated")
                         .emit();
@@ -480,7 +470,7 @@ async fn run_transform_service(
             dlq: dlq.clone().map(Arc::new),
         };
         let bridge = bridge::Bridge::build(&config, lent).await?;
-        // Intake stops with the shutdown signal; the leg back from Vector stays
+        // Intake stops with the shutdown signal. The leg back from Vector stays
         // up until Vector has flushed and exited.
         let mut signal = shutdown_tx.subscribe();
         let stop = inbound_stop.clone();
@@ -511,7 +501,6 @@ async fn run_transform_service(
     };
 
     // Run Vector subprocess lifecycle loop
-    let backoff = BackoffConfig::default();
     let result = run_lifecycle(
         &config.vector,
         &config_dir,

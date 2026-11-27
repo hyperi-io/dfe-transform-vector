@@ -27,7 +27,7 @@ struct CentralProfiles {
     producer: HashMap<String, HashMap<String, String>>,
 }
 
-/// Cached central profiles — loaded once at first access.
+/// Cached central profiles -- loaded once at first access.
 static CENTRAL_PROFILES: OnceLock<Option<CentralProfiles>> = OnceLock::new();
 
 /// Resolve the path to the central librdkafka config file.
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn fallback_consumer_production() {
-        // No DFE_CONFIG_DIR set — should return scalo constants
+        // No DFE_CONFIG_DIR set -- should return scalo constants
         let profile = consumer_profile("production");
         assert_eq!(
             profile["partition.assignment.strategy"],

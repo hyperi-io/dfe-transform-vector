@@ -56,7 +56,7 @@ pub struct SaslConfig {
     pub password: String,
     /// Directory holding the credentials as files named `username` and
     /// `password`, such as a mounted Kubernetes Secret. Vector reads them
-    /// itself; replaces `username` and `password`.
+    /// itself, in place of `username` and `password`.
     pub secret_dir: Option<String>,
 }
 
@@ -167,11 +167,11 @@ impl Default for DecodingConfig {
 /// - `transforms.files` -- watcher switches to new file list after successful reload
 ///
 /// **Requires pod restart:**
-/// - `source.*` — the consumer or the Push listener is established at startup
-/// - `sink.*` — the producer or the Push client is established at startup
-/// - `bridge.*` — the two supervisor-to-Vector legs bind at startup
-/// - `pipeline.name` — used in consumer group_id and metrics labels at startup
-/// - `vector.*` — binary path, data_dir, config_dir, API switch and address,
+/// - `source.*` -- the consumer or the Push listener is established at startup
+/// - `sink.*` -- the producer or the Push client is established at startup
+/// - `bridge.*` -- the two supervisor-to-Vector legs bind at startup
+/// - `pipeline.name` -- used in consumer group_id and metrics labels at startup
+/// - `vector.*` -- binary path, data_dir, config_dir, API switch and address,
 ///   log level set at Vector spawn
 /// - `metrics.address` -- the HTTP server binds at startup
 /// - `logging.*` -- tracing subscriber configured at startup
@@ -190,9 +190,9 @@ pub struct Config {
     /// DFE source name (e.g. `"syslog"`, `"netflow"`).
     ///
     /// When set, derives defaults for fields not explicitly configured:
-    /// - `source.topics` → `["{dfe_source}_land"]`
-    /// - `sink.topic` → `"{dfe_source}_load"`
-    /// - `source.group_id` → `"dfe-transform-vector-{dfe_source}"`
+    /// - `source.topics` -> `["{dfe_source}_land"]`
+    /// - `sink.topic` -> `"{dfe_source}_load"`
+    /// - `source.group_id` -> `"dfe-transform-vector-{dfe_source}"`
     ///
     /// Explicit values always override the derived defaults.
     /// See [`KafkaSource`] for the platform topic naming convention.
@@ -377,7 +377,7 @@ fn parse_transport(value: &str, current: Transport) -> Transport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
-    /// `bus` consumes `topics`; `direct` accepts pushes on `listen`.
+    /// `bus` consumes `topics`. `direct` accepts pushes on `listen`.
     pub transport: Transport,
     /// Address the scalo Push listener binds on the direct transport.
     pub listen: String,
@@ -399,7 +399,7 @@ pub struct SourceConfig {
     pub session_timeout_ms: u32,
     /// Offset commit interval (ms). Default: 5000.
     pub commit_interval_ms: u32,
-    /// Drain timeout (ms) — max wait for pending acks during shutdown/rebalance.
+    /// Drain timeout (ms) -- max wait for pending acks during shutdown/rebalance.
     /// Must be less than session_timeout_ms. Default: half of session_timeout_ms.
     pub drain_timeout_ms: Option<u32>,
     /// Expose per-topic consumer lag metric. Default: true.
@@ -445,7 +445,7 @@ pub const DEFAULT_DLQ_TOPIC: &str = "dfe_transform_dlq";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
-    /// `bus` produces to `topic`; `direct` pushes to `endpoint`.
+    /// `bus` produces to `topic`. `direct` pushes to `endpoint`.
     pub transport: Transport,
     /// Downstream Push listener on the direct transport, e.g. the loader.
     pub endpoint: String,
@@ -777,7 +777,7 @@ impl Default for ReloadConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ScalingConfig {
-    /// Scaling pressure threshold (0.0–1.0). Range-checked, not consumed.
+    /// Scaling pressure threshold (0.0-1.0). Range-checked, not consumed.
     pub pressure_threshold: f64,
 }
 
@@ -833,7 +833,7 @@ fn apply_figment_env(config: &mut Config) -> Result<()> {
 impl ApplyFlatEnv for Config {
     /// Apply explicit flat env var overrides (highest priority after CLI args).
     ///
-    /// Env var names are the contract with dfe-engine — do not rename.
+    /// Env var names are the contract with dfe-engine -- do not rename.
     /// Format: `DFE_TRANSFORM_VECTOR_<SUFFIX>` (prefix passed by caller).
     fn apply_flat_env(&mut self, prefix: &str) {
         // DFE source shorthand
@@ -981,7 +981,7 @@ impl ApplyFlatEnv for Config {
 impl Normalize for Config {
     /// Apply side-effect normalisations after env overrides.
     ///
-    /// Credentials or a credential directory present → enable SASL automatically.
+    /// Credentials or a credential directory present -> enable SASL automatically.
     fn normalize(&mut self) {
         for sasl in [&mut self.source.sasl, &mut self.sink.sasl] {
             if !sasl.username.is_empty() || !sasl.password.is_empty() || sasl.secret_dir.is_some() {
@@ -1017,7 +1017,7 @@ impl Config {
         // path produces a downstream "sink.topic must not be empty"
         // validation error and the user has no clue why.
         //
-        // Implicit `config.yaml` / `config.yml` search is LENIENT —
+        // Implicit `config.yaml` / `config.yml` search is LENIENT --
         // those names are optional by design.
         if let Some(path) = config_path {
             if !Path::new(path).exists() {
@@ -1051,7 +1051,7 @@ impl Config {
         // Apply explicit flat env overrides (highest priority)
         config.apply_flat_env(ENV_PREFIX);
 
-        // Normalise: credentials present → enable SASL
+        // Normalise: credentials present -> enable SASL
         config.normalize();
 
         // Derive topic/CG defaults from dfe_source (if set)
@@ -1062,7 +1062,7 @@ impl Config {
 
     /// Derive topic and consumer group defaults from `dfe_source`.
     ///
-    /// Only fills fields that still hold their hard-coded defaults — explicit
+    /// Only fills fields that still hold their hard-coded defaults -- explicit
     /// config always wins. Called after all env/YAML loading is complete.
     fn resolve_source_defaults(&mut self) -> Result<()> {
         let Some(ref source_name) = self.dfe_source else {
@@ -1075,17 +1075,17 @@ impl Config {
         let defaults = SourceConfig::default();
         let sink_defaults = SinkConfig::default();
 
-        // source.topics — only override if still the hard-coded default
+        // source.topics -- only override if still the hard-coded default
         if self.source.topics == defaults.topics {
             self.source.topics = vec![dfe.input_topic()];
         }
 
-        // sink.topic — only override if still empty (default)
+        // sink.topic -- only override if still empty (default)
         if self.sink.topic == sink_defaults.topic {
             self.sink.topic = dfe.output_topic();
         }
 
-        // source.group_id — only override if still the hard-coded default
+        // source.group_id -- only override if still the hard-coded default
         if self.source.group_id == defaults.group_id {
             let cg = dfe
                 .consumer_group(
@@ -1146,7 +1146,7 @@ impl Config {
         let direct_out = self.sink.transport.is_direct();
         self.validate_bridge(direct_in, direct_out)?;
 
-        // Source. Structural problems refuse; a valid config with no topics is a
+        // Source. Structural problems refuse. A valid config with no topics is a
         // transform whose source has not been written yet, which idles instead
         // (see `work_state`).
         if direct_in {
@@ -1376,18 +1376,32 @@ impl Config {
         Ok(())
     }
 
-    /// Refuse a `librdkafka_options` entry the generator is going to overwrite.
+    /// Refuse a `librdkafka_options` entry that carries a credential, or that
+    /// the generator is going to overwrite.
     ///
-    /// The generator writes the big-dial-derived options after merging this
-    /// map, so `sink.librdkafka_options: {compression.type: lz4}` alongside
-    /// `sink.compression: zstd` produced zstd and said nothing -- while the
-    /// docs called this map the layer above everything. The derived list lives
-    /// in the generator that applies it, so the two cannot drift apart.
+    /// The map is written into the Vector config as plain text and shown by
+    /// `Debug`, so a credential in it is neither a secret reference nor
+    /// redacted. The generator writes the options in `derived` after merging
+    /// the map, and that list lives in the generator so the two cannot drift.
     fn validate_librdkafka_options(
         side: &str,
         options: &BTreeMap<String, String>,
         derived: &[(&str, &str)],
     ) -> Result<()> {
+        for key in options.keys() {
+            let lower = key.to_ascii_lowercase();
+            if lower.contains("password")
+                || lower.contains("secret")
+                || lower.ends_with("key.pem")
+                || lower == "sasl.oauthbearer.config"
+            {
+                return Err(crate::Error::Validation(format!(
+                    "{side}.librdkafka_options sets '{key}', which carries a credential in plain \
+                     text. Set the SASL credential in {side}.sasl, which reaches Vector as a \
+                     secret reference, and keep key material in a file the tls block names."
+                )));
+            }
+        }
         for (key, owner) in derived {
             if options.contains_key(*key) {
                 return Err(crate::Error::Validation(format!(

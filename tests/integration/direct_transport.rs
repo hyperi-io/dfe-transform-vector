@@ -152,7 +152,7 @@ async fn a_record_pushed_at_the_listener_comes_out_the_sink_transformed() {
     assembler::assemble(&config, &config_dir).expect("assemble");
     let mut vector = spawn_vector(&config.vector, &config_dir).expect("spawn Vector");
 
-    // The bridge binds both listeners; Vector binds the middle one.
+    // The bridge binds both listeners. Vector binds the middle one.
     let bridge = Bridge::build(&config, BridgeRuntime::default())
         .await
         .expect("bridge");
@@ -347,7 +347,7 @@ async fn a_push_vector_rejects_for_good_is_dropped_and_one_that_can_clear_is_hel
         let task = tokio::spawn(bridge.run(stop.clone(), stop.clone(), CancellationToken::new()));
         wait_for_port(&config.source.listen).await;
 
-        // A held push is answered at its 2 s budget; a dropped one at once.
+        // A held push is answered at its 2 s budget, a dropped one at once.
         let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
         let started = tokio::time::Instant::now();
         let result = pusher
@@ -686,7 +686,7 @@ async fn pressure_sheds_the_intake_but_never_the_return_leg() {
     wait_for_port(&config.source.listen).await;
     wait_for_port(&config.bridge.from_vector).await;
 
-    // A held push would be answered at its 2 s budget; a shed one at once.
+    // A held push would be answered at its 2 s budget, a shed one at once.
     let pusher = pusher_with_timeout(&config.source.listen, 3_000).await;
     let started = tokio::time::Instant::now();
     let shed = pusher

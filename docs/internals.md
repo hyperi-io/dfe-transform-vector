@@ -105,8 +105,9 @@ The wiring follows these rules:
 - An input names a component (`parse`) or one of its named outputs (`split.accepted`). A `route` or `exclusive_route` has named outputs only, so a bare reference to one is refused.
 - Every output nothing reads feeds the sink, through `dfe_size_cap` on bus, each unread route and its `_unmatched` included.
 - A transform file declares only `transforms` and `enrichment_tables`. A `sources:` key, a `lua` transform, or a table outside `transforms.data_dir` or on a credential path is refused.
+- A transform can't read a file, reach the network or inflate a record. A transform that sets `file` or `files` is refused, and so is VRL anywhere in one that calls `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`, `parse_proto`, `encode_proto`, `validate_json_schema`, `decode_gzip`, `decode_zlib`, `decode_zstd`, `decode_lz4` or `decode_snappy`, or passes `psl` to `parse_etld` or `alias_sources` to `parse_groks`. dfe-transform-vrl refuses the same functions.
 - Every `inputs` reference must resolve, every transform must be reachable from `dfe_source`, and the graph must have no cycle. The error names the component: `component 'enrich' references undefined input 'parser'`.
-- Once every enrichment table file proves readable, `vector validate --no-environment` over the directory is the last gate.
+- Once every enrichment table file proves readable, `vector validate --no-environment` over the directory is the last gate. Its failure is reported as the components Vector named and their VRL error codes. Vector's report quotes the failing source, so none of that is logged.
 
 ## Interfaces
 

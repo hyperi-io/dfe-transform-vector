@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Project:   dfe-transform-vector
 // File:      tests/smoke.rs
-// Purpose:   Startup smoke tests and CLI binary tests — fast, no servers
+// Purpose:   Startup smoke tests and CLI binary tests -- fast, no servers
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -20,7 +20,7 @@ use dfe_transform_vector::vector::{BackoffConfig, Lifecycle};
 
 use crate::metrics_fixture::metrics_manager;
 
-// Only the metrics helper, not the whole of `tests/common` — the smoke
+// Only the metrics helper, not the whole of `tests/common` -- the smoke
 // binary is meant to link no Kafka or broker-container machinery.
 #[path = "common/metrics_fixture.rs"]
 mod metrics_fixture;
@@ -29,8 +29,8 @@ mod metrics_fixture;
 ///
 /// `config_load_no_explicit_path_is_lenient` has to `set_current_dir` into an
 /// empty temp dir to prove the implicit config search finds nothing there, and
-/// the working directory is per-PROCESS. Under `cargo test` — one process per
-/// test binary, a thread per test — that move is visible to any test resolving
+/// the working directory is per-PROCESS. Under `cargo test` -- one process per
+/// test binary, a thread per test -- that move is visible to any test resolving
 /// a relative fixture path at the same instant, and two below do exactly that.
 /// `cargo nextest` gives every test its own process and never sees it.
 static CWD: Mutex<()> = Mutex::new(());
@@ -38,13 +38,13 @@ static CWD: Mutex<()> = Mutex::new(());
 /// Take the working-directory lock, ignoring poisoning.
 ///
 /// A panic in one of these tests must not cascade into unrelated failures in
-/// the others — nothing here leaves shared state half-written on unwind.
+/// the others -- nothing here leaves shared state half-written on unwind.
 fn cwd_guard() -> MutexGuard<'static, ()> {
     CWD.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // ---------------------------------------------------------------------------
-// Startup smoke tests — catch init panics
+// Startup smoke tests -- catch init panics
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -52,7 +52,7 @@ fn smoke_metrics_initialisation_does_not_panic() {
     // WrapperMetrics::register() registers metrics against a shared
     // MetricsManager (in production, that's the one owned by
     // scalo's ServiceRuntime). If any metric name/description is
-    // invalid the registration panics; this test catches that.
+    // invalid the registration panics. This test catches that.
     let _metrics = WrapperMetrics::register(metrics_manager(), "smoke-test-commit");
 }
 
@@ -78,7 +78,7 @@ fn smoke_lifecycle_initialisation_does_not_panic() {
 
 #[test]
 fn smoke_config_load_from_fixture_does_not_panic() {
-    // Relative fixture path — hold the working directory still.
+    // Relative fixture path -- hold the working directory still.
     let _cwd = cwd_guard();
     let config = Config::load(Some("tests/fixtures/configs/minimal.yaml"))
         .expect("fixture minimal.yaml should load");
@@ -123,7 +123,7 @@ fn smoke_metrics_render_after_state_transitions() {
 }
 
 // ---------------------------------------------------------------------------
-// Config validation error paths — meaningful errors, not panics
+// Config validation error paths -- meaningful errors, not panics
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -148,10 +148,10 @@ fn config_load_missing_explicit_path_errors_clearly() {
 #[test]
 fn config_load_no_explicit_path_is_lenient() {
     // Implicit search (config.yaml / config.yml in CWD) is optional by
-    // design — missing is fine, defaults take over. Only --config <path>
+    // design -- missing is fine, defaults take over. Only --config <path>
     // is strict. Issue #12.
     //
-    // Moves the process working directory — exclusive for the duration.
+    // Moves the process working directory -- exclusive for the duration.
     let _cwd = cwd_guard();
     let tmpdir = tempfile::tempdir().unwrap();
     let original = std::env::current_dir().unwrap();
@@ -185,7 +185,7 @@ sink:
     std::fs::write(&path, yaml).unwrap();
 
     let config = Config::load(Some(path.to_str().unwrap()));
-    // Either load fails or validate fails — both are acceptable
+    // Either load fails or validate fails -- both are acceptable
     if let Ok(config) = config {
         let result = config.validate();
         assert!(
@@ -221,7 +221,7 @@ sink:
 }
 
 // ---------------------------------------------------------------------------
-// CLI binary invocation — test subcommands via cargo
+// CLI binary invocation -- test subcommands via cargo
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -265,7 +265,7 @@ fn cli_config_check_with_valid_fixture() {
 /// `main` has to hand those keys to `CommonArgs` before `run_app` reads them.
 /// Miss that and the listener binds `0.0.0.0:9090` and the logger runs at
 /// `info` no matter what the ConfigMap says -- silently, which is how it went
-/// unnoticed. The unit tests cover `fill_common_args`; this covers the call.
+/// unnoticed. The unit tests cover `fill_common_args`. This covers the call.
 #[test]
 fn cli_config_check_reports_the_config_files_metrics_and_log_settings() {
     let dir = tempfile::TempDir::new().expect("tempdir");

@@ -52,7 +52,7 @@ DURATION="${PGO_WORKLOAD_DURATION_SECS:-300}"
 DRIVER_PROFILE="${PGO_DRIVER_PROFILE:-release}"
 KEEP="${PGO_WORKLOAD_KEEP:-0}"
 
-# Set as each piece comes up; read by cleanup() and the driver's environment.
+# Set as each piece comes up. Read by cleanup() and the driver's environment.
 WORK_DIR=""
 SUPERVISOR_PID=""
 DRIVER_PID=""
@@ -319,7 +319,7 @@ main() {
 
     write_vector_stand_in "${WORK_DIR}/vector-stand-in.sh"
 
-    # cargo-pgo bakes the profile directory into the instrumented binary; this
+    # cargo-pgo bakes the profile directory into the instrumented binary. This
     # only matters when the script is run by hand against a plain build.
     export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE:-${PROJECT_ROOT}/target/pgo-profiles/pgo-%p_%m.profraw}"
     mkdir -p "$(dirname "${LLVM_PROFILE_FILE}")"

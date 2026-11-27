@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      src/lib.rs
-// Purpose:   Library root — module declarations and public API
+// Purpose:   Library root -- module declarations and public API
 // Language:  Rust
 //
 // License:   BUSL-1.1

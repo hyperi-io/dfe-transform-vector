@@ -1,7 +1,7 @@
 # Fixture: 03_filter_noise
 #
 # Drop health-check pings and empty events before forwarding.
-# Events that match are silently discarded; all others pass through.
+# Events that match are silently discarded. All others pass through.
 #
 # Inputs: auto-wired
 

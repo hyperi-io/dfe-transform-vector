@@ -12,7 +12,7 @@
 //! Metrics endpoint tests live in `tests/integration/metrics.rs` and
 //! exercise `WrapperMetrics::register()` against the process-wide
 //! `MetricsManager` from `common::metrics_fixture`. The wrapper runs no HTTP
-//! server of its own — the scalo `ServiceRuntime` owns the one listener that
+//! server of its own -- the scalo `ServiceRuntime` owns the one listener that
 //! serves `/metrics`, `/livez` and `/readyz`.
 
 use scalo::metrics::MetricsManager;
@@ -123,7 +123,7 @@ fn wrapper_metrics_lifecycle_state_gauge() {
 /// test that registers, and it leaves its lifecycle `Running`.
 #[tokio::test]
 async fn the_probed_port_reports_the_real_lifecycle_state() {
-    // Take the shared manager's recorder install first; the throwaway manager
+    // Take the shared manager's recorder install first. The throwaway manager
     // below must lose that race, not the fixture every other test renders from.
     let _ = metrics_manager();
 

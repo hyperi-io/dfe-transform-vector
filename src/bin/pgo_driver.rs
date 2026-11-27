@@ -27,9 +27,9 @@
 //! Vector binary, no network.
 //!
 //! `scripts/pgo-workload.sh` owns the supervisor process, its config and the
-//! Vector stand-in; this binary owns the traffic.
+//! Vector stand-in. This binary owns the traffic.
 //!
-//! Built only with `--features pgo-driver`; the shipped binary is unaffected.
+//! Built only with `--features pgo-driver`. The shipped binary is unaffected.
 //!
 //! Configuration via environment variables:
 //! - `PGO_DRIVER_DURATION_SECS` (default 300) -- how long to drive load

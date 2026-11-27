@@ -50,7 +50,7 @@ fn fixture_sasl_config_loads_and_validates() {
     assert!(config.source.tls.enabled);
     assert!(config.sink.sasl.enabled);
     assert!(config.sink.tls.enabled);
-    // Credentials come from the mounted directory; none sits in the config
+    // Credentials come from the mounted directory. None sits in the config
     assert_eq!(
         config.source.sasl.secret_dir.as_deref(),
         Some("/var/run/secrets/dfe-kafka")
@@ -217,7 +217,7 @@ fn fixture_full_chain_wires_without_errors() {
     let wiring = auto_wire(components).expect("auto-wire should succeed");
     validate_dag(&wiring).expect("DAG should be valid");
 
-    // The chain has 5 transforms — sink inputs should be the last one
+    // The chain has 5 transforms -- sink inputs should be the last one
     assert_eq!(wiring.sink_inputs.len(), 1);
     assert_eq!(wiring.sink_inputs[0], "reduce_aggregate");
 }

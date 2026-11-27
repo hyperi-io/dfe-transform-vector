@@ -76,7 +76,6 @@ thiserror = ">=2.0.21, <3"
 anyhow = ">=1.0.104, <2"
 
 tracing = ">=0.1.44, <0.2"
-tracing-subscriber = { version = ">=0.3.23, <0.4", features = ["env-filter", "json"] }
 
 metrics = ">=0.24.6, <0.25"
 
@@ -94,7 +93,6 @@ pgo-driver = []
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
-tokio-test = ">=0.4.6, <0.5"
 scalo = { version = ">=2.14.40, <3", features = [
     "transport-kafka",
     "transport-kafka-test-support",

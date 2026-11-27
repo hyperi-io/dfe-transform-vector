@@ -26,7 +26,7 @@
 //!
 //! The asymmetry that falls out of that: **resolution failures degrade,
 //! acquisition failures abort.** Not knowing which version is newest is
-//! survivable; having no binary at all is not.
+//! survivable. Having no binary at all is not.
 //!
 //! The version-selection functions here are deliberately PURE -- they take a
 //! release list rather than fetching one. The `stable` rules in particular
@@ -149,7 +149,7 @@ pub fn select_latest(releases: &[Version]) -> Option<Version> {
 /// not. So `stable` means "one breaking step back, fully patched".
 ///
 /// **A new major is not eligible until `x.1.0` exists.** A brand-new major gets
-/// its worst bugs in `x.0.z`; adopting it as *stable* the day it lands defeats
+/// its worst bugs in `x.0.z`. Adopting it as *stable* the day it lands defeats
 /// the point of the mode. So while the newest release is `1.0.4`, `stable`
 /// stays on the 0.x line. Once `1.1.0` publishes, major 1 becomes eligible and
 /// the previous-minor rule then picks the newest `1.0.z`.
@@ -172,7 +172,7 @@ pub fn select_stable(releases: &[Version]) -> Option<Version> {
         m
     };
 
-    // Second-highest minor in the eligible major; if there is only one, the
+    // Second-highest minor in the eligible major. If there is only one, the
     // latest IS the stable choice.
     let target_minor = match minors.len() {
         0 => return None,
@@ -227,7 +227,7 @@ pub fn select_minor_line(releases: &[Version], line: &str) -> Option<Version> {
 /// # Errors
 /// Only when `source` is a keyword whose selection genuinely cannot be made
 /// from a release list that WAS fetched -- e.g. `MinorLine("9.9")` when no such
-/// line exists. A wrong request is worth reporting; an unreachable network is
+/// line exists. A wrong request is worth reporting. An unreachable network is
 /// not.
 pub fn resolve(
     source: &VersionSource,

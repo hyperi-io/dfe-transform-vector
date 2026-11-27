@@ -80,7 +80,7 @@ impl KafkaFixture {
 
     /// Acquire a Kafka fixture: the live cluster, else the run's shared broker.
     ///
-    /// Returns `None` if neither live nor Docker are available — callers
+    /// Returns `None` if neither live nor Docker are available -- callers
     /// should skip the test in that case.
     pub async fn acquire(_test: &str) -> Option<Self> {
         load_dotenv();
@@ -229,7 +229,7 @@ async fn tcp_reachable(brokers: &[String]) -> bool {
 
 /// Attempt an authenticated metadata fetch to verify credentials work.
 ///
-/// Uses a short timeout; if the broker accepts the creds, we're live.
+/// Uses a short timeout. If the broker accepts the creds, we're live.
 async fn authenticated_probe(cfg: &KafkaConfig) -> bool {
     let cfg = cfg.clone();
     tokio::task::spawn_blocking(move || {
@@ -388,7 +388,7 @@ async fn scram_broker(test: &str) -> Result<KafkaFixture, String> {
 // `KafkaFixture::acquire()` instead.
 // =============================================================================
 
-/// Build a scalo `KafkaConfig` from env (sync — for tests that only
+/// Build a scalo `KafkaConfig` from env (sync -- for tests that only
 /// construct YAML and don't connect). Does NOT verify authentication.
 pub fn kafka_test_config() -> KafkaConfig {
     load_dotenv();
@@ -401,7 +401,7 @@ pub fn kafka_test_config() -> KafkaConfig {
     })
 }
 
-/// Sync TCP reachability probe — used by legacy tests.
+/// Sync TCP reachability probe -- used by legacy tests.
 pub fn is_kafka_reachable(config: &KafkaConfig) -> bool {
     let first = config
         .brokers
@@ -416,7 +416,7 @@ pub fn is_kafka_reachable(config: &KafkaConfig) -> bool {
         .unwrap_or(false)
 }
 
-/// Create a `KafkaAdmin` from config — thin convenience for legacy tests.
+/// Create a `KafkaAdmin` from config -- thin convenience for legacy tests.
 pub fn kafka_admin(config: &KafkaConfig) -> KafkaAdmin {
     KafkaAdmin::new(config).expect("failed to create KafkaAdmin")
 }
@@ -478,7 +478,7 @@ pub(crate) use skip_if_no_vector;
 // HTTP + port helpers
 // =============================================================================
 
-/// Minimal HTTP GET — avoids pulling in reqwest as a dep.
+/// Minimal HTTP GET -- avoids pulling in reqwest as a dep.
 pub async fn reqwest_lite(url: &str) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;

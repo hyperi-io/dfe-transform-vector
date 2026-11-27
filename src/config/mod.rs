@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vector
 // File:      src/config/mod.rs
-// Purpose:   Configuration module — loading, generation, and assembly
+// Purpose:   Configuration module -- loading, generation, and assembly
 // Language:  Rust
 //
 // License:   BUSL-1.1
